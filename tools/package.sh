@@ -9,6 +9,8 @@
 # A format whose tool is missing is skipped with a note; CI has them all.
 set -eu
 V=$1; A=$2; OUT=${3:-out}
+# pacman versions can't hold a hyphen (1.0.0-rc1 is 1.0.0_rc1); file names keep the tag's.
+PV=$(printf '%s' "$V" | tr - _)
 C=$(dirname "$(dirname "$(readlink -f "$0")")")
 BIN=$C/dist/maia
 ID=io.github.yappologistic.Maia
@@ -160,7 +162,7 @@ if command -v zstd >/dev/null; then
   cat > "$R/.PKGINFO" <<EOF
 pkgname = maia
 pkgbase = maia
-pkgver = $V-1
+pkgver = $PV-1
 pkgdesc = Fast, keyboard-first file manager
 url = https://github.com/yappologistic/Maia
 builddate = ${SOURCE_DATE_EPOCH:-$(date +%s)}
@@ -171,7 +173,7 @@ license = GPL-3.0-or-later
 depend = glibc
 depend = libglvnd
 depend = libxkbcommon
-optdepend = libwayland-client: Wayland
+optdepend = wayland: Wayland
 optdepend = libx11: X11
 optdepend = xdg-utils: open files with other programs
 optdepend = libarchive: more archive formats

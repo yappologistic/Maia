@@ -78,6 +78,7 @@ jobs:
       - name: Check the packages
         run: |
           v="${GITHUB_REF_NAME#v}"
+          pv=$(printf '%s' "$v" | tr - _)
           # Every format was made.
           ls out/*.tar.gz out/*.deb out/*.rpm out/*.pkg.tar.zst out/*.AppImage
           # The .deb installs with its dependencies and runs.
@@ -89,7 +90,7 @@ jobs:
           rpm -qlp out/maia-*.rpm | grep -qx /usr/bin/maia
           # The pacman package holds the program and says what it is.
           zstd -dc out/maia-*.pkg.tar.zst | tar -tf - | grep -qx usr/bin/maia
-          zstd -dc out/maia-*.pkg.tar.zst | tar -xOf - .PKGINFO | grep -qx "pkgver = $v-1"
+          zstd -dc out/maia-*.pkg.tar.zst | tar -xOf - .PKGINFO | grep -qx "pkgver = $pv-1"
           # The AppImage starts (unpacked: the runner has no FUSE).
           APPIMAGE_EXTRACT_AND_RUN=1 ./out/Maia-*.AppImage --version | grep -qx "maia $v"
           # The tarball installs where it's told.
