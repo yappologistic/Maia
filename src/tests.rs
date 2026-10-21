@@ -3977,9 +3977,9 @@ fn updates_check_compare_and_install() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
-/// Updates of a packaged Maia: a .deb or .rpm install is found by asking dpkg or rpm who
+/// Updates of a packaged Maia: a .deb, .rpm or pacman install is found by asking dpkg, rpm or pacman who
 /// owns the program, and gets the release's package, checked against SHA256SUMS and
-/// handed to dpkg -i or rpm -U through pkexec once the program alone has been tried. An
+/// handed to dpkg -i, rpm -U or pacman -U through pkexec once the program alone has been tried. An
 /// AppImage replaces its own file. All of it on fakes: no package manager is run.
 #[test]
 fn updates_through_packages() {
@@ -3992,17 +3992,18 @@ fn updates_through_packages() {
         let out = std::process::Command::new("sha256sum").arg(&f).output().unwrap();
         String::from_utf8_lossy(&out.stdout).split_whitespace().next().unwrap().to_string()
     };
-    let (deb, rpm, app) = (Installed::Deb.package("v9.9.9").unwrap(), Installed::Rpm.package("v9.9.9").unwrap(), Installed::AppImage(PathBuf::new()).package("v9.9.9").unwrap());
-    assert!(deb.starts_with("maia_9.9.9_") && deb.ends_with(".deb") && rpm.starts_with("maia-9.9.9-1.") && app.starts_with("Maia-9.9.9-"));
-    let names = [crate::update::ASSET.to_string(), crate::update::SUMS.to_string(), deb.clone(), rpm.clone(), app.clone(), "SHA256SUMS".into()];
+    let (deb, rpm, pac, app) = (Installed::Deb.package("v9.9.9").unwrap(), Installed::Rpm.package("v9.9.9").unwrap(), Installed::Pacman.package("v9.9.9").unwrap(), Installed::AppImage(PathBuf::new()).package("v9.9.9").unwrap());
+    assert!(deb.starts_with("maia_9.9.9_") && deb.ends_with(".deb") && rpm.starts_with("maia-9.9.9-1.") && pac.starts_with("maia-9.9.9-1-") && pac.ends_with(".pkg.tar.zst") && app.starts_with("Maia-9.9.9-"));
+    let names = [crate::update::ASSET.to_string(), crate::update::SUMS.to_string(), deb.clone(), rpm.clone(), pac.clone(), app.clone(), "SHA256SUMS".into()];
     let json = format!(r#"{{"tag_name":"v9.9.9","body":"","assets":[{}]}}"#, names.iter().map(|n| format!(r#"{{"name":"{n}","browser_download_url":"https://github.com/yappologistic/Maia/releases/download/v9.9.9/{n}"}}"#)).collect::<Vec<_>>().join(","));
     let r = parse_release(json.as_bytes()).expect("a release");
-    assert_eq!(r.assets.len(), 6, "every download kept");
+    assert_eq!(r.assets.len(), 7, "every download kept");
     let build = b"\x7fELF the new build".to_vec();
     let deb_bytes = b"!<arch>\ndebian-binary the new package".to_vec();
     let rpm_bytes = b"\xed\xab\xee\xdb the new package".to_vec();
+    let pac_bytes = b"\x28\xb5\x2f\xfd the new package".to_vec();
     let app_bytes = b"\x7fELF AI\x02 the new AppImage".to_vec();
-    let sums = format!("{}  {deb}\n{}  {rpm}\n{}  {app}\n{}  {}\n", sum(&deb_bytes), sum(&rpm_bytes), sum(&app_bytes), sum(&build), crate::update::ASSET);
+    let sums = format!("{}  {deb}\n{}  {rpm}\n{}  {pac}\n{}  {app}\n{}  {}\n", sum(&deb_bytes), sum(&rpm_bytes), sum(&pac_bytes), sum(&app_bytes), sum(&build), crate::update::ASSET);
     assert_eq!(sum_for(&sums, &rpm), Some(sum(&rpm_bytes)));
     assert_eq!(sum_for(&sums, "maia_1.0.0_amd64.deb"), None);
     // A stand-in for GitHub, serving `files` by name (a tampered one, say).
@@ -4025,7 +4026,7 @@ fn updates_through_packages() {
             }
         })
     };
-    let all = || vec![(crate::update::ASSET.to_string(), build.clone()), (deb.clone(), deb_bytes.clone()), (rpm.clone(), rpm_bytes.clone()), (app.clone(), app_bytes.clone())];
+    let all = || vec![(crate::update::ASSET.to_string(), build.clone()), (deb.clone(), deb_bytes.clone()), (rpm.clone(), rpm_bytes.clone()), (pac.clone(), pac_bytes.clone()), (app.clone(), app_bytes.clone())];
     let wait = |u: &Updater| {
         let t0 = Instant::now();
         while matches!(u.state(), State::Downloading(_) | State::Installing(_)) {
@@ -4053,6 +4054,8 @@ fn updates_through_packages() {
         if owner == "dpkg" {
             script("dpkg-query", "echo \"maia: $2\"");
             script("dpkg", &keep);
+        } else if owner == "pacman" {
+            script("pacman", &format!("[ \"$1\" = -Qoq ] && {{ printf maia; exit 0; }}\necho \"$0 $*\" >> {0}/log; cp \"$3\" {0}/installed", f.display()));
         } else {
             script("rpm", &format!("[ \"$1\" = -qf ] && {{ printf maia; exit 0; }}\n{keep}"));
         }
@@ -4099,7 +4102,13 @@ fn updates_through_packages() {
     assert_eq!(run(Some(&f), &u), State::Ready("v9.9.9".into()));
     assert!(std::fs::read_to_string(f.join("log")).unwrap().contains(&format!("{} -U ", f.join("rpm").display())));
     assert_eq!(std::fs::read(f.join("installed")).unwrap(), rpm_bytes);
-    // Neither manager owns it: nothing to do but say so.
+    // A pacman install: pacman -U, answering its question for it (no terminal to ask in).
+    let f = fakes("pacman-tools", "pacman");
+    let u = Updater::for_test(serve(all()), exe.clone());
+    assert_eq!(run(Some(&f), &u), State::Ready("v9.9.9".into()));
+    assert!(std::fs::read_to_string(f.join("log")).unwrap().contains(&format!("{} -U --noconfirm ", f.join("pacman").display())));
+    assert_eq!(std::fs::read(f.join("installed")).unwrap(), pac_bytes);
+    // No manager owns it: nothing to do but say so.
     let u = Updater::for_test(serve(all()), exe.clone());
     assert_eq!(run(None, &u), State::CantWrite(bin.clone()));
     // An AppImage: its own file replaced, the program inside it untouched.

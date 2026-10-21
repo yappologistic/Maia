@@ -23,6 +23,7 @@ these for x86_64 and ARM64:
 |---|---|
 | `maia_VERSION_amd64.deb` | Debian, Ubuntu, Mint, Pop!_OS: `sudo apt install ./maia_*.deb` |
 | `maia-VERSION-1.x86_64.rpm` | Fedora, RHEL, openSUSE: `sudo dnf install ./maia-*.rpm` |
+| `maia-VERSION-1-x86_64.pkg.tar.zst` | Arch, Manjaro, EndeavourOS: `sudo pacman -U maia-*.pkg.tar.zst` |
 | `Maia-VERSION-x86_64.AppImage` | any distribution: make it executable and run it |
 | `maia-VERSION-linux-x86_64.tar.gz` | unpack and run `install.sh` (to `~/.local`, or `/usr/local` as root) |
 | `maia-linux-x86_64` | the program alone: run it with `--install` |
@@ -93,7 +94,7 @@ adds a tab to that window.
 
 Options > Startup & system > Check for updates fetches a newer release, checks it
 against its checksum and runs it once before swapping it in; `maia --update` does the
-same. Maia never checks on its own. An install from the .deb or .rpm gets the new
+same. Maia never checks on its own. An install from the .deb, .rpm or pacman package gets the new
 package through your package manager, after your password; an AppImage replaces itself. Settings live in `~/.config/maia/config.json`.
 
 ## When something goes wrong
