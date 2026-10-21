@@ -691,11 +691,12 @@ fn lock(o: &Mutex<Out>) -> std::sync::MutexGuard<'_, Out> {
 /// Answer calls on `bus` until it closes. Each request runs on a thread of its own and
 /// is answered when its picker ends; Close on a request's handle ends that picker.
 pub fn serve(bus: Bus, run: Arc<Run>) {
-    let (mut rd, serial) = bus.into_parts();
+    let (mut rd, serial, held) = bus.into_parts();
+    let mut held = held.into_iter();
     let Ok(w) = rd.try_clone() else { return };
     let out = Arc::new(Mutex::new(Out { s: w, serial: serial.max(1 << 16) }));
     let open: Arc<Mutex<HashMap<String, Arc<Stop>>>> = Default::default();
-    while let Some(m) = read(&mut rd) {
+    while let Some(m) = held.next().or_else(|| read(&mut rd)) {
         if m.kind != 1 {
             continue;
         }

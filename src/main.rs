@@ -216,6 +216,14 @@ fn main() {
                 }
                 return;
             }
+            // "Show in folder" while no window runs, started by the session bus.
+            "--fm1" => {
+                if !fm1::run_backend() {
+                    eprintln!("maia: no session bus, or the file manager name is taken");
+                    std::process::exit(1);
+                }
+                return;
+            }
             // The Open and Save dialog's backend, started by the session bus.
             "--portal" => {
                 if !portal::run_backend() {

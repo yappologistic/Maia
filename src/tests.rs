@@ -13640,3 +13640,22 @@ fn readme_card_follows_the_file() {
     assert!(text(&mut t).contains("New title"), "read again after it changed");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// "Show in folder" and Properties calls answered by the windowless `--fm1` service reach
+/// the open window over the same socket as a second launch, as what they asked for.
+#[test]
+fn file_manager_calls_reach_the_window_as_asked() {
+    use crate::single::{Request, claim_at, send, serve};
+    let d = tmpdir("fm1send");
+    let sock = d.join("maia.sock");
+    let (tx, rx) = std::sync::mpsc::channel();
+    serve(claim_at(&sock).unwrap(), tx, || {});
+    let odd = PathBuf::from("/tmp/two\nlines – é/report.pdf");
+    for r in [Request::Show(vec![odd.clone()]), Request::Properties(vec![PathBuf::from("/home"), odd.clone()]), Request::Open(vec![odd.clone()]), Request::Focus] {
+        assert!(send(&sock, &r), "{r:?} handed over");
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap(), r);
+    }
+    // The bus starts that service, not a window, for the name.
+    assert!(crate::fm1::service_file(Path::new("/opt/maia/bin/maia")).ends_with("Exec=/opt/maia/bin/maia --fm1\n"));
+    let _ = std::fs::remove_dir_all(&d);
+}

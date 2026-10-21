@@ -230,6 +230,9 @@ pub fn read(r: &mut impl Read) -> Option<Msg> {
 pub struct Bus {
     s: UnixStream,
     serial: u32,
+    /// Calls to us that came while a call of ours waited for its answer: the one the bus
+    /// started us for arrives right after we take the name, before RequestName returns.
+    held: std::collections::VecDeque<Msg>,
 }
 
 impl Bus {
@@ -249,7 +252,7 @@ impl Bus {
             }
             None
         })?;
-        let mut b = Bus { s, serial: 0 };
+        let mut b = Bus { s, serial: 0, held: Default::default() };
         b.auth()?;
         b.call("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "Hello", "", &[])?;
         Some(b)
@@ -280,17 +283,17 @@ impl Bus {
 
     /// The next message that comes (a signal asked for with AddMatch).
     pub fn recv(&mut self) -> Option<Msg> {
-        read(&mut self.s)
+        self.held.pop_front().or_else(|| read(&mut self.s))
     }
 
     /// The socket and the last serial used: for a service that reads on one thread and
     /// answers from others (the Open and Save dialog).
-    pub fn into_parts(self) -> (UnixStream, u32) {
-        (self.s, self.serial)
+    pub fn into_parts(self) -> (UnixStream, u32, std::collections::VecDeque<Msg>) {
+        (self.s, self.serial, self.held)
     }
 
-    /// Call a method and wait for its answer (messages before it are skipped: none come
-    /// to a fresh connection that has asked for nothing).
+    /// Call a method and wait for its answer. Signals before it are skipped; calls to us
+    /// are held for `recv`, as the one the bus started us for can come first.
     pub fn call(&mut self, dest: &str, path: &str, iface: &str, member: &str, sig: &str, body: &[u8]) -> Option<Msg> {
         let serial = self.next();
         let m = build(1, serial, &[(1, 'o', path), (2, 's', iface), (3, 's', member), (6, 's', dest)], None, sig, body);
@@ -299,6 +302,9 @@ impl Bus {
             let r = read(&mut self.s)?;
             if r.reply_to == Some(serial) {
                 return (r.kind == 2).then_some(r);
+            }
+            if r.kind == 1 {
+                self.held.push_back(r);
             }
         }
     }
@@ -350,7 +356,7 @@ pub fn request(m: &Msg) -> Option<Request> {
 
 /// Answer calls on `bus` until it closes, handing what they ask to `tx`.
 pub fn answer(mut bus: Bus, tx: Sender<Request>, wake: impl Fn()) {
-    while let Some(m) = read(&mut bus.s) {
+    while let Some(m) = bus.recv() {
         if m.kind != 1 {
             continue;
         }
@@ -384,7 +390,51 @@ pub fn service_path() -> PathBuf {
 }
 
 pub fn service_file(exe: &Path) -> String {
-    format!("[D-BUS Service]\nName={NAME}\nExec={}\n", exe.display())
+    format!("[D-BUS Service]\nName={NAME}\nExec={} --fm1\n", exe.display())
+}
+
+/// `maia --fm1`, what the bus starts for the name while no window has it: it answers
+/// without a window, as a file manager's service does, and hands each call to the open
+/// window, starting one only when a call asks to be shown something. A dock that only
+/// looks the name up at login (Dash to Dock does, for its trash and drives) opens
+/// nothing. It keeps the name for the session: the bus runs it in a unit of its own,
+/// which would take the windows it started with it if it ended.
+pub fn run_backend() -> bool {
+    let Some(mut bus) = std::env::var("DBUS_SESSION_BUS_ADDRESS").ok().and_then(|a| Bus::connect(&a)) else { return false };
+    if !bus.own(NAME) {
+        return false;
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || rx.into_iter().for_each(hand_over));
+    answer(bus, tx, || {});
+    let _ = worker.join();
+    true
+}
+
+/// Give `r` to the open window, or start one for it, in a scope of its own.
+fn hand_over(r: Request) {
+    let sock = crate::single::socket_path();
+    if crate::single::send(&sock, &r) {
+        return;
+    }
+    let paths = match &r {
+        Request::Open(p) | Request::Show(p) | Request::Properties(p) => p.clone(),
+        Request::Focus => vec![],
+    };
+    let exe = exe();
+    let scoped = std::process::Command::new("systemd-run").args(["--user", "--scope", "--collect", "--quiet", "--"]).arg(&exe).args(&paths).stdin(std::process::Stdio::null()).spawn();
+    if scoped.is_err() {
+        let _ = std::process::Command::new(&exe).args(&paths).stdin(std::process::Stdio::null()).spawn();
+    }
+    // A new window shows the folders; properties are asked for once it listens.
+    if matches!(r, Request::Properties(_)) {
+        for _ in 0..50 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if crate::single::send(&sock, &r) {
+                break;
+            }
+        }
+    }
 }
 
 /// Have the bus start Maia for "Show in folder" (or no longer): written while Maia is the
