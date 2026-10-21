@@ -13640,3 +13640,50 @@ fn readme_card_follows_the_file() {
     assert!(text(&mut t).contains("New title"), "read again after it changed");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// rclone remotes show as network places, connected while mounted. Disconnecting through
+/// the user's unit refuses while files wait to upload, then unmounts and stops the unit;
+/// connecting starts the unit and waits for the folder. Stand-ins for rclone, systemctl
+/// and fusermount3, and a mount table they rewrite.
+#[test]
+fn rclone_remotes_connect_and_disconnect() {
+    use crate::rclone::{mount, parse_remotes, pending_uploads, places, remote_of, unmount};
+    assert_eq!(parse_remotes("gdrive:\nwork s3:\n\nnot a remote\n"), ["gdrive", "work s3"]);
+    assert_eq!(pending_uploads("vfs cache: objects 3 (was 3) in use 0, to upload 2, uploading 1, total size 1M"), 3);
+    assert_eq!(pending_uploads("vfs cache: objects 0 (was 0) in use 0, to upload 0, uploading 0, total size 0"), 0);
+    assert_eq!((remote_of("rclone:gdrive"), remote_of("rclone:"), remote_of("smb://x")), (Some("gdrive"), None, None));
+    assert_eq!(crate::network::label("rclone:gdrive"), "gdrive");
+    let d = tmpdir("rclone");
+    let table = d.join("mounts");
+    let mounted = "gdrive: /home/u/gdrive fuse.rclone rw,nosuid,nodev 0 0\n";
+    std::fs::write(&table, mounted).unwrap();
+    std::fs::write(d.join("status"), "vfs cache: objects 3 (was 3) in use 0, to upload 2, uploading 1, total size 1M").unwrap();
+    fake_tool(&d, "rclone", r#"[ "$1" = listremotes ] && printf 'gdrive:\nwork:\n'"#);
+    fake_tool(&d, "systemctl", r#"case "$*" in
+  *LoadState*rclone-gdrive.service) echo loaded ;;
+  *LoadState*) echo not-found ;;
+  *StatusText*) cat "$D/status" ;;
+  "--user start rclone-gdrive.service") echo "gdrive: /home/u/gdrive fuse.rclone rw 0 0" > "$D/mounts" ;;
+esac"#);
+    fake_tool(&d, "fusermount3", r#": > "$D/mounts""#);
+    crate::drives::FAKE.with(|f| *f.borrow_mut() = Some(d.clone()));
+    let t = crate::drives::Tools::current().unwrap();
+    crate::drives::FAKE.with(|f| *f.borrow_mut() = None);
+    let p = places(&t, &table);
+    assert_eq!(p.iter().map(|p| (p.name.as_str(), p.uri.as_str(), p.mounted, p.path.clone())).collect::<Vec<_>>(), [("gdrive", "rclone:gdrive", true, Some(PathBuf::from("/home/u/gdrive"))), ("work", "rclone:work", false, None)]);
+    // Files still uploading: refused, nothing unmounted.
+    let e = unmount(&t, &table, "gdrive").unwrap_err();
+    assert!(e.contains("3 files are still uploading"), "{e}");
+    assert_eq!(std::fs::read_to_string(&table).unwrap(), mounted);
+    // Uploaded: unmounted, then the unit stopped, in that order.
+    std::fs::write(d.join("status"), "vfs cache: objects 3 (was 3) in use 0, to upload 0, uploading 0, total size 1M").unwrap();
+    std::fs::remove_file(d.join("calls.log")).unwrap();
+    unmount(&t, &table, "gdrive").unwrap();
+    let calls = fake_calls(&d);
+    let acts: Vec<String> = calls.iter().filter(|c| !c.iter().any(|a| a == "show")).map(|c| c.join(" ")).collect();
+    assert_eq!(acts, ["fusermount3 -u /home/u/gdrive", "systemctl --user stop rclone-gdrive.service"]);
+    assert!(!places(&t, &table)[0].mounted);
+    // Connecting starts the unit and returns the folder once it is mounted.
+    assert_eq!(mount(&t, &table, "gdrive").unwrap(), PathBuf::from("/home/u/gdrive"));
+    let _ = std::fs::remove_dir_all(&d);
+}

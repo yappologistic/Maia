@@ -226,6 +226,9 @@ pub fn unmount(t: &Tools, uri: &str) -> Result<(), String> {
 
 /// A short name for a place: "media on nas", "me@host", or the device's own name.
 pub fn label(uri: &str) -> String {
+    if let Some(remote) = crate::rclone::remote_of(uri) {
+        return remote.to_string();
+    }
     let Some((scheme, rest)) = uri.split_once("://") else { return uri.to_string() };
     let rest = rest.trim_end_matches('/');
     let (host, path) = rest.split_once('/').unwrap_or((rest, ""));

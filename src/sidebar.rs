@@ -178,9 +178,14 @@ pub fn refresh(app: &App, ctx: &egui::Context) {
         std::thread::spawn(move || {
             let (recent_in, marks_in) = inputs;
             let drives = tools.as_ref().map(crate::drives::list).unwrap_or_default();
-            let net = tools.as_ref().filter(|t| t.has("gio")).map(crate::network::places).unwrap_or_default();
+            let mut net = tools.as_ref().filter(|t| t.has("gio")).map(crate::network::places).unwrap_or_default();
+            // rclone remotes: under Network, connected or not, and not in Storage too.
+            let remotes = tools.as_ref().map(|t| crate::rclone::places(t, &table)).unwrap_or_default();
+            let remote_dirs: Vec<PathBuf> = remotes.iter().filter_map(|p| p.path.clone()).collect();
+            net.extend(remotes);
             let mounts = fsx::mounts_in(&table)
                 .into_iter()
+                .filter(|m| !remote_dirs.contains(&m.path))
                 .map(|m| {
                     let (t, f) = fsx::disk_space(&m.path).unwrap_or((0, 0));
                     (m.path.clone(), tab::volume_label(&m.device, &m.path), t, f)
@@ -643,7 +648,8 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                 let ic = Rect::from_center_size(pos2(r.left() + 36.0, r.center().y), Vec2::splat(15.0));
                 let busy = app.connecting(&place.uri);
                 let col = if place.mounted { pal.text_dim } else { pal.text_dim.gamma_multiply(0.6) };
-                paint_glyph(ui.painter(), ic, if place.device { Glyph::Phone } else { Glyph::Globe }, col);
+                let glyph = if place.device { Glyph::Phone } else if crate::rclone::remote_of(&place.uri).is_some() { Glyph::Cloud } else { Glyph::Globe };
+                paint_glyph(ui.painter(), ic, glyph, col);
                 let btn = Rect::from_center_size(pos2(r.right() - 20.0, r.center().y), Vec2::splat(20.0));
                 let reserve = if place.mounted || busy { 26.0 } else { 0.0 };
                 let tcol = if place.mounted { pal.text } else { pal.text_dim.gamma_multiply(0.75) };

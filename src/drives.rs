@@ -249,7 +249,7 @@ pub fn list(t: &Tools) -> Vec<Drive> {
 }
 
 /// Output of a command (stdout on success; the error text otherwise).
-fn run(c: Command, timeout: Duration) -> Result<String, String> {
+pub(crate) fn run(c: Command, timeout: Duration) -> Result<String, String> {
     run_fed(c, timeout, None)
 }
 

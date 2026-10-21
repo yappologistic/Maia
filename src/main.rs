@@ -70,6 +70,7 @@ mod mime;
 mod musictags;
 mod namefind;
 mod network;
+mod rclone;
 mod office;
 mod ollama;
 mod ops;

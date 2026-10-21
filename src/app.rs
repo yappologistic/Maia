@@ -705,6 +705,16 @@ impl App {
     }
 
     fn start_net(&mut self, uri: String, login: crate::network::Login, open_in: Option<(u64, bool)>, from_dialog: bool) {
+        if let Some(remote) = crate::rclone::remote_of(&uri).map(str::to_string) {
+            let Some(tools) = crate::drives::Tools::current() else { return };
+            if self.connecting(&uri) {
+                return;
+            }
+            let table = crate::drives::mounts_table();
+            let rx = crate::network::spawn(&self.ctx, move || crate::rclone::mount(&tools, &table, &remote));
+            self.net_jobs.push(NetJob { uri, open_in, from_dialog, rx });
+            return;
+        }
         let Some(tools) = crate::drives::Tools::current().filter(|t| t.has("gio")) else {
             self.toast("Network places need GVFS (the gio command)");
             return;
@@ -740,7 +750,8 @@ impl App {
 
     /// Unmount a network place; tabs inside it move to Computer first.
     pub fn disconnect(&mut self, uri: String, path: Option<PathBuf>) {
-        let Some(tools) = crate::drives::Tools::current().filter(|t| t.has("gio")) else { return };
+        let remote = crate::rclone::remote_of(&uri).map(str::to_string);
+        let Some(tools) = crate::drives::Tools::current().filter(|t| remote.is_some() || t.has("gio")) else { return };
         if let Some(path) = path {
             let s = self.view_for(Path::new(tab::COMPUTER));
             for p in self.panels.values_mut() {
@@ -753,7 +764,11 @@ impl App {
         }
         let (notes, ctx) = (self.notes.clone(), self.ctx.clone());
         std::thread::spawn(move || {
-            let msg = match crate::network::unmount(&tools, &uri) {
+            let done = match &remote {
+                Some(r) => crate::rclone::unmount(&tools, &crate::drives::mounts_table(), r),
+                None => crate::network::unmount(&tools, &uri),
+            };
+            let msg = match done {
                 Ok(()) => format!("Disconnected {}", crate::network::label(&uri)),
                 Err(e) => format!("Couldn't disconnect {}: {e}", crate::network::label(&uri)),
             };
@@ -899,7 +914,7 @@ impl App {
             match r {
                 Ok(path) => {
                     self.ud.servers.retain(|s| *s != job.uri);
-                    if !job.uri.starts_with("mtp://") && !job.uri.starts_with("gphoto2://") {
+                    if !job.uri.starts_with("mtp://") && !job.uri.starts_with("gphoto2://") && !job.uri.starts_with(crate::rclone::SCHEME) {
                         self.ud.servers.insert(0, job.uri.clone());
                         self.ud.servers.truncate(10);
                         self.ud_dirty = true;
