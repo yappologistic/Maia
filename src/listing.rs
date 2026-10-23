@@ -148,11 +148,12 @@ pub fn paint_view_glyph(p: &egui::Painter, r: Rect, mode: Mode, col: Color32) {
 /// Single-line galley elided with "…" to `width`.
 /// Like `elided`, but keeps the end ("…/parent/folder"): for paths, where the tail matters.
 pub fn elided_tail(ui: &Ui, text: &str, font: FontId, width: f32, color: Color32) -> Arc<Galley> {
-    let full = ui.painter().layout_no_wrap(text.to_string(), font.clone(), color);
+    let fixed = crate::rtl::fix_rtl(text);
+    let full = ui.painter().layout_no_wrap(fixed.clone(), font.clone(), color);
     if full.size().x <= width {
         return full;
     }
-    let chars: Vec<char> = text.chars().collect();
+    let chars: Vec<char> = fixed.chars().collect();
     // Longest suffix that fits after the ellipsis (binary search on its length).
     let (mut lo, mut hi) = (0usize, chars.len());
     while lo < hi {
@@ -169,7 +170,8 @@ pub fn elided_tail(ui: &Ui, text: &str, font: FontId, width: f32, color: Color32
 }
 
 pub fn elided(ui: &Ui, text: &str, font: FontId, width: f32, color: Color32) -> Arc<Galley> {
-    let mut job = LayoutJob::simple_singleline(text.to_string(), font, color);
+    let fixed = crate::rtl::fix_rtl(text);
+    let mut job = LayoutJob::simple_singleline(fixed, font, color);
     job.wrap = egui::text::TextWrapping { max_width: width.max(8.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
     ui.fonts_mut(|f| f.layout_job(job))
 }
@@ -191,25 +193,32 @@ fn name_job(name: &str, suffix: Option<&str>, q: &fuzzy::Query, font: &FontId, c
     let hits: HashSet<usize> = if q.is_empty() { HashSet::new() } else { fuzzy::positions(q, name).map(|(_, p)| p.into_iter().collect()).unwrap_or_default() };
     let fmt = |c: Color32| egui::TextFormat { font_id: font.clone(), color: c, ..Default::default() };
     if hits.is_empty() {
-        job.append(name, 0.0, fmt(col));
+        let fixed = crate::rtl::fix_rtl(name);
+        job.append(&fixed, 0.0, fmt(col));
     } else {
-        let mut buf = String::new();
-        let mut buf_hit = false;
-        for (i, ch) in name.chars().enumerate() {
-            let h = hits.contains(&i);
-            if h != buf_hit && !buf.is_empty() {
-                job.append(&buf, 0.0, fmt(if buf_hit { accent } else { col }));
-                buf.clear();
+        if crate::rtl::has_rtl(name) {
+            let fixed = crate::rtl::fix_rtl(name);
+            job.append(&fixed, 0.0, fmt(accent));
+        } else {
+            let mut buf = String::new();
+            let mut buf_hit = false;
+            for (i, ch) in name.chars().enumerate() {
+                let h = hits.contains(&i);
+                if h != buf_hit && !buf.is_empty() {
+                    job.append(&buf, 0.0, fmt(if buf_hit { accent } else { col }));
+                    buf.clear();
+                }
+                buf_hit = h;
+                buf.push(ch);
             }
-            buf_hit = h;
-            buf.push(ch);
-        }
-        if !buf.is_empty() {
-            job.append(&buf, 0.0, fmt(if buf_hit { accent } else { col }));
+            if !buf.is_empty() {
+                job.append(&buf, 0.0, fmt(if buf_hit { accent } else { col }));
+            }
         }
     }
     if let Some(s) = suffix {
-        job.append(s, 8.0, fmt(dim));
+        let fixed_s = crate::rtl::fix_rtl(s);
+        job.append(&fixed_s, 8.0, fmt(dim));
     }
     job.wrap = egui::text::TextWrapping { max_width: width.max(8.0), max_rows: rows, break_anywhere: true, overflow_character: Some('…') };
     job

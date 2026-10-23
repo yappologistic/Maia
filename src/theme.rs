@@ -2695,6 +2695,45 @@ pub fn install_fonts(ctx: &egui::Context, family: &str, mono_family: &str) {
             break;
         }
     }
+    let fc_match_exact = |pattern: &str, expected: &str| -> Option<&'static [u8]> {
+        let out = std::process::Command::new("fc-match").args(["--format=%{file}|%{family}", pattern]).output().ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut parts = text.trim().splitn(2, '|');
+        let file = parts.next()?;
+        let family = parts.next().unwrap_or_default();
+        if family.to_lowercase().contains(&expected.to_lowercase()) {
+            map_font(std::path::Path::new(file))
+        } else {
+            None
+        }
+    };
+    let fc_match_lang = |lang: &str| -> Option<&'static [u8]> {
+        let pattern = format!(":lang={lang}");
+        let out = std::process::Command::new("fc-match").args(["--format=%{file}|%{lang}", &pattern]).output().ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut parts = text.trim().splitn(2, '|');
+        let file = parts.next()?;
+        let langs = parts.next().unwrap_or_default();
+        if langs.split('|').any(|l| l.split('-').next().unwrap_or("") == lang) {
+            map_font(std::path::Path::new(file))
+        } else {
+            None
+        }
+    };
+    let arabic_font = fc_match_exact("Noto Sans Arabic UI", "Noto Sans Arabic UI")
+        .or_else(|| fc_match_exact("Noto Sans Arabic", "Noto Sans Arabic"))
+        .or_else(|| fc_match_lang("fa"))
+        .or_else(|| fc_match_lang("ar"))
+        .or_else(|| first(&[
+            "/usr/share/fonts/noto/NotoSansArabicUI-Regular.ttf",
+            "/usr/share/fonts/noto/NotoSansArabic-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansArabicUI-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        ]));
+    if let Some(b) = arabic_font {
+        add(&mut fonts, "arabic", b, &mut prop);
+    }
     // Interface glyphs: a Lucide subset (ISC), drawn as text in its own family.
     const ICONS: &[u8] = include_bytes!("../assets/lucide-subset.ttf");
     fonts.font_data.insert("lucide".into(), FontData::from_static(ICONS).into());

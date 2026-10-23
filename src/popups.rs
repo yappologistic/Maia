@@ -724,9 +724,11 @@ pub(crate) fn home_short(p: &Path) -> String {
 /// A dialog's title, with an optional dim line under it.
 pub(crate) fn dialog_title(ui: &mut Ui, title: &str, sub: Option<&str>, pal: &Palette) {
     let fs = ui.style().text_styles.get(&egui::TextStyle::Body).map_or(13.0, |f| f.size);
-    ui.add(egui::Label::new(egui::RichText::new(title).strong().size(fs + 1.5).color(pal.text)).wrap());
+    let title_fixed = crate::rtl::fix_rtl(title);
+    ui.add(egui::Label::new(egui::RichText::new(title_fixed).strong().size(fs + 1.5).color(pal.text)).wrap());
     if let Some(sub) = sub {
-        ui.add(egui::Label::new(egui::RichText::new(sub).color(pal.text_dim)).wrap());
+        let sub_fixed = crate::rtl::fix_rtl(sub);
+        ui.add(egui::Label::new(egui::RichText::new(sub_fixed).color(pal.text_dim)).wrap());
     }
 }
 
@@ -5487,7 +5489,12 @@ fn open_with(app: &mut App, ctx: &egui::Context, paths: &mut Vec<PathBuf>, query
     let cmd_id = Id::new("openwith-command");
     let mut focus = !ctx.memory(|m| m.has_focus(cmd_id));
     let (_, rect) = centered(ctx, "openwith", 480.0, &pal, |ui| {
-        ui.label(egui::RichText::new(format!("Open {} with…", if paths.len() == 1 { first.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default() } else { format!("{} files", paths.len()) })).strong());
+        let first_name = if paths.len() == 1 {
+            first.file_name().map(|n| crate::rtl::fix_rtl(&n.to_string_lossy())).unwrap_or_default()
+        } else {
+            format!("{} files", paths.len())
+        };
+        ui.label(egui::RichText::new(format!("Open {first_name} with…")).strong());
         ui.label(egui::RichText::new(format!("{} ({mime})", db.comment(&mime))).small().color(pal.text_dim));
         search_field(ui, query, "Filter applications…", &mut focus, &pal, Glyph::Search);
         egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
@@ -5551,7 +5558,8 @@ fn run_exec(app: &mut App, ctx: &egui::Context, path: &mut PathBuf) -> bool {
     let mut done = false;
     centered(ctx, "runexec", 440.0, &pal, |ui| {
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        ui.label(egui::RichText::new(format!("“{name}” is executable")).strong());
+        let name_disp = crate::rtl::fix_rtl(&name);
+        ui.label(egui::RichText::new(format!("“{name_disp}” is executable")).strong());
         ui.label(egui::RichText::new("Do you want to run it?").color(pal.text_dim));
         ui.add_space(8.0);
         ui.horizontal(|ui| {
@@ -6789,7 +6797,8 @@ fn drop_menu(app: &mut App, ctx: &egui::Context, paths: &[PathBuf], dest: &Path,
     }
     let mut pick: Option<u8> = None;
     let (_, rect) = anchored(ctx, "dropmenu", pos, 200.0, &pal, |ui| {
-        ui.label(egui::RichText::new(format!("{} item{} → {}", paths.len(), if paths.len() == 1 { "" } else { "s" }, dest.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| dest.display().to_string()))).small().color(pal.text_dim));
+        let dest_name = dest.file_name().map(|n| crate::rtl::fix_rtl(&n.to_string_lossy())).unwrap_or_else(|| dest.display().to_string());
+        ui.label(egui::RichText::new(format!("{} item{} → {}", paths.len(), if paths.len() == 1 { "" } else { "s" }, dest_name)).small().color(pal.text_dim));
         for (k, label) in [(0u8, "Move here"), (1, "Copy here"), (2, "Link here")] {
             if menu_item(ui, label, None, &pal) {
                 pick = Some(k);

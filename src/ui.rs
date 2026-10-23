@@ -1762,7 +1762,8 @@ impl App {
                     if el < 3.0 {
                         let a = if el > 2.6 { (3.0 - el) / 0.4 } else { 1.0 };
                         egui::Frame::popup(ui.style()).fill(pal.raised.gamma_multiply(a)).corner_radius(CornerRadius::same(8)).inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
-                            ui.label(egui::RichText::new(msg).color(pal.text.gamma_multiply(a)));
+                            let msg_disp = crate::rtl::fix_rtl(msg);
+                            ui.label(egui::RichText::new(msg_disp).color(pal.text.gamma_multiply(a)));
                         });
                         ctx.request_repaint();
                     }

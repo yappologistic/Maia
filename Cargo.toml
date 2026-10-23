@@ -31,6 +31,8 @@ winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "
 x11-dl = "2.21.0"
 x11rb = { version = "0.13.2", default-features = false, features = ["allow-unsafe-code", "dl-libxcb"] }
 zune-jpeg = "=0.4.21"
+ar-reshaper = "1.5.0"
+unicode-bidi = "0.3.18"
 
 [features]
 # Test-only input driver (see src/testkit.rs).

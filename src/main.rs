@@ -116,6 +116,7 @@ mod sim;
 mod timefmt;
 mod trashcan;
 mod theme;
+pub mod rtl;
 mod tidy;
 mod tour;
 mod thumbcache;
