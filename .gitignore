@@ -4,6 +4,8 @@
 !/Cargo.toml
 !/Cargo.lock
 !/README.md
+!/CONTRIBUTING.md
+!/AI-CONTRIBUTING.md
 !/LICENSE
 !/build-dist.sh
 
@@ -30,6 +32,7 @@
 !/tools/notices.py
 !/tools/tour-media.sh
 !/tools/package.sh
+!/tools/labels.sh
 
 # Crates carried with a change of ours, patched in from Cargo.toml (each says why).
 !/vendor/
@@ -45,13 +48,16 @@
 !/packaging/*.desktop
 !/packaging/*.metainfo.xml
 
-# The workflows, by name.
+# The workflows, by name, and the issue forms.
 !/.github/
 /.github/**
 !/.github/workflows/
 /.github/workflows/**
 !/.github/workflows/release.yml
 !/.github/workflows/ci.yml
+!/.github/workflows/issue-labels.yml
+!/.github/ISSUE_TEMPLATE/
+!/.github/ISSUE_TEMPLATE/*.yml
 
 # The README screenshot, allowed by name once it exists.
 !/docs/

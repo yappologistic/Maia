@@ -34,7 +34,7 @@ impl Dest {
 /// Go To opened to pick where the selection goes.
 pub fn open(app: &mut App, mv: bool) {
     let t = app.tab();
-    if tab::is_computer(&t.path) {
+    if tab::is_place(&t.path) {
         return;
     }
     if mv && t.archive.is_some() {
@@ -66,13 +66,13 @@ pub fn in_trash(p: &Path) -> bool {
 /// Could `p` be offered as a destination at all? Only names are looked at (no disk
 /// access): the picker's rows are filtered with it.
 pub fn offered(p: &Path) -> bool {
-    !tab::is_computer(p) && tab::drive_dev(p).is_none() && !in_trash(p)
+    !tab::is_place(p) && tab::drive_dev(p).is_none() && !in_trash(p)
 }
 
 /// Why `to` can't take `srcs`, or None when it can. Reads the disk (is `to` a folder,
 /// where do links lead), so it runs once, when a folder is chosen.
 pub fn refusal(srcs: &[PathBuf], to: &Path, mv: bool) -> Option<String> {
-    if tab::is_computer(to) || tab::drive_dev(to).is_some() {
+    if tab::is_place(to) || tab::drive_dev(to).is_some() {
         return Some("Pick a folder".into());
     }
     if in_trash(to) {

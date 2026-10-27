@@ -345,11 +345,13 @@ pub enum SortKey {
     /// A picture's or a film's pixels.
     Dimensions,
     Duration,
+    /// Pictures by their main colour's hue, then the greys (`colours.rs`).
+    Colour,
 }
 
 impl SortKey {
     pub fn default_desc(self) -> bool {
-        !matches!(self, SortKey::Name | SortKey::Type | SortKey::Original | SortKey::Tags)
+        !matches!(self, SortKey::Name | SortKey::Type | SortKey::Original | SortKey::Tags | SortKey::Colour)
     }
 }
 

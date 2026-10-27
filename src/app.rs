@@ -317,6 +317,9 @@ pub struct App {
     semantic_for: Option<String>,
     /// Authors' GitHub pictures for the history (idle while the setting is off).
     pub avatars: crate::avatars::Avatars,
+    pub github: crate::github::Page,
+    /// A new theme washing over the old window (`wash.rs`).
+    pub wash: crate::wash::Wash,
     /// Updates from the project's releases, when asked.
     pub updater: crate::update::Updater,
     /// Network places being mounted.
@@ -457,6 +460,8 @@ impl App {
             semantic: None,
             semantic_for: None,
             avatars: crate::avatars::Avatars::new(),
+            github: Default::default(),
+            wash: Default::default(),
             updater: Default::default(),
             net_jobs: vec![],
             trash_aged: None,
@@ -529,7 +534,7 @@ impl App {
 
     pub fn make_tab(&mut self, path: PathBuf) -> Tab {
         let id = self.alloc_id();
-        let path = if tab::is_computer(&path) || path.exists() { path } else { fsx::home() };
+        let path = if tab::is_place(&path) || path.exists() { path } else { fsx::home() };
         let (v, scope) = self.view_for(&path);
         let mut t = Tab::new(id, path.clone(), v, self.ctx.clone());
         t.saved_scope = scope;
@@ -1158,7 +1163,7 @@ impl App {
             let mut tabs = vec![];
             for ts in &ps.tabs {
                 // A file path opens its folder with the file selected.
-                let (path, select) = if tab::is_computer(&ts.path) || ts.path.is_dir() {
+                let (path, select) = if tab::is_place(&ts.path) || ts.path.is_dir() {
                     (ts.path.clone(), None)
                 } else if ts.path.is_file() {
                     (ts.path.parent().map(Path::to_path_buf).unwrap_or_else(fsx::home), Some(ts.path.clone()))
@@ -1345,7 +1350,10 @@ impl App {
             theme::install_fonts(&ctx, &self.cfg.font_family, &self.cfg.inspector_font);
         }
         self.thumbs.budget_bytes = (self.cfg.asset_cache_mb.max(32) as usize) << 20;
-        if t != self.theme_applied {
+        // Only the theme changed: it washes in over a copy of the old window, which the
+        // runner makes after this frame (still drawn in the old one).
+        let only_theme = t.0 != self.theme_applied.0 && (t.1, t.2, t.3, t.4) == (self.theme_applied.1, self.theme_applied.2, self.theme_applied.3, self.theme_applied.4);
+        if t != self.theme_applied && (!only_theme || self.wash.theme_changing(&ctx, self.cfg.animations)) {
             self.pal = theme::palette(t.0);
             if !t.4 {
                 self.pal.syntax = theme::Syntax::classic(self.pal.dark);
@@ -1358,6 +1366,7 @@ impl App {
         crate::picker::keys(self, &ctx);
         self.handle_input(&ctx);
         self.draw(&ctx);
+        self.wash.paint(&ctx);
         self.process_actions(&ctx);
         self.ext_drop = None;
         // Tests share one home and run side by side: saving on its own, one test's Show
@@ -1411,13 +1420,27 @@ impl App {
             crate::tags::invalidate(f);
             crate::origin::invalidate(f);
             crate::facts::invalidate(f);
+            crate::colours::invalidate(f);
+            if let Some(d) = f.parent() {
+                crate::peek::invalidate(d);
+            }
         }
         // Dates taken, sizes and lengths: asked for by last frame's rows, read only for
         // the folders shown; a list sorted or grouped by them looks again as they land.
         let mut shown: Vec<PathBuf> = self.panels.values().map(|p| p.tab().path.clone()).collect();
         shown.sort();
+        crate::colours::focus(&shown);
         crate::facts::focus(shown);
         crate::facts::flush(ctx);
+        // Colours to sort pictures by, likewise.
+        crate::colours::flush(ctx);
+        if crate::colours::changed() {
+            for t in self.panels.values_mut().flat_map(|p| p.tabs.iter_mut()) {
+                if t.settings.sort == SortKey::Colour {
+                    t.stream_dirty = true;
+                }
+            }
+        }
         if crate::facts::changed() {
             for t in self.panels.values_mut().flat_map(|p| p.tabs.iter_mut()) {
                 if matches!(t.settings.sort, SortKey::Taken | SortKey::Dimensions | SortKey::Duration) || t.settings.group == crate::config::GroupBy::Taken {
@@ -1497,7 +1520,7 @@ impl App {
                 if ti == p.active {
                     crate::columns::watch(t, &changed_dirs, &mut want);
                 }
-                if ti == p.active && !tab::is_computer(&t.path) && !t.flatten && t.archive.is_none() {
+                if ti == p.active && !tab::is_place(&t.path) && !t.flatten && t.archive.is_none() {
                     want.insert(t.path.clone());
                     if t.tree_active() {
                         want.extend(t.expanded.iter().filter(|d| d.starts_with(&t.path)).take(64).cloned());
@@ -1611,7 +1634,7 @@ impl App {
         let mut req = vec![];
         for p in self.panels.values() {
             let t = p.tab();
-            if t.flatten || tab::is_computer(&t.path) || t.archive.is_some() {
+            if t.flatten || tab::is_place(&t.path) || t.archive.is_some() {
                 continue;
             }
             for &i in t.view.iter().take(2000) {
@@ -1810,6 +1833,14 @@ impl App {
                     }
                 }
                 let id = self.active;
+                // The GitHub page moves through its timeline; an open preview keeps its keys.
+                if !text_focus && !modifiers.ctrl && !modifiers.alt && !modifiers.shift && self.github.takes(*key) {
+                    if self.panels.get(&id).is_some_and(|p| tab::is_github(&p.tab().path) && p.inspector.as_ref().is_none_or(|i| i.git.is_none())) {
+                        self.github.key(*key, id, &mut self.actions);
+                        consumed.push(n);
+                        continue;
+                    }
+                }
                 if let Some(p) = self.panels.get_mut(&id).filter(|_| !text_focus && !modifiers.ctrl && !modifiers.alt) {
                     if let Some(h) = p.inspector.as_mut().and_then(|i| i.git.as_mut()).filter(|h| h.takes(*key)) {
                         if !h.key(*key, id, &mut self.actions) {
@@ -2120,7 +2151,7 @@ impl App {
         let ctx = self.ctx.clone();
         // Drives aren't files: in the Computer view nothing can be cut, deleted, linked or
         // duplicated (a mounted volume's root would take its whole contents with it).
-        if tab::is_computer(&self.panel().path()) && matches!(cmd, Cmd::Cut | Cmd::Trash | Cmd::DeletePermanent | Cmd::Duplicate | Cmd::CreateLink | Cmd::Paste | Cmd::PasteEarlier | Cmd::Rename) {
+        if tab::is_place(&self.panel().path()) && matches!(cmd, Cmd::Cut | Cmd::Trash | Cmd::DeletePermanent | Cmd::Duplicate | Cmd::CreateLink | Cmd::Paste | Cmd::PasteEarlier | Cmd::Rename) {
             return;
         }
         // Inside an archive: zip, 7z and tarballs change by a job that rewrites them.
@@ -2131,7 +2162,7 @@ impl App {
             Cmd::GoTo => self.popup = Popup::goto(String::new()),
             Cmd::AddressBar => {
                 let p = self.panel().path();
-                let s = if tab::is_computer(&p) { "/".to_string() } else { format!("{}/", p.display()).replace("//", "/") };
+                let s = if tab::is_place(&p) { "/".to_string() } else { format!("{}/", p.display()).replace("//", "/") };
                 self.popup = Popup::goto(s);
             }
             Cmd::Back => {
@@ -2160,6 +2191,7 @@ impl App {
             }
             Cmd::Home => self.navigate(self.active, fsx::home()),
             Cmd::Computer => self.navigate(self.active, PathBuf::from(COMPUTER)),
+            Cmd::Refresh if tab::is_github(&self.tab().path) => self.github.refresh(&ctx),
             Cmd::Refresh => {
                 let t = self.tab();
                 let entries: Vec<PathBuf> = t.entries.iter().map(|e| e.path.clone()).collect();
@@ -2238,7 +2270,7 @@ impl App {
             Cmd::FindInTerminal => crate::terminal::find(self),
             Cmd::OpenTerminal => {
                 let p = self.panel().path();
-                let dir = if tab::is_computer(&p) { PathBuf::from("/") } else { p };
+                let dir = if tab::is_place(&p) { PathBuf::from("/") } else { p };
                 if let Err(e) = crate::mime::open_terminal(&dir) {
                     self.toast(format!("Couldn't start a terminal: {e}"));
                 }
@@ -2248,7 +2280,7 @@ impl App {
                 let explicit = !self.tab().selected.is_empty();
                 let targets = if explicit && !sel.is_empty() { sel } else { vec![self.panel().path()] };
                 for p in targets {
-                    if tab::is_computer(&p) {
+                    if tab::is_place(&p) {
                         continue;
                     }
                     if let Some(i) = self.ud.bookmarks.iter().position(|b| *b == p) {
@@ -2272,7 +2304,7 @@ impl App {
             }
             Cmd::TabNewOrRecent => {
                 let p = self.panel().path();
-                if !tab::is_computer(&p) {
+                if !tab::is_place(&p) {
                     self.popup = Popup::path_dropdown(self.active, p, None);
                 }
             }
@@ -2400,7 +2432,7 @@ impl App {
                 };
                 let dest = self.panels[&o].path();
                 let srcs = self.tab().targets();
-                if !srcs.is_empty() && !tab::is_computer(&dest) {
+                if !srcs.is_empty() && !tab::is_place(&dest) {
                     self.begin_transfer(srcs, dest, cmd == Cmd::MoveToOther);
                 }
             }
@@ -2468,6 +2500,7 @@ impl App {
                 }
             }
             Cmd::RecentProjects => self.popup = crate::projects::open(self, &ctx),
+            Cmd::GitHubProfile => self.navigate(self.active, PathBuf::from(tab::GITHUB)),
             Cmd::QuickOpen => match crate::quickopen::open(self, &ctx) {
                 Some(p) => self.popup = p,
                 None => self.toast("Quick Open needs a folder"),
@@ -2475,7 +2508,7 @@ impl App {
             Cmd::WhatsUsing => {
                 let t = self.tab();
                 let mut paths: Vec<PathBuf> = t.target_entries().iter().filter(|e| tab::drive_dev(&e.path).is_none()).map(|e| e.path.clone()).collect();
-                if paths.is_empty() && !tab::is_computer(&t.path) {
+                if paths.is_empty() && !tab::is_place(&t.path) {
                     paths.push(t.path.clone());
                 }
                 match paths.is_empty() {
@@ -2494,7 +2527,7 @@ impl App {
             }
             Cmd::NewSmart => {
                 let t = self.tab();
-                let root = if tab::is_computer(&t.path) || t.archive.is_some() { fsx::home() } else { t.path.clone() };
+                let root = if tab::is_place(&t.path) || t.archive.is_some() { fsx::home() } else { t.path.clone() };
                 let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 self.popup = crate::smart::edit(&crate::smart::SmartFolder { root, name, ..Default::default() }, false);
             }
@@ -2520,7 +2553,7 @@ impl App {
                 if paths.is_empty() {
                     paths = self.tab().target_entries().iter().map(|e| e.path.clone()).collect();
                 }
-                if paths.is_empty() && !tab::is_computer(&self.panel().path()) {
+                if paths.is_empty() && !tab::is_place(&self.panel().path()) {
                     paths = vec![self.panel().path()];
                 }
                 let hint = self.panel().line_hint.clone();
@@ -2612,6 +2645,7 @@ impl App {
             Cmd::SortTaken => self.tab().set_sort(SortKey::Taken),
             Cmd::SortDimensions => self.tab().set_sort(SortKey::Dimensions),
             Cmd::SortDuration => self.tab().set_sort(SortKey::Duration),
+            Cmd::SortColour => self.tab().set_sort(SortKey::Colour),
             Cmd::GroupOrigin => {
                 let t = self.tab();
                 t.settings.group = crate::config::GroupBy::Origin;
@@ -2811,7 +2845,7 @@ impl App {
                 if t.is_empty() {
                     t = vec![self.panel().path()];
                 }
-                t.retain(|p| !tab::is_computer(p) && tab::drive_dev(p).is_none());
+                t.retain(|p| !tab::is_place(p) && tab::drive_dev(p).is_none());
                 if !t.is_empty() {
                     for p in &t {
                         if p.is_dir() {
@@ -2833,6 +2867,11 @@ impl App {
                 crate::pastes::remember(&mut self.pastes, crate::pastes::Set { paths: paths.clone(), cut, dirs, from, at: crate::jump::now() });
                 crate::clipboard::set_files(&paths, cut);
                 self.toast(format!("{} {} item{}", if cut { "Cut" } else { "Copied" }, paths.len(), if paths.len() == 1 { "" } else { "s" }));
+                if cut {
+                    // Cut files march a moment from now (`listing::paint_ants`).
+                    let now = self.ctx.input(|i| i.time);
+                    self.ctx.data_mut(|d| d.insert_temp(egui::Id::new("maia cut since"), now));
+                }
                 self.clipboard = Some((paths, cut));
             }
             Cmd::Paste => self.paste(),
@@ -3005,7 +3044,7 @@ impl App {
                 let t = self.tab();
                 let mut idx: Vec<u32> = if t.selected.is_empty() { t.cursor.into_iter().collect() } else { t.selected.iter().copied().collect() };
                 idx.sort_by_key(|i| t.view_pos(*i));
-                if idx.is_empty() || tab::is_computer(&t.path) {
+                if idx.is_empty() || tab::is_place(&t.path) {
                     return;
                 }
                 let items = idx.iter().map(|&i| (i, t.entries[i as usize].path.clone(), t.entries[i as usize].name.clone())).collect();
@@ -3019,7 +3058,7 @@ impl App {
             }
             Cmd::NewFolder | Cmd::NewFile => {
                 let dir = self.panel().path();
-                if tab::is_computer(&dir) {
+                if tab::is_place(&dir) {
                     return;
                 }
                 let name = if cmd == Cmd::NewFolder { "New folder" } else { "New file.txt" };
@@ -3082,7 +3121,7 @@ impl App {
                 }
                 let t = self.tab();
                 let srcs = t.targets();
-                if t.archive.is_some() || tab::is_computer(&t.path) || srcs.is_empty() {
+                if t.archive.is_some() || tab::is_place(&t.path) || srcs.is_empty() {
                     self.toast("Select what to compress");
                     return;
                 }
@@ -3274,7 +3313,7 @@ impl App {
             }
             Cmd::PinToTop => {
                 let sel = self.tab().targets();
-                if sel.is_empty() || tab::is_computer(&self.panel().path()) || self.tab().archive.is_some() {
+                if sel.is_empty() || tab::is_place(&self.panel().path()) || self.tab().archive.is_some() {
                     self.toast("Select what to pin");
                 } else {
                     // All pinned already: the same command takes them off.
@@ -3317,7 +3356,7 @@ impl App {
     }
 
     pub(crate) fn track_leave(&mut self, old: &Path) {
-        if self.cfg.track_recents() && !tab::is_computer(old) {
+        if self.cfg.track_recents() && !tab::is_place(old) {
             // Folders inside archives are not counted, judged by name: no disk in the frame.
             if old.is_absolute() && !old.ancestors().any(|a| a.file_name().is_some_and(|n| crate::archive::is_archive(&n.to_string_lossy()))) {
                 crate::jump::note(&mut self.ud.visits, old, crate::jump::now());
@@ -3379,7 +3418,7 @@ impl App {
         match ed.save(force) {
             Ok(trashed) => {
                 if trashed {
-                    self.undo.push(UndoEntry { label: format!("Edit {name}"), kind: UndoKind::Replaced(vec![ed.file.clone()]) });
+                    self.undo.push(UndoEntry { label: format!("Edit {name}"), kind: UndoKind::Replaced(vec![ed.target.clone()]) });
                 }
                 self.toast(format!("Saved {name}"));
                 true
@@ -3509,7 +3548,7 @@ impl App {
         let t = self.tab();
         let sel = t.target_entries();
         let dest = if t.selected.len() == 1 && sel.len() == 1 && sel[0].is_dir { sel[0].path.clone() } else { t.path.clone() };
-        if tab::is_computer(&dest) {
+        if tab::is_place(&dest) {
             return;
         }
         let (paths, cut) = match crate::clipboard::get_files() {
@@ -3598,6 +3637,13 @@ impl App {
     }
 
     pub fn start_job(&mut self, kind: OpKind) {
+        // A place (Computer, GitHub) is a relative path: written to, it would land in
+        // whatever folder Maia was started from.
+        if let OpKind::Copy { dest, .. } | OpKind::Move { dest, .. } | OpKind::Extract { dest, .. } = &kind {
+            if !dest.is_absolute() {
+                return;
+            }
+        }
         let id = self.alloc_id();
         self.jobs.push(ops::spawn_in(id, kind, self.ctx.clone(), &self.queue, self.cfg.check_copies));
     }
@@ -4135,7 +4181,9 @@ impl App {
         let Some(r) = t.rename.as_mut() else { return };
         let bad = r.compute_conflicts();
         if !bad.is_empty() {
-            r.error = Some(if r.is_batch() { format!("{} name(s) are invalid or collide", bad.len()) } else { "That name is invalid or already exists".into() });
+            r.error = Some(if r.is_batch() { format!("{} name(s) are invalid or collide", bad.len()) } else { r.reason().unwrap_or_else(|| "That name can't be used".into()) });
+            r.shake = self.ctx.input(|i| i.time);
+            self.ctx.request_repaint();
             return;
         }
         let plan = r.plan();

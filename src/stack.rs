@@ -364,7 +364,7 @@ fn glow_texture(ctx: &egui::Context) -> Option<egui::TextureId> {
 /// Whether a card can show a picture: what the thumbnailer makes, a folder's cover, a
 /// song's own.
 fn pictured(e: &crate::fsx::Entry, t: &Tab) -> bool {
-    crate::thumbs::can_thumb(e) || e.is_dir && !e.is_link && !tab::is_computer(&t.path) || !e.is_dir && crate::musictags::holds_cover(e.ext())
+    crate::thumbs::can_thumb(e) || e.is_dir && !e.is_link && !tab::is_place(&t.path) || !e.is_dir && crate::musictags::holds_cover(e.ext())
 }
 
 /// Bands of `col` along the inside of `r`'s edges, solid at the edge and clear `w` in.
@@ -416,18 +416,16 @@ fn face(p: &egui::Painter, r: Rect, e: &crate::fsx::Entry, t: &Tab, env: &mut En
                 let plate = Rect::from_min_size(pos2(r.left() + s * 0.35, r.bottom() - s * 1.35), Vec2::splat(s));
                 p.rect_filled(plate, CornerRadius::same((s * 0.22) as u8), Color32::from_black_alpha((120.0 * alpha) as u8));
                 let ic = plate.shrink(s * 0.17);
-                if !crate::icons::entry(p, ic, e) {
-                    theme::paint_icon(p, ic, theme::FileCat::Folder, "", false);
-                }
+                crate::listing::paint_entry_icon(p, ic, e, theme::FileCat::Folder, "");
             }
             return;
         }
     }
     let ic = Rect::from_center_size(r.center(), Vec2::splat((r.width() * 0.42).round()));
-    if tab::is_computer(&t.path) {
+    if tab::is_place(&t.path) {
         crate::ui::paint_drive(p, ic.shrink(ic.width() * 0.1), false, &crate::drives::Crypt::Plain, pal.text_dim, pal.raised);
-    } else if !crate::icons::entry(p, ic, e) {
-        theme::paint_icon(p, ic, cat, e.ext(), e.is_link);
+    } else {
+        crate::listing::paint_entry_icon(p, ic, e, cat, e.ext());
     }
     p.rect_stroke(r, CornerRadius::same(round), Stroke::new(1.0, pal.border), StrokeKind::Inside);
 }
@@ -594,9 +592,7 @@ fn scrubber(ui: &mut Ui, r: Rect, t: &mut Tab, env: &mut Env, pos: f32, thumbs_h
             }
             None => {
                 let ic = tr.shrink(thumb * 0.12);
-                if !crate::icons::entry(&painter, ic, &e) {
-                    theme::paint_icon(&painter, ic, theme::categorize(e.ext(), e.is_dir, e.is_executable()), e.ext(), e.is_link);
-                }
+                crate::listing::paint_entry_icon(&painter, ic, &e, theme::categorize(e.ext(), e.is_dir, e.is_executable()), e.ext());
             }
         }
         painter.galley(pos2(tr.right() + 9.0, card.center().y - name.size().y / 2.0), name, pal.text);

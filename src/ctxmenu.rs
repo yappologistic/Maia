@@ -699,8 +699,9 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
     let y = if st.pos.y + est_h > screen.bottom() { (screen.bottom() - est_h - 6.0).max(4.0) } else { st.pos.y };
     let mut close_now = false;
     let resp = egui::Area::new(Id::new("ctxmenu")).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(ctx, |ui| {
+        crate::frost::behind(ui, 10);
         egui::Frame::NONE
-            .fill(pal.raised)
+            .fill(crate::frost::fill(pal.raised))
             .stroke(Stroke::new(1.0, pal.border))
             .corner_radius(CornerRadius::same(10))
             .inner_margin(egui::Margin::same(5))

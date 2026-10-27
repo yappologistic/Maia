@@ -18,7 +18,7 @@ pub struct State {
 /// What a mark set now would hold: the file under the cursor, else the folder.
 pub fn here(app: &mut App) -> Option<PathBuf> {
     let t = app.tab();
-    if crate::tab::is_computer(&t.path) || t.archive.is_some() {
+    if crate::tab::is_place(&t.path) || t.archive.is_some() {
         return None;
     }
     match t.cursor_path() {

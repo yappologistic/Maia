@@ -128,7 +128,7 @@ pub fn rank(v: Vec<Project>, recents: &[PathBuf]) -> Vec<Project> {
 
 // ------------------------------------------------------------------ the cache
 
-fn cache_path() -> PathBuf {
+pub(crate) fn cache_path() -> PathBuf {
     // Tests run outside the sandbox too: never the real cache.
     let base = if cfg!(test) { None } else { dirs::cache_dir() };
     base.unwrap_or_else(std::env::temp_dir).join("maia/projects.txt")

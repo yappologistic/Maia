@@ -107,7 +107,7 @@ pub fn pump(panels: &HashMap<u64, crate::panel::Panel>, changed: &[PathBuf], wat
         }
         for p in panels.values() {
             let t = p.tab();
-            if crate::tab::is_computer(&t.path) || crate::tab::drive_dev(&t.path).is_some() {
+            if crate::tab::is_place(&t.path) || crate::tab::drive_dev(&t.path).is_some() {
                 continue;
             }
             let moved = match g.seen.iter_mut().find(|s| s.0 == t.id) {

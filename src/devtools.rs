@@ -95,7 +95,7 @@ pub fn fmt_count(n: usize) -> String {
 /// archive).
 pub fn target_dir(app: &mut App) -> Option<PathBuf> {
     let t = app.tab();
-    if crate::tab::is_computer(&t.path) || t.archive.is_some() {
+    if crate::tab::is_place(&t.path) || t.archive.is_some() {
         return None;
     }
     let explicit = !t.selected.is_empty();

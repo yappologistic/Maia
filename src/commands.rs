@@ -153,6 +153,7 @@ commands! {
     OpenInRightSplit, "open_in_right_split", Folder, "Open In Right Split", "Open the selected folder in a new panel to the right.", ["Ctrl+Alt+Right"];
     OpenInBottomSplit, "open_in_bottom_split", Folder, "Open In Bottom Split", "Open the selected folder in a new panel below.", ["Ctrl+Alt+Down"];
     OpenTerminal, "open_terminal", Folder, "Open Terminal Here", "Start your terminal in the current folder.", ["Ctrl+Shift+Backtick"];
+    GitHubProfile, "github_profile", Folder, "GitHub Profile", "Your GitHub profile through gh: followers, achievements, your year and what you did lately.", [];
     RecentProjects, "recent_projects", Folder, "Recent Projects", "Open one of the git repositories in your home folder, the ones you were in last first.", ["Ctrl+Alt+P"];
     QuickOpen, "quick_open", Folder, "Quick Open", "Find any file in this project by a few letters of its path.", ["Ctrl+O"];
     SetMark, "set_mark", Folder, "Set Mark…", "Give this place a letter: the file under the cursor, or the folder.", ["Ctrl+M"];
@@ -269,6 +270,7 @@ commands! {
     SortSizeDesc, "sort_size_desc", Sort, "Sort By Size Desc", "Largest first (folders by their content size).", [];
     SortFullAsc, "sort_percent_full_asc", Sort, "Sort By Percent Full Asc", "Drives with the most free space first (Computer only).", [];
     SortFullDesc, "sort_percent_full_desc", Sort, "Sort By Percent Full Desc", "Fullest drives first (Computer only).", [];
+    SortColour, "sort_colour", Sort, "Sort By Colour", "Pictures by their main colour, red through violet, then the greys; the rest last.", [];
     ToggleFoldersFirst, "toggle_folders_first", Sort, "Toggle Folders First", "Switch between listing folders first or files first.", [];
 
     ToggleInspector, "toggle_inspector", Inspector, "Toggle Inspector", "Preview the item under the cursor beside the list.", ["Space", "Ctrl+I"];

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use egui::{Painter, Rect, pos2};
 
@@ -42,20 +42,25 @@ impl Drop for Pair {
     }
 }
 
-/// Is `a`'s file newer than `b`'s? Two seconds of slack: some filesystems keep times only
-/// to the second, and FAT (most USB sticks and SD cards) only to two, so a copy there can
-/// look up to two seconds older than its original and would be copied again every time.
-pub(crate) fn newer(a: Option<std::time::SystemTime>, b: Option<std::time::SystemTime>) -> bool {
-    a > b.and_then(|t| t.checked_add(Duration::from_secs(2)))
+/// How much later a file's time must be to count as newer. FAT, on most USB sticks and SD
+/// cards, rounds times to an even second, so a copy kept there can read as much as two
+/// seconds behind the file it came from; less slack and that copy is redone every sync.
+const SLACK: Duration = Duration::from_secs(2);
+
+pub(crate) fn newer(a: Option<SystemTime>, b: Option<SystemTime>) -> bool {
+    let Some(a) = a else { return false };
+    b.and_then(|t| t.checked_add(SLACK)).is_none_or(|b| a > b)
 }
 
-/// One folder inside the other, links followed: a sync would copy the destination into
-/// itself, or with Mirror send the source (or a folder holding it) to the trash as "only
-/// there". The same folder on both sides is not nested: there is nothing to sync.
-pub fn nested(a: &Path, b: &Path) -> bool {
-    let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    let (a, b) = (real(a), real(b));
-    a != b && (a.starts_with(&b) || b.starts_with(&a))
+/// Whether one of the two folders holds the other, after links are resolved. Syncing a
+/// folder into one of its own subfolders copies without end, and the other way round
+/// Mirror finds the source among the "only there" items and trashes it. One folder on
+/// both sides doesn't count; its plan is simply empty.
+pub fn one_inside_other(a: &Path, b: &Path) -> bool {
+    let resolve = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let (a, b) = (resolve(a), resolve(b));
+    let below = |x: &Path, y: &Path| x.ancestors().skip(1).any(|up| up == y);
+    below(&a, &b) || below(&b, &a)
 }
 
 thread_local! {
@@ -97,7 +102,7 @@ pub fn other(app: &App) -> Option<u64> {
 
 fn build(app: &App, a: u64, b: u64) -> Option<Pair> {
     let (ta, tb) = (app.panels.get(&a)?.tab(), app.panels.get(&b)?.tab());
-    if ta.flatten || tb.flatten || crate::tab::is_computer(&ta.path) || crate::tab::is_computer(&tb.path) {
+    if ta.flatten || tb.flatten || crate::tab::is_place(&ta.path) || crate::tab::is_place(&tb.path) {
         return None;
     }
     fn shown(t: &crate::tab::Tab) -> Vec<&Entry> {
@@ -156,44 +161,41 @@ pub struct Plan {
     /// Only there.
     pub extra: Vec<PathBuf>,
     pub bytes: u64,
-    /// Folders on either side that couldn't be read in full, left out of the plan: one
-    /// that only looked empty would make all of its twin "only there", and Mirror would
-    /// trash it.
-    pub unread: Vec<PathBuf>,
+    /// Folders the walk couldn't list, on either side, with nothing under them planned.
+    /// Read as empty, an unlistable source folder would put its whole twin under "only
+    /// there", for Mirror to trash.
+    pub unlisted: Vec<PathBuf>,
 }
 
 /// Plan syncing `from` into `to`, all the way down.
 pub fn plan(from: &Path, to: &Path, stop: &AtomicBool) -> Plan {
     let mut p = Plan::default();
-    if nested(from, to) {
-        return p;
+    if !one_inside_other(from, to) {
+        walk(from, to, &mut p, stop);
     }
-    walk(from, to, &mut p, stop);
     p
+}
+
+/// A folder's entries by name with their own metadata (links not followed), or None when
+/// any part of it can't be read: a listing with holes would plan wrong.
+fn listing(d: &Path) -> Option<Vec<(std::ffi::OsString, std::fs::Metadata)>> {
+    let entries = std::fs::read_dir(d).ok()?.map(|e| e.and_then(|e| Ok((e.file_name(), e.path().symlink_metadata()?))));
+    let mut v = entries.collect::<std::io::Result<Vec<_>>>().ok()?;
+    v.sort_by(|a, b| a.0.cmp(&b.0));
+    Some(v)
 }
 
 fn walk(from: &Path, to: &Path, p: &mut Plan, stop: &AtomicBool) {
     if stop.load(Ordering::Relaxed) {
         return;
     }
-    let list = |d: &Path| -> std::io::Result<Vec<(std::ffi::OsString, std::fs::Metadata)>> {
-        let mut v = vec![];
-        for e in std::fs::read_dir(d)? {
-            let e = e?;
-            v.push((e.file_name(), std::fs::symlink_metadata(e.path())?));
-        }
-        v.sort_by(|a, b| a.0.cmp(&b.0));
-        Ok(v)
-    };
-    let (here, there) = match (list(from), list(to)) {
-        (Ok(here), Ok(there)) => (here, there),
-        (here, _) => {
-            p.unread.push(if here.is_err() { from } else { to }.to_path_buf());
-            return;
-        }
+    let (here, there) = (listing(from), listing(to));
+    let (Some(here), Some(there)) = (&here, &there) else {
+        p.unlisted.extend([(from, here.is_none()), (to, there.is_none())].into_iter().filter(|d| d.1).map(|d| d.0.to_path_buf()));
+        return;
     };
     let by: HashMap<&std::ffi::OsString, &std::fs::Metadata> = there.iter().map(|(n, m)| (n, m)).collect();
-    for (name, m) in &here {
+    for (name, m) in here {
         let (src, dst) = (from.join(name), to.join(name));
         match by.get(name) {
             None => {
@@ -237,7 +239,7 @@ pub fn run(app: &mut App, cmd: Cmd) {
             let t = app.tab();
             t.selected = t.view.iter().copied().filter(|&i| mark(&t.entries[i as usize].path).is_some()).collect();
         }
-        Cmd::SyncPanels if nested(&path, &dest) => app.toast("Can't sync a folder with one inside it"),
+        Cmd::SyncPanels if one_inside_other(&path, &dest) => app.toast("One of these folders is inside the other"),
         Cmd::SyncPanels => app.popup = crate::popups::Popup::Sync(Box::new(SyncState::start(path, dest, &app.ctx))),
         // Folders still being looked through may yet differ inside.
         _ if n == 0 && !looking => app.toast("No differences"),

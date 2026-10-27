@@ -139,7 +139,7 @@ impl State {
 
 pub fn open(app: &mut App) {
     let t = app.tab();
-    if t.archive.is_some() || crate::tab::is_computer(&t.path) || t.path.starts_with(crate::sidebar::trash_dir()) {
+    if t.archive.is_some() || crate::tab::is_place(&t.path) || t.path.starts_with(crate::sidebar::trash_dir()) {
         app.toast("Tidy Folder works in a folder of your own");
         return;
     }

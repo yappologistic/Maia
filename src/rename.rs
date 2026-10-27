@@ -100,6 +100,8 @@ pub struct Rename {
     pub replace: String,
     pub show_find: bool,
     pub error: Option<String>,
+    /// When a refused name last shook the field (the frame's time).
+    pub shake: f64,
     /// `conflicts()` for the names it was last computed from (it stats every target; the
     /// list asks once per visible field per frame).
     conflict_cache: std::cell::RefCell<Option<(u64, std::rc::Rc<HashSet<usize>>)>>,
@@ -115,7 +117,8 @@ impl Rename {
                 f
             })
             .collect();
-        Rename { fields, created, f2_cycle: 0, find: String::new(), replace: String::new(), show_find: false, error: None, conflict_cache: Default::default() }
+        Rename { fields, created, f2_cycle: 0, find: String::new(), replace: String::new(), show_find: false, error: None,
+            shake: -10.0, conflict_cache: Default::default() }
     }
 
     pub fn is_batch(&self) -> bool {
@@ -435,6 +438,23 @@ impl Rename {
     }
 
     /// Uncached (the commit re-checks the disk right before renaming).
+    /// Why the one name being typed can't be used, in words.
+    pub fn reason(&self) -> Option<String> {
+        let f = self.fields.first()?;
+        let name = f.text_string().trim().to_string();
+        if name.is_empty() {
+            return Some("A name can't be empty".into());
+        }
+        if name.contains('/') {
+            return Some("A name can't have “/” in it".into());
+        }
+        if name == "." || name == ".." {
+            return Some(format!("“{name}” is the folder itself"));
+        }
+        let to = f.path.with_file_name(&name);
+        (to != f.path && std::fs::symlink_metadata(&to).is_ok()).then(|| format!("“{name}” is already here"))
+    }
+
     pub fn compute_conflicts(&self) -> HashSet<usize> {
         let mut bad = HashSet::new();
         let mut seen: std::collections::HashMap<(PathBuf, String), usize> = std::collections::HashMap::new();

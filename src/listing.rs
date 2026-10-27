@@ -216,6 +216,52 @@ fn row_tags(p: &std::path::Path) -> Option<(Vec<Color32>, String)> {
     .flatten()
 }
 
+/// Cut files wear a thin dashed outline in the accent, marching for a few seconds after
+/// the cut and then still (nothing repaints for it once it rests).
+fn paint_ants(ui: &Ui, r: Rect, env: &Env) {
+    let since = ui.ctx().data(|d| d.get_temp::<f64>(Id::new("maia cut since"))).unwrap_or(-100.0);
+    let age = ui.input(|i| i.time) - since;
+    let marching = env.cfg.animations && (0.0..4.0).contains(&age);
+    if marching {
+        ui.ctx().request_repaint();
+    }
+    let offset = if marching { (age * 14.0) as f32 } else { 0.0 };
+    let r = r.shrink(0.5);
+    let path = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
+    let stroke = Stroke::new(1.0, env.pal.accent.gamma_multiply(0.8));
+    ui.painter().extend(egui::Shape::dashed_line_with_offset(&path, stroke, &[4.0], &[3.0], 7.0 - offset.rem_euclid(7.0)));
+}
+
+/// A folder's first colour label: its icon is drawn in that colour.
+fn folder_colour(e: &Entry) -> Option<Color32> {
+    if !e.is_dir {
+        return None;
+    }
+    crate::tags::get(&e.path, |t| t.iter().find_map(|x| crate::tags::color_of(x))).flatten()
+}
+
+/// An item's icon: a labelled folder in its label's colour, else the icon theme's, else
+/// Maia's own.
+pub(crate) fn paint_entry_icon(p: &egui::Painter, r: Rect, e: &Entry, cat: theme::FileCat, ext: &str) {
+    if let Some(c) = folder_colour(e) {
+        theme::paint_folder(p, r, c);
+        if e.is_link {
+            theme::paint_link_badge(p, r);
+        }
+    } else if !crate::icons::entry(p, r, e) {
+        theme::paint_icon(p, r, cat, ext, e.is_link);
+    }
+}
+
+/// `row_tags`, a coloured folder's first colour left to its icon.
+fn entry_tags(e: &Entry) -> Option<(Vec<Color32>, String)> {
+    let mut t = row_tags(&e.path)?;
+    if e.is_dir && !t.0.is_empty() {
+        t.0.remove(0);
+    }
+    (!t.0.is_empty() || !t.1.is_empty()).then_some(t)
+}
+
 /// Colour dots in a row from `x`, centred on `y`, each ringed in `ring` so they read on
 /// any background. Returns the width they take.
 fn paint_dots(p: &egui::Painter, x: f32, y: f32, dots: &[Color32], r: f32, ring: Color32) -> f32 {
@@ -690,6 +736,15 @@ pub(crate) fn rename_field(ui: &mut Ui, rect: Rect, idx: u32, t: &mut Tab, env: 
     let f = &r.fields[fi];
     let text = f.text_string();
     let galley = ui.fonts_mut(|fo| fo.layout_no_wrap(text.clone(), font.clone(), pal.text));
+    // A refused name shakes the field, quickly settling: no, not that one.
+    let since = ui.input(|i| i.time) - r.shake;
+    let jolt = if env.cfg.animations && (0.0..0.4).contains(&since) {
+        ui.ctx().request_repaint();
+        ((since * 42.0).sin() * 7.0 * (1.0 - since / 0.4)) as f32
+    } else {
+        0.0
+    };
+    let rect = rect.translate(vec2(jolt, 0.0));
     let box_r = Rect::from_min_max(pos2(rect.left(), rect.center().y - galley.size().y / 2.0 - 3.0), pos2(rect.right(), rect.center().y + galley.size().y / 2.0 + 3.0));
     if bad {
         ui.painter().rect_stroke(box_r, CornerRadius::same(4), Stroke::new(1.0, pal.danger), StrokeKind::Inside);
@@ -725,9 +780,18 @@ pub(crate) fn rename_field(ui: &mut Ui, rect: Rect, idx: u32, t: &mut Tab, env: 
     if resp.secondary_clicked() {
         env.actions.push(Action::Open(Popup::rename_menu(env.panel_id, resp.interact_pointer_pos().unwrap_or(box_r.left_bottom()))));
     }
-    if fi == 0 {
-        if let Some(err) = &r.error {
-            ui.painter().text(pos2(box_r.left(), box_r.bottom() + 2.0), Align2::LEFT_TOP, err, FontId::proportional(11.0), pal.danger);
+    // Why, in a small card under the field, while the name is still one that can't be.
+    if fi == 0 && (bad || r.is_batch()) {
+        // The reason as the name stands now, once Enter has been refused.
+        let now = if r.is_batch() { r.error.clone() } else { r.error.as_ref().and_then(|_| r.reason()) };
+        if let Some(err) = &now {
+            let g = ui.painter().layout_no_wrap(err.clone(), FontId::proportional((font.size - 1.5).max(9.0)), pal.danger);
+            let card = Rect::from_min_size(pos2(box_r.left() - jolt, box_r.bottom() + 3.0), g.size() + vec2(14.0, 8.0));
+            let p = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, Id::new(("rename why", t.id))));
+            p.rect_filled(card.translate(vec2(0.0, 2.0)), CornerRadius::same(6), Color32::from_black_alpha(40));
+            p.rect_filled(card, CornerRadius::same(6), pal.raised);
+            p.rect_stroke(card, CornerRadius::same(6), Stroke::new(1.0, pal.danger.gamma_multiply(0.6)), StrokeKind::Inside);
+            p.galley(card.min + vec2(7.0, 4.0), g, pal.danger);
         }
     }
     true
@@ -879,6 +943,9 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
             (a..b).filter_map(|i| if let Row::Item(x) = rows_ref[i] { Some(x) } else { None }).collect()
         };
         rubber_band(ui, &bg, origin, viewport_screen, t, env, &hit);
+        t.item_rects.clear();
+        let loading = t.is_loading();
+        t.glide.begin(&t.path.clone(), 0, t.view_gen, loading, env.cfg.animations, ui.input(|i| i.time));
         let mut cursor_row = None;
         for ri in first..last {
             let y = origin.y + ri as f32 * row_h;
@@ -917,6 +984,11 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
                 }
                 Row::Item(idx) => {
                     let idx = *idx;
+                    let (off, alpha) = t.glide.row(&t.entries[idx as usize].path.clone(), vec2(0.0, ri as f32 * row_h), body.height());
+                    let y = y + off.y;
+                    let rr = rr.translate(vec2(0.0, off.y));
+                    let opacity = ui.opacity();
+                    ui.set_opacity(opacity * alpha);
                     let resp = ui.interact(rr, Id::new(("row", t.id, idx)), Sense::click_and_drag());
                     let e = t.entries[idx as usize].clone();
                     let selected = t.selected.contains(&idx);
@@ -934,6 +1006,9 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
                     // The item being renamed drops its highlight; the others fade back.
                     let editing = rename_focus(ui, rr, idx, t, env);
                     paint_item_bg(ui.painter(), rr.shrink2(vec2(3.0, 0.5)), selected && !editing, is_cursor && !editing, resp.hovered() && !editing, drop, env, 6);
+                    if env.cut.contains(&e.path) {
+                        paint_ants(ui, rr.shrink2(vec2(4.0, 1.5)), env);
+                    }
                     crate::compare::paint(ui.painter(), rr, &e.path, &pal);
                     handle_item(ui, &resp, idx, t, env);
                     // Cut items, tree context rows that only lead to filter matches, and
@@ -962,6 +1037,7 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
                                     x += 15.0;
                                 }
                                 let ic = Rect::from_min_size(pos2(x, cell.center().y - 8.0), Vec2::splat(16.0));
+                                t.item_rects.push((idx, ic));
                                 let cat = theme::categorize(&e.ext(), e.is_dir, e.is_executable());
                                 let boxed = !computer && item_checkbox(ui, ic.shrink(1.0), idx, ui.rect_contains_pointer(rr), t, env);
                                 if boxed {
@@ -973,9 +1049,7 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
                                     if faded {
                                         ip.multiply_opacity(0.45);
                                     }
-                                    if !crate::icons::entry(&ip, ic, &e) {
-                                        theme::paint_icon(&ip, ic, cat, "", e.is_link);
-                                    }
+                                    paint_entry_icon(&ip, ic, &e, cat, "");
                                 }
                                 crate::gitstatus::paint(ui.painter(), ic, git.as_deref(), &e.path, &pal);
                                 let name_r = Rect::from_min_max(pos2(ic.right() + 7.0, cell.top()), pos2(inner.right() - mark_room(&e, env), cell.bottom()));
@@ -983,7 +1057,7 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
                                     let name = display_name(&e, env.cfg);
                                     let rel = e.rel();
                                     let suffix = rel.as_deref().and_then(|r| std::path::Path::new(r).parent()).filter(|p| !p.as_os_str().is_empty()).map(|p| format!("› {}", p.display()));
-                                    let tags = if computer || tag_col { None } else { row_tags(&e.path) };
+                                    let tags = if computer || tag_col { None } else { entry_tags(&e) };
                                     let room = tags.as_ref().map_or(0.0, |tg| tags_width(ui, tg, &font));
                                     let mut job = name_job(&name, suffix.as_deref(), q, &font, dimc(pal.text), dimc(sub), acc, (name_r.width() - room).max(24.0), 1);
                                     // The line that matched, after the name (elided with it).
@@ -1031,7 +1105,7 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
                                 }
                             }
                             Column::Tags => {
-                                if let Some(tg) = row_tags(&e.path) {
+                                if let Some(tg) = entry_tags(&e) {
                                     tags_cell(ui, inner, &tg, &font, dimc(sub), ring);
                                 }
                             }
@@ -1060,9 +1134,11 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
                         }
                         x += w;
                     }
+                    ui.set_opacity(opacity);
                 }
             }
         }
+        t.glide.end(ui.ctx());
         if t.scroll_to_cursor {
             t.scroll_to_cursor = false;
             let target = cursor_row.or_else(|| {
@@ -1079,6 +1155,16 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
     t.group_labels = group_labels;
     t.current_scroll = out.state.offset().y;
     t.hscroll = out.state.offset().x;
+    {
+        let loading = t.is_loading();
+        let (sort, desc) = (t.settings.sort, t.settings.desc);
+        let Tab { rows, entries, ribbon, .. } = t;
+        let order = |i: usize| match rows.get(i) {
+            Some(Row::Item(x)) => Some(*x),
+            _ => None,
+        };
+        crate::ribbon::paint(ui, body, ribbon, rows.len(), &order, entries, sort, desc, loading, out.state.offset().y, out.content_size.y, env.cfg.font_size, &pal, env.cfg.animations);
+    }
     // Header (scrolls horizontally with the body).
     let header = Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + header_h));
     let painter = ui.painter().with_clip_rect(header.intersect(ui.clip_rect()));
@@ -1251,6 +1337,7 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
     let now = std::time::Instant::now();
     let git = crate::gitstatus::repo_for(&t.path);
     let dim_ignored = env.cfg.git_ignored == crate::config::IgnoredFiles::Dim && git.as_ref().is_some_and(|r| !crate::gitstatus::inside_ignored(r, &t.path));
+    let mut peek_at: Option<(std::path::PathBuf, Rect)> = None;
     let out = sa.show_viewport(&mut body_ui, |ui, vp| {
         // Vertical wheel scrolls the horizontal List view.
         if horizontal && ui.rect_contains_pointer(body) {
@@ -1287,9 +1374,20 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
             (r0 * cols, (r1 * cols).min(n))
         };
         let mut cursor_rect = None;
+        t.item_rects.clear();
+        // A zoom easing moves the icons itself: no glide on top of it.
+        let loading = t.is_loading() || (t.shown_zoom - t.settings.zoom).abs() > 0.001;
+        // A new number of columns (the window or a split resized) moves the icons as a
+        // new order does: they glide to their new rows.
+        let shape = ((cols as u64) << 48) ^ ((rows_per_col as u64) << 24);
+        t.glide.begin(&t.path.clone(), if horizontal { 2 } else { 1 }, t.view_gen ^ shape, loading, env.cfg.animations, ui.input(|i| i.time));
+        let screen = if horizontal { body.width() } else { body.height() };
         for i in first..last {
             let idx = view[i];
-            let r = Rect::from_min_size(origin + pos_of(i), cell);
+            let (off, alpha) = t.glide.row(&t.entries[idx as usize].path.clone(), pos_of(i), screen);
+            let r = Rect::from_min_size(origin + pos_of(i) + off, cell);
+            let opacity = ui.opacity();
+            ui.set_opacity(opacity * alpha);
             let e = t.entries[idx as usize].clone();
             let resp = ui.interact(r, Id::new(("cell", t.id, idx)), Sense::click_and_drag());
             let selected = t.selected.contains(&idx);
@@ -1307,23 +1405,25 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
                 Mode::List => {
                     let editing = rename_focus(ui, r, idx, t, env);
                     paint_item_bg(ui.painter(), r.shrink2(vec2(2.0, 0.5)), selected && !editing, is_cursor && !editing, resp.hovered() && !editing, drop, env, 6);
+                    if env.cut.contains(&e.path) {
+                        paint_ants(ui, r.shrink2(vec2(3.0, 1.5)), env);
+                    }
                     crate::compare::paint(ui.painter(), r, &e.path, &pal);
                     handle_item(ui, &resp, idx, t, env);
                     let ic = Rect::from_min_size(pos2(r.left() + 6.0, r.center().y - 8.0), Vec2::splat(16.0));
+                    t.item_rects.push((idx, ic));
                     let boxed = !tab::is_computer(&t.path) && item_checkbox(ui, ic.shrink(1.0), idx, ui.rect_contains_pointer(r), t, env);
                     if boxed {
                         // The checkbox stands in for the icon.
                     } else if tab::is_computer(&t.path) {
                         paint_drive(ui, ic, t, &e, dimc(pal.text_dim));
                     } else {
-                        if !crate::icons::entry(ui.painter(), ic, &e) {
-                            theme::paint_icon(ui.painter(), ic, cat, "", e.is_link);
-                        }
+                        paint_entry_icon(ui.painter(), ic, &e, cat, "");
                     }
                     crate::gitstatus::paint(ui.painter(), ic, git.as_deref(), &e.path, &pal);
                     let name_r = Rect::from_min_max(pos2(ic.right() + 7.0, r.top()), pos2(r.right() - 8.0, r.bottom()));
                     if !rename_field(ui, name_r, idx, t, env, &font) {
-                        let tags = row_tags(&e.path);
+                        let tags = entry_tags(&e);
                         let room = tags.as_ref().map_or(0.0, |tg| tags_width(ui, tg, &font));
                         let (sub, acc, ring) = sel_colors(&pal, selected && !editing);
                         let job = name_job(&display_name(&e, env.cfg), None, q, &font, dimc(pal.text), sub, acc, (name_r.width() - room).max(24.0), 1);
@@ -1339,8 +1439,14 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
                     let rad = if env.cfg.round_corners { 8 } else { 0 };
                     let editing = rename_focus(ui, r, idx, t, env);
                     paint_item_bg(ui.painter(), r.shrink(2.0), selected && !editing, is_cursor && !editing, resp.hovered() && !editing, drop, env, rad);
+                    if env.cut.contains(&e.path) {
+                        paint_ants(ui, r.shrink(3.0), env);
+                    }
                     handle_item(ui, &resp, idx, t, env);
                     let icon_r = Rect::from_min_size(pos2(r.center().x - s / 2.0, r.top() + 8.0), Vec2::splat(s));
+                    if e.is_dir && resp.hovered() && thumbs_here && !tab::is_computer(&t.path) && viewport_screen.contains(icon_r.center()) {
+                        peek_at = Some((e.path.clone(), icon_r));
+                    }
                     crate::compare::paint(ui.painter(), Rect::from_min_max(pos2(r.left() + 2.0, icon_r.top()), icon_r.max), &e.path, &pal);
                     let mut drew = false;
                     let want_thumb = thumbs_here && s >= 40.0 && thumbs::can_thumb(&e);
@@ -1365,21 +1471,21 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
                                 (Rect::from_min_size(pos2(icon_r.center().x - size.x / 2.0, icon_r.bottom() - size.y), size), Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)))
                             };
                             ui.painter().image(l.tex.id(), dst, uv, Color32::WHITE.gamma_multiply(alpha * if faded { 0.45 } else { 1.0 }));
+                            t.item_rects.push((idx, dst));
                             drew = true;
                         }
                     }
                     if !drew {
+                        t.item_rects.push((idx, icon_r));
                         if tab::is_computer(&t.path) {
                             paint_drive(ui, icon_r.shrink(s * 0.15), t, &e, dimc(pal.text_dim));
                         } else {
-                            if !crate::icons::entry(ui.painter(), icon_r, &e) {
-                                theme::paint_icon(ui.painter(), icon_r, cat, &e.ext(), e.is_link);
-                            }
+                            paint_entry_icon(ui.painter(), icon_r, &e, cat, &e.ext());
                         }
                     }
                     crate::gitstatus::paint(ui.painter(), icon_r.shrink(s * 0.1), git.as_deref(), &e.path, &pal);
                     // Colour labels as a badge on the icon's top right corner.
-                    if let Some((dots, _)) = row_tags(&e.path).filter(|t| !t.0.is_empty()) {
+                    if let Some((dots, _)) = entry_tags(&e).filter(|t| !t.0.is_empty()) {
                         let rr = (s * 0.07).clamp(3.5, 6.0);
                         let w = (rr * 2.0 + 2.5) * dots.len() as f32 - 2.5;
                         paint_dots(ui.painter(), icon_r.right() - w, icon_r.top() + rr + 1.0, &dots, rr, pal.bg);
@@ -1407,7 +1513,9 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
                 }
                 Mode::Details | Mode::Tree | Mode::Columns | Mode::Stack => {}
             }
+            ui.set_opacity(opacity);
         }
+        t.glide.end(ui.ctx());
         if t.scroll_to_cursor {
             t.scroll_to_cursor = false;
             let target = cursor_rect.or_else(|| {
@@ -1421,6 +1529,15 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
         }
     });
     t.current_scroll = if horizontal { 0.0 } else { out.state.offset().y };
+    if !horizontal {
+        let loading = t.is_loading();
+        let (sort, desc) = (t.settings.sort, t.settings.desc);
+        let Tab { view, entries, ribbon, .. } = t;
+        let order = |i: usize| view.get(i).copied();
+        crate::ribbon::paint(ui, body, ribbon, view.len(), &order, entries, sort, desc, loading, out.state.offset().y, out.content_size.y, env.cfg.font_size, &pal, env.cfg.animations);
+    }
+    let id = t.id;
+    t.peek.frame(ui.ctx(), peek_at, body, env.thumbs, env.cfg.animations, id);
 }
 
 // ------------------------------------------------------------------ columns
@@ -1514,9 +1631,7 @@ fn column_cells(ui: &Ui, r: Rect, ic: Rect, e: &Entry, env: &Env, q: &fuzzy::Que
         if faded {
             ip.multiply_opacity(0.45);
         }
-        if !crate::icons::entry(&ip, ic, e) {
-            theme::paint_icon(&ip, ic, theme::categorize(&e.ext(), e.is_dir, e.is_executable()), "", e.is_link);
-        }
+        paint_entry_icon(&ip, ic, e, theme::categorize(&e.ext(), e.is_dir, e.is_executable()), "");
     }
     crate::gitstatus::paint(ui.painter(), ic, git, &e.path, pal);
     let (sub, acc, ring) = sel_colors(pal, selected);
@@ -1527,7 +1642,7 @@ fn column_cells(ui: &Ui, r: Rect, ic: Rect, e: &Entry, env: &Env, q: &fuzzy::Que
     let dot_x = r.right() - chev_w - 4.0;
     let room = mark_room(e, env);
     let name_r = Rect::from_min_max(pos2(ic.right() + 7.0, r.top()), pos2(if room > 0.0 { dot_x + 3.0 - room } else { r.right() - chev_w - 2.0 }, r.bottom()));
-    let tags = row_tags(&e.path);
+    let tags = entry_tags(&e);
     let room = tags.as_ref().map_or(0.0, |tg| tags_width(ui, tg, &font));
     let rel = e.rel();
     let suffix = rel.as_deref().and_then(|r| std::path::Path::new(r).parent()).filter(|p| !p.as_os_str().is_empty()).map(|p| format!("› {}", p.display()));

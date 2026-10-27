@@ -125,7 +125,7 @@ pub fn rank(files: &[String], query: &str, generation: &AtomicU64, g: u64) -> Op
 
 pub fn open(app: &mut App, ctx: &egui::Context) -> Option<Popup> {
     let here = app.tab().path.clone();
-    if crate::tab::is_computer(&here) || app.tab().archive.is_some() {
+    if crate::tab::is_place(&here) || app.tab().archive.is_some() {
         return None;
     }
     let root = crate::project::root(&here);

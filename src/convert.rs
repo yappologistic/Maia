@@ -745,7 +745,7 @@ fn ffmpeg(t: &Tools, src: &Path, args: &[&str], part: &Path, dur: Option<f64>, p
 fn selection(app: &crate::app::App) -> Option<(Vec<PathBuf>, Vec<String>)> {
     let p = app.panels.get(&app.active)?;
     let t = p.tab();
-    if t.archive.is_some() || t.path.starts_with(crate::sidebar::trash_dir()) || crate::tab::is_computer(&t.path) {
+    if t.archive.is_some() || t.path.starts_with(crate::sidebar::trash_dir()) || crate::tab::is_place(&t.path) {
         return None;
     }
     let ents = t.target_entries();

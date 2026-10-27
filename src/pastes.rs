@@ -99,7 +99,7 @@ fn paste(app: &mut App, k: usize) {
     let t = app.tab();
     let sel = t.target_entries();
     let dest = if t.selected.len() == 1 && sel.len() == 1 && sel[0].is_dir { sel[0].path.clone() } else { t.path.clone() };
-    if crate::tab::is_computer(&dest) {
+    if crate::tab::is_place(&dest) {
         return;
     }
     if s.cut {

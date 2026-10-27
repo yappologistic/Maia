@@ -794,7 +794,8 @@ impl Sim {
         let mut quiet = 0;
         for _ in 0..400 {
             self.frame(vec![]);
-            let busy = self.app.panels.values().any(|p| p.tabs.iter().any(|t| t.is_loading())) || !self.app.stats.idle();
+            // Rows still gliding to their places count as busy: nothing rests until they do.
+            let busy = self.app.panels.values().any(|p| p.tabs.iter().any(|t| t.is_loading() || t.glide.moving() > 0)) || !self.app.stats.idle();
             if busy {
                 quiet = 0;
                 std::thread::sleep(std::time::Duration::from_millis(3));
@@ -1169,7 +1170,7 @@ pub fn monkey_step(s: &mut Sim, rng: &mut Rng) {
     const WORDS: &[&str] = &["doc", "a", "img", ".png", "~/", "/", "Code/maia/", "zzz", "résumé", "1", "new name"];
     let (w, h) = (s.size.x, s.size.y);
     let p = |rng: &mut Rng| (rng.f(0.0, w), rng.f(0.0, h));
-    match rng.below(184) {
+    match rng.below(187) {
         0..=29 => {
             let k = *rng.pick(KEYS);
             s.act(&format!("key {k}"));
@@ -2947,6 +2948,70 @@ pub fn monkey_step(s: &mut Sim, rng: &mut Rng) {
             }
             s.act("key Escape");
         }
+        184 => {
+            // The GitHub page (no gh here: it says what to install), Sort By Colour, or a
+            // rest wherever the pointer is (a folder there fans out its pictures).
+            match rng.below(3) {
+                0 => {
+                    s.cmd(Cmd::GitHubProfile);
+                    s.idle(10);
+                    s.act("key ArrowDown");
+                    s.cmd(Cmd::Back);
+                    s.settle();
+                }
+                1 => {
+                    s.cmd(Cmd::SortColour);
+                    s.idle(10);
+                }
+                _ => {
+                    let (x, y) = p(rng);
+                    s.act(&format!("move {x:.0} {y:.0}"));
+                    s.idle(40);
+                }
+            }
+        }
+        185 => {
+            // The viewer: compared side by side or over one another, its strip, closed.
+            s.cmd(Cmd::ViewPictures);
+            if !matches!(s.app.popup, Popup::Viewer(_)) {
+                return;
+            }
+            s.idle(rng.below(20) + 1);
+            for _ in 0..rng.below(5) {
+                let k = *rng.pick(&["W", "C", "ArrowRight", "ArrowLeft", "Escape"]);
+                s.act(&format!("key {k}"));
+            }
+            if rng.below(2) == 0 {
+                s.act(&format!("move {:.0} {:.0}", w / 2.0, h - 15.0));
+                s.idle(20);
+                let strip = crate::ui::CONTROLS.with(|c| c.borrow().iter().filter(|x| x.2 == "viewer filmstrip").map(|x| x.1).collect::<Vec<_>>());
+                if let Some(r) = strip.get(rng.below(strip.len().max(1))) {
+                    s.act(&format!("click {:.0} {:.0}", r.center().x, r.center().y));
+                }
+            }
+            for _ in 0..4 {
+                s.act("key Escape");
+            }
+            s.idle(30);
+        }
+        186 => {
+            // A theme hovered in the picker (it washes in), or the window resized (icons
+            // glide to new rows).
+            if rng.below(2) == 0 {
+                s.cmd(Cmd::ChooseTheme);
+                s.idle(4);
+                let (x, y) = p(rng);
+                s.act(&format!("move {x:.0} {y:.0}"));
+                s.idle(4);
+                s.act("key Escape");
+            } else {
+                let (w0, h0) = (s.size.x, s.size.y);
+                s.resize(rng.f(420.0, 1500.0), rng.f(380.0, 950.0));
+                s.idle(20);
+                s.resize(w0, h0);
+                s.idle(20);
+            }
+        }
         _ => {
             s.note("idle".into());
             s.idle(rng.below(20) + 1);
@@ -4287,6 +4352,11 @@ mod journeys {
         s.act("key ctrl+a");
         s.act("text animations");
         s.idle(2);
+        // From the default, on (a run with motion off starts away from it).
+        if !s.app.cfg.animations {
+            click_in_row(&mut s, "switch", "Appearance · Animations");
+            assert!(s.app.cfg.animations);
+        }
         click_in_row(&mut s, "switch", "Appearance · Animations");
         assert!(!s.app.cfg.animations);
         click_in_row(&mut s, "reset option", "Appearance · Animations");
@@ -8476,13 +8546,14 @@ mod journeys {
             if let Popup::Sync(st) = &mut s.app.popup
                 && let Some(p) = st.plan.as_mut()
             {
-                p.unread = v;
+                p.unlisted = v;
             }
             s.idle(3);
         };
         unread(&mut s, vec![b.join("both"), a.join("folder-a")]);
-        assert!(some_text_at(&s, "2 folders couldn't be read, so nothing in them changes"), "counted");
+        assert!(some_text_at(&s, "2 folders couldn't be read and are left as they are"), "counted");
         assert!(s.texts.iter().filter(|(r, t)| t == "Unread" && popup.contains_rect(*r)).count() == 2 && some_text_at(&s, "both"), "each listed");
+        s.shot("sync-preview-unread");
         look(&mut s, "sync preview with unread folders");
         unread(&mut s, vec![]);
         s.act("key Enter");
@@ -9863,6 +9934,12 @@ mod journeys {
             let over = s.ctx.memory(|m| m.area_rect(egui::Id::new("ctxmenu"))).map(|r| r.center()).unwrap_or(pos2(row.center().x + 120.0, s.size.y / 2.0));
             s.act(&format!("scroll {:.0} {:.0} -6", over.x, over.y));
             s.idle(2);
+        }
+        if !some_text(&s, "Add to .gitignore") {
+            let menu = s.ctx.memory(|m| m.area_rect(egui::Id::new("ctxmenu")));
+            let shown: Vec<&str> = s.texts.iter().filter(|(r, _)| menu.is_some_and(|m| m.intersects(*r))).map(|(_, t)| t.as_str()).collect();
+            let repo = crate::gitstatus::repo_for(&app).map(|r| r.marks.keys().filter(|k| k.ends_with("scratch.txt")).count());
+            s.fail(&format!("no \"Add to .gitignore\": menu {menu:?} shows {shown:?}; scratch.txt marked {repo:?}"));
         }
         let at = s.text_rect("Add to .gitignore").center();
         s.act(&format!("click {:.0} {:.0}", at.x, at.y));
@@ -14071,14 +14148,14 @@ mod journeys {
         s.act("move 300 300");
         assert!(some_text(&s, "1 / 13"), "back when it moves");
         s.act("key ArrowRight");
-        assert_eq!(viewer(&s).fading_from(), Some(0), "a quiet fade between pictures");
+        assert_eq!(viewer(&s).fading_from(), s.app.cfg.animations.then_some(0), "a quiet fade between pictures");
         s.app.cfg.animations = false;
         s.act("key ArrowRight");
         assert_eq!(viewer(&s).fading_from(), None, "none without animations");
         s.app.cfg.animations = true;
-        // Escape: the cursor on the picture last shown.
+        // Escape: the cursor on the picture last shown (it shrinks back there first).
         s.act("key Escape");
-        assert!(!s.popup_open());
+        wait_until(&mut s, "the viewer closed", 5, |s| !s.popup_open());
         assert_eq!(s.tab().cursor.map(|c| s.tab().entries[c as usize].name.clone()).as_deref(), Some("img02.png"));
         // From the picture's menu.
         let row = row_text(&s, "img07.png");
@@ -14087,6 +14164,7 @@ mod journeys {
         s.click_text("View Pictures");
         assert_eq!(pic(&s), "img07.png");
         s.act("key Escape");
+        wait_until(&mut s, "the viewer closed", 5, |s| !s.popup_open());
         // Enter and double-click open the picture's app by default.
         let n = crate::mime::LAUNCHED.lock().unwrap().len();
         select_path(&mut s, &trip.join("img05.png"));
@@ -14660,6 +14738,9 @@ mod journeys {
         wait_until(&mut s, "the film over", 60, |s| {
             tour(s).film_done()
         });
+        // Memory goes back to the system two seconds (real ones) after decodes settle;
+        // with motion off the film ends inside them.
+        std::thread::sleep(std::time::Duration::from_millis(2200));
         s.idle(3);
         assert_eq!(s.repaint, std::time::Duration::MAX, "nothing left to draw: {:?}", s.repaint);
         // A click on it plays it again.
@@ -16257,7 +16338,7 @@ mod journeys {
         s.act("key Delete");
         wait_until(&mut s, "a in the trash again", 10, |s| !d.join("a.png").exists() && s.app.jobs.iter().all(|j| j.finished_at.is_some()));
         s.act("key Escape");
-        assert!(!s.popup_open());
+        wait_until(&mut s, "the viewer closed", 5, |s| !s.popup_open());
         s.idle(3);
         s.act("key ctrl+z");
         s.settle();
@@ -16359,7 +16440,7 @@ mod journeys {
         s.act("key Escape");
         s.act("key Escape");
         s.act("key Escape");
-        assert!(!s.popup_open());
+        wait_until(&mut s, "the viewer closed", 5, |s| !s.popup_open());
         report("sort pictures", &s);
     }
 
@@ -18209,5 +18290,475 @@ mod journeys {
         assert!(p95 < 40.0, "frames while origins land: p95 {p95:.1} ms");
         let budget = (by_type * 2.0).max(200.0 * (n as f32 / 200_000.0).max(1.0));
         assert!(by_origin < budget, "the worst frame grouping by origin, {by_origin:.1} ms, against {by_type:.1} by type");
+    }
+
+
+    // ------------------------------------------------------------------ the GitHub page
+
+    /// A `gh` that answers as GitHub did (the captured answers in tests.rs): who is signed
+    /// in, the profile, the recent commits, one commit's files. `signed_in` false: gh
+    /// knows nobody.
+    fn fake_gh(name: &str, signed_in: bool) -> PathBuf {
+        let d = root().join(name);
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("viewer.json"), crate::tests::GH_VIEWER).unwrap();
+        std::fs::write(d.join("history.json"), crate::tests::GH_HISTORY).unwrap();
+        let user = if signed_in { "echo ana-lima" } else { "true" };
+        let script = format!(
+            "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$1 $2\" in\n  'config get') {user} ;;\n  'api graphql') case \"$*\" in *'-F id='*) cat '{d}/history.json' ;; *) cat '{d}/viewer.json' ;; esac ;;\n  'api repos/'*) echo '{{\"files\":[{{\"filename\":\"src/lamp.rs\",\"additions\":4,\"deletions\":1}},{{\"filename\":\"README.md\",\"additions\":2,\"deletions\":0}}]}}' ;;\n  *) exit 1 ;;\nesac\n",
+            log = d.join("log").display(),
+            d = d.display()
+        );
+        let gh = d.join("gh");
+        std::fs::write(&gh, script).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        d
+    }
+
+    fn github_page(s: &Sim) -> &crate::github::Page {
+        &s.app.github
+    }
+
+    /// The profile page from `gh`: the card, the year, the timeline; the arrows through
+    /// it, a commit's files opened under it, Enter into a clone's history and O to the
+    /// commit on GitHub; Refresh; Up to Computer. Without gh, and signed out, it says
+    /// what to do. Wide and narrow, in a light theme and at the owner's look.
+    #[test]
+    fn github_profile_page() {
+        if !sandboxed() {
+            return;
+        }
+        let home = fixture("github");
+        let d = fake_gh("fake-gh", true);
+        crate::drives::FAKE.with(|f| *f.borrow_mut() = Some(d.clone()));
+        let _ = std::fs::remove_dir_all(crate::github::cache_dir());
+        // The badges as read from the profile page earlier today (curl is no test's).
+        std::fs::create_dir_all(crate::github::cache_dir()).unwrap();
+        std::fs::write(crate::github::cache_dir().join("achievements.txt"), "starstruck\tStarstruck\t1\t4\nquickdraw\tQuickdraw\t0\t1\npull-shark\tPull Shark\t2\t2\ngalaxy-brain\tGalaxy Brain\t0\t1").unwrap();
+        // A clone of one repository on this computer, known to Recent Projects.
+        let clone = home.join("Code/lamp");
+        std::fs::create_dir_all(&clone).unwrap();
+        let git = |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(&clone).args(args).output().unwrap().status.success(), "git {args:?}");
+        git(&["init", "-q"]);
+        git(&["remote", "add", "origin", "https://github.com/ana-lima/lamp.git"]);
+        crate::projects::save_cache(&crate::projects::cache_path(), &[clone.clone()]).unwrap();
+        let mut s = Sim::new(&home.join("Documents"), vec2(1280.0, 800.0));
+        s.app.github = Default::default();
+        s.cmd(GitHubProfile);
+        assert!(crate::tab::is_github(&s.tab().path));
+        wait_until(&mut s, "the profile", 20, |s| some_text(s, "Ana Lima") && some_text(s, "1,318 contributions in the last year"));
+        assert!(some_text(&s, "1,204 followers · 12 following") && some_text(&s, "@ana-lima · she/her") && some_text(&s, "Porto"));
+        // The card's sections, scrolled to where a big font puts them.
+        let name = s.text_rect("Ana Lima");
+        let mut seen = std::collections::HashSet::new();
+        let mut badges = 0;
+        for _ in 0..8 {
+            for w in ["Achievements", "Languages", "Organisations"] {
+                if some_text(&s, w) {
+                    seen.insert(w);
+                }
+            }
+            badges = badges.max(controls_named("github achievement").len());
+            s.act(&format!("scroll {:.0} {:.0} -4", name.center().x, name.center().y));
+            s.idle(4);
+        }
+        assert_eq!(seen.len(), 3, "{seen:?}");
+        assert_eq!(badges, 4);
+        for _ in 0..8 {
+            s.act(&format!("scroll {:.0} {:.0} 4", name.center().x, name.center().y));
+        }
+        s.idle(4);
+        assert!(some_text(&s, "Keep the lamp lit") && some_text(&s, "Created kettle"));
+        wait_until(&mut s, "said when it was asked", 10, |s| s.texts.iter().any(|(_, t)| t.starts_with("Updated")));
+        assert_eq!(s.tab().title(), "GitHub");
+        look(&mut s, "github page");
+        s.shot("github");
+        // The arrows: the first shows where it is, then down to a commit of the clone.
+        s.act("key ArrowDown");
+        assert!(github_page(&s).keyed);
+        let lamp = github_page(&s).data.as_ref().unwrap().items.iter().position(|i| i.repo == "ana-lima/lamp" && i.sha.is_some()).unwrap();
+        for _ in 0..lamp {
+            s.act("key ArrowDown");
+        }
+        assert_eq!(github_page(&s).sel, lamp);
+        // Its files: not in the clone (a fresh one), so from GitHub, under the row.
+        wait_until(&mut s, "the commit's files", 10, |s| some_text(s, "src/lamp.rs") && some_text(s, "README.md"));
+        assert!(s.texts.iter().any(|(_, t)| t.contains("on this computer at ~/")), "the clone is known");
+        look(&mut s, "a commit opened");
+        s.shot("github-commit-open");
+        // O: the commit on GitHub.
+        let before = launched().len();
+        s.act("key O");
+        s.idle(2);
+        assert!(launched()[before..].iter().any(|l| l.contains("https://github.com/ana-lima/lamp/commit/")), "{:?}", &launched()[before..]);
+        // Narrow: the card shrinks to a line over the year (narrower than the page needs
+        // for its column at this font size).
+        let k = s.app.cfg.font_size / 13.0;
+        s.resize((s.app.sidebar_width + 460.0 * k).round(), 700.0);
+        // The panel eases to its new width.
+        s.idle(30);
+        assert!(!some_text(&s, "Languages") && s.texts.iter().any(|(_, t)| t.starts_with("Ana Lima · 1,204 followers")));
+        look(&mut s, "github narrow");
+        s.shot("github-narrow");
+        s.resize(1280.0, 800.0);
+        // A light theme and the owner's look.
+        s.app.cfg.theme = crate::theme::ThemeName::MinLight;
+        s.app.cfg.font_size = 16.5;
+        s.app.cfg.spacing = 1.6;
+        s.idle(3);
+        look(&mut s, "github light, big");
+        s.shot("github-light-big");
+        s.app.cfg.font_size = 13.0;
+        s.app.cfg.spacing = 1.0;
+        // Refresh asks again.
+        let asked = std::fs::read_to_string(d.join("log")).unwrap().lines().filter(|l| l.starts_with("api graphql")).count();
+        s.cmd(Refresh);
+        wait_until(&mut s, "asked again", 10, |s| !github_page(s).busy());
+        assert!(std::fs::read_to_string(d.join("log")).unwrap().lines().filter(|l| l.starts_with("api graphql")).count() > asked);
+        // Enter on the commit: its clone, its history open on it.
+        s.act("key Enter");
+        s.settle();
+        assert_eq!(s.tab().path, clone);
+        assert!(history_open(&s), "the commit in its clone's history");
+        // Back to the page, then up to Computer.
+        s.cmd(Back);
+        s.settle();
+        assert!(crate::tab::is_github(&s.tab().path));
+        s.cmd(Up);
+        assert!(crate::tab::is_computer(&s.tab().path));
+        // No gh: what to install. Signed out: what to do.
+        let none = root().join("no-tools");
+        std::fs::create_dir_all(&none).unwrap();
+        crate::drives::FAKE.with(|f| *f.borrow_mut() = Some(none.clone()));
+        let _ = std::fs::remove_dir_all(crate::github::cache_dir());
+        s.app.github = Default::default();
+        s.cmd(GitHubProfile);
+        wait_until(&mut s, "no gh", 10, |s| some_text(s, "Your GitHub profile shows here once GitHub's gh is installed"));
+        look(&mut s, "github without gh");
+        let out = fake_gh("fake-gh-out", false);
+        crate::drives::FAKE.with(|f| *f.borrow_mut() = Some(out));
+        s.app.github = Default::default();
+        s.idle(2);
+        wait_until(&mut s, "signed out", 10, |s| some_text(s, "Sign in to GitHub with gh auth login"));
+        // Nothing is written into a place: a paste or a new folder there does nothing.
+        s.cmd(NewFolder);
+        assert!(s.tab().entries.is_empty() && !std::path::Path::new(crate::tab::GITHUB).exists());
+        crate::drives::FAKE.with(|f| *f.borrow_mut() = None);
+        settles_idle(&mut s, "github");
+        report("github", &s);
+    }
+
+    // ------------------------------------------------------------------ the listing
+
+    /// The listing's motion: a folder's pictures fanning out on a rest; rows gliding as
+    /// the filter and the sort change, icons as the window narrows; the years on a long
+    /// dated list's scrollbar and the month while it is dragged; cut files outlined, still
+    /// once they settle; the ring of kinds in the status bar; a refused name shaking and
+    /// saying why; a labelled folder in its colour.
+    #[test]
+    fn listing_in_motion() {
+        if !sandboxed() {
+            return;
+        }
+        let home = fixture("motion");
+        // A long list over eight years, one file a week back from now.
+        let dated = home.join("Dated");
+        std::fs::create_dir_all(&dated).unwrap();
+        let now = std::time::SystemTime::now();
+        for i in 0..400u64 {
+            let p = dated.join(format!("note{i:03}.txt"));
+            std::fs::write(&p, "x").unwrap();
+            std::fs::File::options().write(true).open(&p).unwrap().set_modified(now - std::time::Duration::from_secs(i * 7 * 86_400)).unwrap();
+        }
+        crate::tags::toggle(&[home.join("Documents/Taxes")], "Red", true).unwrap();
+        let mut s = Sim::new(&home.join("Pictures"), vec2(1280.0, 800.0));
+        s.cmd(ViewLarge);
+        s.settle();
+        // Peek: rest on Trip.
+        let trip = list_text(&s, "Trip");
+        s.act(&format!("move {:.0} {:.0}", trip.center().x, trip.center().y - 30.0));
+        wait_until(&mut s, "the cards out", 10, |s| s.tab().peek.showing().is_some_and(|(p, o)| p.ends_with("Trip") && o >= 1.0));
+        s.idle(10);
+        // Trip is in the top row: the fan comes down over it rather than over the toolbar.
+        let (fan, view) = s.tab().peek.fan().unwrap_or_else(|| s.fail("no fan drawn"));
+        assert!(fan.is_positive() && view.contains_rect(fan), "the fan stays in the view: {fan:?} in {view:?}");
+        s.shot("peek");
+        s.act("move -50 -50");
+        wait_until(&mut s, "the cards back", 10, |s| s.tab().peek.showing().is_none());
+        // The ring: only pictures in Trip.
+        go(&mut s, &home.join("Pictures/Trip"));
+        let ring = *controls_named("folder at a glance").first().unwrap_or_else(|| s.fail("no ring"));
+        s.act(&format!("move {:.0} {:.0}", ring.center().x, ring.center().y));
+        s.idle(40);
+        assert!(some_text(&s, "Pictures 100%"), "the ring says what fills the folder");
+        s.shot("glance");
+        // Icons reflow as the window narrows.
+        s.act("move -50 -50");
+        s.idle(3);
+        s.resize(760.0, 800.0);
+        s.idle(1);
+        let anim = s.app.cfg.animations;
+        assert_eq!(s.tab().glide.moving() > 0, anim, "icons glide to their new rows, when things move at all");
+        s.settle();
+        s.idle(20);
+        assert_eq!(s.tab().glide.moving(), 0);
+        look(&mut s, "icons after the reflow");
+        s.resize(1280.0, 800.0);
+        // The filter: rows glide up as others drop out, and come back.
+        go(&mut s, &home.join("Big"));
+        s.cmd(ViewDetails);
+        s.settle();
+        s.cmd(FocusFilter);
+        s.act("text .rs");
+        s.idle(1);
+        let mut moved = 0;
+        for _ in 0..6 {
+            s.idle(1);
+            moved = moved.max(s.tab().glide.moving());
+        }
+        assert_eq!(moved > 0, anim, "rows on their way");
+        s.idle(30);
+        assert_eq!(s.tab().glide.moving(), 0, "settled");
+        s.act("key Escape");
+        s.settle();
+        look(&mut s, "after the filter");
+        // A sort moves them too.
+        s.cmd(SortSize);
+        s.idle(2);
+        s.idle(30);
+        assert_eq!(s.tab().glide.moving(), 0);
+        // The date ribbon: years on the scrollbar of the dated list.
+        go(&mut s, &dated);
+        s.cmd(SortModified);
+        s.settle();
+        s.idle(20);
+        let years: Vec<i32> = s.tab().ribbon.marks.iter().map(|m| m.1).collect();
+        assert!(years.len() >= 7 && years.windows(2).all(|w| w[0] > w[1]), "newest year first: {years:?}");
+        let lr = s.app.panels[&s.app.active].list_rect;
+        s.act(&format!("move {:.0} {:.0}", lr.right() - 6.0, lr.center().y));
+        s.idle(20);
+        let shown: Vec<String> = years.iter().map(|y| y.to_string()).filter(|y| some_text(&s, y)).collect();
+        assert!(shown.len() >= 3, "the years named while pointed at: {shown:?}");
+        s.shot("ribbon-years");
+        // Dragging the scrollbar: the month passing.
+        s.act(&format!("down {:.0} {:.0}", lr.right() - 6.0, lr.top() + 40.0));
+        for k in 1..=10 {
+            s.act(&format!("move {:.0} {:.0}", lr.right() - 6.0, lr.top() + 40.0 + k as f32 * 40.0));
+        }
+        let months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+        assert!(s.texts.iter().any(|(_, t)| months.iter().any(|m| t.starts_with(m) && t.len() > m.len() + 4)), "a month and its year beside the thumb");
+        s.shot("ribbon-month");
+        s.act(&format!("up {:.0} {:.0}", lr.right() - 6.0, lr.top() + 440.0));
+        s.act("move -50 -50");
+        s.idle(30);
+        // Cut files: outlined, marching a moment, then still.
+        go(&mut s, &home.join("Documents"));
+        select_name(&mut s, "notes.txt");
+        s.act("key ctrl+x");
+        s.idle(2);
+        // (Without motion a toast may still ask for frames: only the marching is checked.)
+        if anim {
+            assert!(s.repaint < std::time::Duration::from_millis(100), "marching");
+        }
+        settles_idle(&mut s, "cut files rest");
+        // A taken name: the field shakes and says why; Escape leaves it as it was.
+        select_name(&mut s, "notes.txt");
+        s.act("key F2");
+        s.act("key ctrl+a");
+        s.act("text report.md");
+        s.act("key Enter");
+        s.idle(2);
+        assert!(s.tab().rename.is_some(), "still renaming");
+        assert!(some_text(&s, "“report.md” is already here"));
+        s.idle(30);
+        s.shot("rename-refused");
+        s.act("key ctrl+a");
+        s.act("key Backspace");
+        s.idle(2);
+        assert!(some_text(&s, "A name can't be empty"), "the reason follows the name");
+        s.act("key Escape");
+        s.idle(2);
+        assert!(s.tab().rename.is_none() && home.join("Documents/notes.txt").exists());
+        // The labelled folder, in every view.
+        for v in [ViewDetails, ViewList, ViewMedium, ViewLarge] {
+            s.cmd(v);
+            look(&mut s, "a coloured folder");
+        }
+        // Into a folder: the path's new name and its line.
+        go(&mut s, &home.join("Documents/Taxes/2025"));
+        s.idle(20);
+        look(&mut s, "breadcrumbs moved");
+        settles_idle(&mut s, "listing in motion");
+        report("listing in motion", &s);
+    }
+
+    // ------------------------------------------------------------------ pictures
+
+    /// Pictures: the viewer grows out of the thumbnail and back; its filmstrip rises at
+    /// the bottom and goes to a picture; two compared over one another with a line to
+    /// drag; the preview's colours, copied; a folder sorted by colour.
+    #[test]
+    fn pictures_in_their_own_light() {
+        if !sandboxed() {
+            return;
+        }
+        let home = fixture("light");
+        let trip = home.join("Pictures/Trip");
+        let mut s = Sim::new(&trip, vec2(1280.0, 800.0));
+        s.cmd(ViewLarge);
+        s.settle();
+        s.idle(10);
+        select_name(&mut s, "img03.png");
+        s.cmd(ViewPictures);
+        let growing = matches!(&s.app.popup, Popup::Viewer(v) if v.grow.is_some());
+        assert_eq!(growing, s.app.cfg.animations, "grows out of its thumbnail");
+        s.idle(30);
+        assert!(matches!(&s.app.popup, Popup::Viewer(v) if v.grow.is_none()));
+        // The filmstrip: the pointer at the bottom.
+        s.act("move 640 780");
+        s.idle(20);
+        let strip = controls_named("viewer filmstrip");
+        assert!(strip.len() >= 5, "{}", strip.len());
+        s.shot("filmstrip");
+        let at = |s: &Sim| if let Popup::Viewer(v) = &s.app.popup { v.at } else { usize::MAX };
+        let before = at(&s);
+        let other = *strip.iter().find(|r| (r.center().x - 640.0).abs() > 60.0).unwrap();
+        click_rect(&mut s, other);
+        s.idle(3);
+        assert_ne!(at(&s), before, "went to the picture clicked");
+        s.act("move 640 400");
+        s.idle(30);
+        assert!(controls_named("viewer filmstrip").is_empty(), "the strip goes down again");
+        // Over one another: W pins this one and draws the line; a drag moves it.
+        s.act("key ArrowRight");
+        s.act("key W");
+        let wipe = |s: &Sim| if let Popup::Viewer(v) = &s.app.popup { v.wipe } else { None };
+        assert_eq!(wipe(&s), Some(0.5));
+        s.act("key ArrowRight");
+        s.idle(5);
+        s.act("drag 640 400 300 400");
+        assert!(wipe(&s).is_some_and(|f| f < 0.4), "{:?}", wipe(&s));
+        // A small picture in a big window: the line stays on the pictures.
+        let line = if let Popup::Viewer(v) = &s.app.popup { v.wipe_line() } else { None };
+        let (x, (l, r)) = line.unwrap_or_else(|| s.fail("no wipe line"));
+        assert!(r - l < 900.0 && x >= l && x <= r, "line at {x} across {l}..{r}");
+        look_popup(&mut s, "pictures over one another");
+        s.shot("wipe");
+        s.act("key Escape");
+        assert_eq!(wipe(&s), None);
+        assert!(matches!(&s.app.popup, Popup::Viewer(v) if v.pin.is_none()));
+        // Closing puts it back where it came from.
+        s.act("key Escape");
+        assert_eq!(matches!(&s.app.popup, Popup::Viewer(v) if v.shrink.is_some()), s.app.cfg.animations, "shrinks back");
+        wait_until(&mut s, "the viewer gone", 5, |s| !s.popup_open());
+        // The preview's colours: one copied.
+        s.cmd(ToggleInspector);
+        wait_until(&mut s, "the colours", 20, |s| controls_named("picture colour").len() >= 2);
+        // The preview slides open: its chips' places once it rests.
+        s.idle(20);
+        let chip = controls_named("picture colour")[0];
+        s.shot("colours-in-preview");
+        click_rect(&mut s, chip);
+        s.idle(2);
+        assert!(s.copied.last().is_some_and(|c| c.starts_with('#') && c.len() == 7), "{:?}", s.copied.last());
+        assert!(s.app.toast.as_ref().is_some_and(|t| t.0.starts_with("Copied #")));
+        s.cmd(ToggleInspector);
+        // Sorted by colour: in the order of their colours, the broken one last.
+        go(&mut s, &home.join("Pictures"));
+        go(&mut s, &trip);
+        s.cmd(SortColour);
+        wait_until(&mut s, "the colours read", 30, |s| s.tab().entries.iter().filter(|e| crate::colours::sortable(e)).all(|e| crate::colours::sort_key(e).is_some()));
+        s.settle();
+        s.idle(4);
+        let keys: Vec<u64> = s.tab().view.iter().map(|&i| crate::colours::sort_key(&s.tab().entries[i as usize]).unwrap_or(u64::MAX)).collect();
+        assert!(keys.windows(2).all(|w| w[0] <= w[1]), "{keys:?}");
+        look(&mut s, "sorted by colour");
+        s.cmd(ViewLarge);
+        s.settle();
+        s.shot("sorted-by-colour");
+        settles_idle(&mut s, "pictures");
+        report("pictures in their own light", &s);
+    }
+
+    // ------------------------------------------------------------------ jobs
+
+    /// A copy into a folder that has a tab of its own: the tab's ring while it runs (paused
+    /// here), the card's speed line, both gone once it is done.
+    #[test]
+    fn copies_show_their_speed_and_their_tab() {
+        if !sandboxed() {
+            return;
+        }
+        let home = fixture("jobs-show");
+        let heavy = home.join("Heavy");
+        let dest = home.join("Dest");
+        std::fs::create_dir_all(&heavy).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        for i in 0..2 {
+            std::fs::write(heavy.join(format!("big{i}.bin")), vec![7u8; 24 << 20]).unwrap();
+        }
+        let mut s = Sim::new(&heavy, vec2(1280.0, 800.0));
+        let id = s.app.active;
+        s.app.actions.push(crate::app::Action::NewTab { panel: id, path: dest.clone(), select: None, focus: false });
+        s.settle();
+        let srcs = vec![heavy.join("big0.bin"), heavy.join("big1.bin")];
+        s.app.start_job(crate::ops::OpKind::Copy { srcs, dest: dest.clone(), decide: Default::default() });
+        s.app.jobs[0].pause.store(true, std::sync::atomic::Ordering::Relaxed);
+        s.idle(80);
+        if s.app.jobs[0].progress.lock().unwrap().finished {
+            eprintln!("sim jobs: the copy finished before it could be paused; nothing to watch");
+        } else {
+            assert!(!controls_named("tab progress").is_empty(), "the destination's tab shows the copy");
+            assert!(!controls_named("job speed").is_empty(), "the card draws its speed");
+            s.app.jobs[0].pause.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
+        wait_jobs(&mut s, "the copy");
+        s.idle(3);
+        assert!(controls_named("tab progress").is_empty(), "done: the folder's own icon again");
+        assert_eq!(std::fs::metadata(dest.join("big1.bin")).unwrap().len(), 24 << 20);
+        // Nothing is written into a place.
+        s.app.start_job(crate::ops::OpKind::Copy { srcs: vec![heavy.join("big0.bin")], dest: PathBuf::from(crate::tab::GITHUB), decide: Default::default() });
+        assert!(s.app.jobs.iter().all(|j| !matches!(&j.kind, crate::ops::OpKind::Copy { dest, .. } if crate::tab::is_place(dest))), "refused");
+        let _ = std::fs::remove_dir_all(&heavy);
+        let _ = std::fs::remove_dir_all(&dest);
+        report("copies", &s);
+    }
+
+    // ------------------------------------------------------------------ themes
+
+    /// Choosing a theme: hovering a card shows it on the window a frame later (the frame
+    /// between is the old one, kept for the wash), and every theme draws cleanly.
+    #[test]
+    fn themes_wash_in_and_all_read_cleanly() {
+        if !sandboxed() {
+            return;
+        }
+        let home = fixture("themes-all");
+        let mut s = Sim::new(&home.join("Documents"), vec2(1280.0, 800.0));
+        s.app.cfg.theme = crate::theme::ThemeName::Graphite;
+        s.idle(3);
+        s.cmd(ChooseTheme);
+        s.idle(5);
+        let card = s.text_rect("Lagoon");
+        s.act(&format!("move {:.0} {:.0}", card.center().x, card.center().y));
+        s.idle(3);
+        assert_eq!(s.app.pal.bg, crate::theme::palette(crate::theme::ThemeName::Lagoon).bg, "the hovered theme on the window");
+        // Escape goes back to Options, a second one closes it.
+        s.act("key Escape");
+        s.act("key Escape");
+        wait_until(&mut s, "the picker closed", 5, |s| !s.popup_open());
+        assert_eq!(s.app.pal.bg, crate::theme::palette(crate::theme::ThemeName::Graphite).bg, "only hovered: the chosen theme back");
+        for t in crate::theme::ThemeName::ALL {
+            s.app.cfg.theme = t;
+            s.idle(3);
+            s.check_overlap = true;
+            s.idle(1);
+            s.check_overlap = false;
+        }
+        s.app.cfg.theme = crate::theme::ThemeName::Graphite;
+        settles_idle(&mut s, "themes");
+        report("themes", &s);
     }
 }

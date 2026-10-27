@@ -396,6 +396,10 @@ pub fn mounts() -> Vec<Mount> {
     mounts_in(&crate::drives::mounts_table())
 }
 
+/// Network filesystems listed with the disks: ones the user mounted on purpose. rclone is
+/// how Google Drive, OneDrive or S3 usually end up in a folder.
+const NETWORK_FS: [&str; 5] = ["fuse.sshfs", "fuse.rclone", "cifs", "nfs", "nfs4"];
+
 pub fn mounts_in(table: &Path) -> Vec<Mount> {
     let Ok(s) = fs::read_to_string(table) else { return vec![] };
     let mut out: Vec<Mount> = Vec::new();
@@ -415,7 +419,7 @@ pub fn mounts_in(table: &Path) -> Vec<Mount> {
             && !mp.starts_with("/root")
             && fs != "swap";
         let removable = mp.starts_with("/run/media") || mp.starts_with("/media") || mp.starts_with("/mnt");
-        if (wanted || removable || matches!(fs, "fuse.sshfs" | "fuse.rclone" | "cifs" | "nfs" | "nfs4"))
+        if (wanted || removable || NETWORK_FS.contains(&fs))
             && !out.iter().any(|m| m.path == Path::new(&mp))
         {
             out.push(Mount { device: dev.to_string(), path: PathBuf::from(mp), fstype: fs.to_string() });

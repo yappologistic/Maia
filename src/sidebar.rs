@@ -192,7 +192,7 @@ pub fn refresh(app: &App, ctx: &egui::Context) {
             let mut marks = std::collections::HashMap::new();
             for b in &marks_in {
                 let m = std::fs::symlink_metadata(b);
-                let exists = tab::is_computer(b) || m.is_ok();
+                let exists = tab::is_place(b) || m.is_ok();
                 let link = m.as_ref().map(|m| m.file_type().is_symlink()).unwrap_or(false);
                 if b.is_file() {
                     files.insert(b.clone());
@@ -322,7 +322,11 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
             match glyph {
                 Some(g) => paint_glyph(ui.painter(), ic, g, if here { pal.text } else { pal.text_dim }),
                 None => {
-                    if !crate::icons::dir(ui.painter(), ic, path) {
+                    // A folder with a colour label is drawn in it, as in the listing.
+                    let label = crate::tags::get(path, |t| t.iter().find_map(|x| crate::tags::color_of(x))).flatten();
+                    if let Some(c) = label {
+                        crate::theme::paint_folder(ui.painter(), ic, c);
+                    } else if !crate::icons::dir(ui.painter(), ic, path) {
                         crate::theme::paint_icon(ui.painter(), ic, crate::theme::FileCat::Folder, "", link);
                     }
                 }

@@ -89,6 +89,20 @@ pub struct State {
     pub pin: Option<Pic>,
     /// When it opened: messages from before are not its own.
     opened: Instant,
+    /// Where the picture grows from as the viewer opens (its place in the listing), and
+    /// when it started to.
+    pub grow: Option<(Rect, f64)>,
+    /// Closing since: the picture goes back into its place, the window comes back.
+    pub shrink: Option<f64>,
+    /// Comparing over one another instead of side by side: where the line between the
+    /// pinned picture (left of it) and this one is, 0..1 across.
+    pub wipe: Option<f32>,
+    wiping: bool,
+    /// Across what the line moves: the two pictures' width together as drawn last frame,
+    /// so a small picture in a big window does not leave the line out in the dark.
+    wipe_span: (f32, f32),
+    /// The filmstrip along the bottom, how far up (0..1).
+    film: f32,
 }
 
 impl State {
@@ -113,6 +127,12 @@ impl State {
             strip: None,
             pin: None,
             opened: Instant::now(),
+            grow: None,
+            shrink: None,
+            wipe: None,
+            wiping: false,
+            wipe_span: (0.0, 0.0),
+            film: 0.0,
         }
     }
 
@@ -120,6 +140,13 @@ impl State {
     #[cfg(test)]
     pub fn fading_from(&self) -> Option<usize> {
         self.from.map(|f| f.0)
+    }
+
+    /// Where the wipe's line is and the span it moves across, as last drawn.
+    #[cfg(test)]
+    pub fn wipe_line(&self) -> Option<(f32, (f32, f32))> {
+        let (l, r) = self.wipe_span;
+        self.wipe.filter(|_| r > l).map(|f| (l + f * (r - l), (l, r)))
     }
 
     pub fn current(&self) -> Option<&Pic> {
@@ -163,6 +190,9 @@ pub fn open_at(app: &mut App, start: Option<PathBuf>) -> bool {
     let now = app.ctx.input(|i| i.time);
     let mut st = State::new(panel, pics, at, now);
     st.undo_mark = app.undo.len();
+    if app.cfg.animations {
+        st.grow = place_of(app, panel, &st.pics[at].path).map(|r| (r, now));
+    }
     app.popup = Popup::Viewer(Box::new(st));
     true
 }
@@ -172,6 +202,55 @@ pub fn open(app: &mut App) {
     if !open_at(app, None) {
         app.toast("No pictures here");
     }
+}
+
+/// Opening and closing take this long.
+const GROW: f64 = 0.28;
+
+fn ease(t: f64) -> f32 {
+    (1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)) as f32
+}
+
+/// Where `path` was drawn in its panel's listing last frame, when it was on screen.
+fn place_of(app: &App, panel: u64, path: &std::path::Path) -> Option<Rect> {
+    let t = app.panels.get(&panel)?.tab();
+    let idx = t.entries.iter().position(|e| e.path == path)? as u32;
+    t.item_rects.iter().find(|(i, _)| *i == idx).map(|(_, r)| *r).filter(|r| r.is_finite() && r.width() > 1.0)
+}
+
+/// `a` to `b`, `k` of the way.
+fn lerp_rect(a: Rect, b: Rect, k: f32) -> Rect {
+    Rect::from_min_max(a.min + (b.min - a.min) * k, a.max + (b.max - a.max) * k)
+}
+
+/// The closing: the picture shrinks back into its place (or fades where it has none on
+/// screen) as the dark lifts. False once done.
+fn closing(app: &mut App, ctx: &egui::Context, st: &mut State, t0: f64) -> bool {
+    let now = ctx.input(|i| i.time);
+    let k = ease((now - t0) / (GROW * 0.85));
+    if k >= 1.0 {
+        return false;
+    }
+    let screen = ctx.content_rect();
+    let area = screen.shrink(12.0);
+    let Some(cur) = st.current().cloned() else { return false };
+    let target = place_of(app, st.panel, &cur.path);
+    let shown = app.thumbs.get(&cur.path, cur.modified, area.width().max(area.height())).map(|l| (l.tex.id(), l.dims));
+    egui::Area::new(Id::new("picture viewer")).order(egui::Order::Foreground).fixed_pos(screen.min).interactable(false).show(ctx, |ui| {
+        let p = ui.painter();
+        p.rect_filled(screen, CornerRadius::ZERO, Color32::from_rgb(14, 14, 15).gamma_multiply(1.0 - k));
+        if let Some((tex, dims)) = shown {
+            let size = vec2(dims[0] as f32, dims[1] as f32) * fit_scale(area, dims) * st.zoom;
+            let from = Rect::from_center_size(area.center() + st.pan, size);
+            let (to, a) = match target {
+                Some(t) => (t, 1.0),
+                None => (Rect::from_center_size(from.center(), from.size() * 0.92), 1.0 - k),
+            };
+            p.image(tex, lerp_rect(from, to, k), Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(a));
+        }
+    });
+    ctx.request_repaint();
+    true
 }
 
 /// The scale that fits `dims` into `area`, never past one point per pixel.
@@ -190,6 +269,9 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
         return false;
     }
     st.at = st.at.min(n - 1);
+    if let Some(t0) = st.shrink {
+        return closing(app, ctx, st, t0);
+    }
     // A new tag being typed has the keys; otherwise the strip, while open, takes the
     // arrows, Enter and Space.
     let typing = st.strip.as_ref().is_some_and(|s| s.typing.is_some());
@@ -202,12 +284,21 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
     let zoom_in = key(Key::Plus) || key(Key::Equals) || shift_key(Key::Equals) || shift_key(Key::Plus);
     let (zoom_out, fit, actual, pause) = (key(Key::Minus), key(Key::Num0), key(Key::Num1), key(Key::K));
     let (delete, turn_r, turn_l, tags_key, compare, enter) = (key(Key::Delete), key(Key::R), key(Key::L), key(Key::T), key(Key::C), key(Key::Enter));
+    let wipe_key = key(Key::W);
     let strip_keys = st.strip.is_some() && !typing;
     let (left, right) = if strip_keys { (false, false) } else { (l_key, r_key) };
     if esc {
         // One step back at a time: the strip, then the comparison, then the viewer.
-        if st.strip.take().is_none() && st.pin.take().is_none() {
+        if st.strip.take().is_none() && {
+            st.wipe = None;
+            st.pin.take().is_none()
+        } {
             close(app, st);
+            if animations {
+                st.shrink = Some(now);
+                ctx.request_repaint();
+                return true;
+            }
             return false;
         }
         st.pan = Vec2::ZERO;
@@ -257,6 +348,8 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
         act = Some(Do::Strip);
     } else if compare {
         act = Some(Do::Pin);
+    } else if wipe_key {
+        act = Some(Do::Wipe);
     }
     let names = tag_names(st);
     if let Some(sp) = st.strip.as_mut().filter(|_| strip_keys) {
@@ -283,7 +376,7 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
     let area = screen.shrink(12.0);
     // Comparing: the pinned picture on the left half, the one stepped to on the right.
     let (cur_area, pin_area) = match &st.pin {
-        Some(_) if area.width() > 240.0 => {
+        Some(_) if area.width() > 240.0 && st.wipe.is_none() => {
             let w = (area.width() - 12.0) / 2.0;
             (Rect::from_min_max(pos2(area.right() - w, area.top()), area.max), Some(Rect::from_min_max(area.min, pos2(area.left() + w, area.bottom()))))
         }
@@ -348,7 +441,16 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
     egui::Area::new(Id::new("picture viewer")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let (r, resp) = ui.allocate_exact_size(screen.size(), Sense::click_and_drag());
         let p = ui.painter();
-        p.rect_filled(r, CornerRadius::ZERO, Color32::from_rgb(14, 14, 15));
+        let grown = match st.grow {
+            Some((_, t0)) => ease((now - t0) / GROW),
+            None => 1.0,
+        };
+        if grown >= 1.0 {
+            st.grow = None;
+        } else {
+            ctx.request_repaint();
+        }
+        p.rect_filled(r, CornerRadius::ZERO, Color32::from_rgb(14, 14, 15).gamma_multiply(grown));
         if let Some((tex, dims)) = shown {
             let base = fit_scale(cur_area, dims);
             // The wheel zooms around the pointer, in whichever picture it is over.
@@ -366,8 +468,26 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
                     st.stirred = now;
                 }
             }
+            // Over one another, a drag that starts on the line between them moves it.
+            let span = if st.wipe_span.1 > st.wipe_span.0 + 1.0 { st.wipe_span } else { (cur_area.left(), cur_area.right()) };
+            let line_x = st.wipe.map(|f| span.0 + f * (span.1 - span.0));
+            // Judged where the press was: the pointer has moved on by the time it is a drag.
+            if resp.drag_started() {
+                let pressed = ui.input(|i| i.pointer.press_origin());
+                st.wiping = matches!((line_x, pressed), (Some(x), Some(pp)) if (pp.x - x).abs() < 14.0);
+            }
             if resp.dragged() {
-                st.pan += resp.drag_delta();
+                match (st.wiping, resp.interact_pointer_pos()) {
+                    (true, Some(pp)) => st.wipe = Some(((pp.x - span.0) / (span.1 - span.0).max(1.0)).clamp(0.0, 1.0)),
+                    _ => st.pan += resp.drag_delta(),
+                }
+            }
+            if resp.drag_stopped() {
+                st.wiping = false;
+            }
+            if let Some(x) = line_x.filter(|x| pointer.is_some_and(|pp| (pp.x - x).abs() < 14.0 && cur_area.contains(pp))) {
+                let _ = x;
+                ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
             }
             if resp.double_clicked() {
                 // Between fitting the window and one pixel for one.
@@ -391,8 +511,57 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
                 }
             }
             let img = Rect::from_center_size(cur_area.center() + st.pan, size);
+            let img = match st.grow {
+                Some((from, _)) => lerp_rect(from, img, grown),
+                None => img,
+            };
             let p = ui.painter().with_clip_rect(clip);
-            p.image(tex, img, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(fading.unwrap_or(1.0)));
+            if let Some(glow) = app.thumbs.get(&cur.path, cur.modified, want(st.zoom)).map(|l| l.glow) {
+                crate::colours::paint_glow(&p, img, &glow, 0.42 * fading.unwrap_or(1.0) * grown);
+            }
+            match (st.wipe, pinned.as_ref().and_then(|(_, got, _)| *got)) {
+                // The pinned picture left of the line, this one right of it, the same zoom
+                // and pan over the same place, each from its own fit.
+                (Some(f), Some((ptex, pdims))) => {
+                    let psize = vec2(pdims[0] as f32, pdims[1] as f32) * fit_scale(cur_area, pdims) * st.zoom;
+                    let pimg = Rect::from_center_size(cur_area.center() + st.pan, psize);
+                    let span = (img.left().min(pimg.left()).max(cur_area.left()), img.right().max(pimg.right()).min(cur_area.right()));
+                    st.wipe_span = span;
+                    let x = span.0 + f * (span.1 - span.0);
+                    let left = Rect::from_min_max(r.min, pos2(x, r.bottom()));
+                    let right = Rect::from_min_max(pos2(x, r.top()), r.max);
+                    ui.painter().with_clip_rect(left).image(ptex, pimg, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+                    ui.painter().with_clip_rect(right).image(tex, img, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(fading.unwrap_or(1.0)));
+                    let top = img.top().min(pimg.top()).max(r.top());
+                    let bottom = img.bottom().max(pimg.bottom()).min(r.bottom());
+                    let lp = ui.painter();
+                    lp.line_segment([pos2(x, top), pos2(x, bottom)], Stroke::new(2.0, Color32::WHITE));
+                    let knob = pos2(x, (top + bottom) / 2.0);
+                    lp.circle_filled(knob, 11.0, Color32::WHITE);
+                    lp.circle_stroke(knob, 11.0, Stroke::new(1.0, Color32::from_black_alpha(80)));
+                    for d in [-1.0f32, 1.0] {
+                        let c = knob + vec2(d * 4.5, 0.0);
+                        lp.add(egui::Shape::convex_polygon(vec![c + vec2(d * 2.5, 0.0), c + vec2(-d * 1.5, -3.5), c + vec2(-d * 1.5, 3.5)], Color32::from_gray(60), Stroke::NONE));
+                    }
+                    // Which is which, small, at the top on either side of the line.
+                    let small = FontId::proportional((fs - 2.0).max(9.0));
+                    let names = [(st.pin.as_ref().map(|p| p.name.clone()).unwrap_or_default(), true), (cur.name.clone(), false)];
+                    for (name, is_left) in names {
+                        let g = crate::listing::elided(ui, &name, small.clone(), (if is_left { x - r.left() } else { r.right() - x } - 30.0).max(30.0), Color32::from_gray(230));
+                        let w = g.size().x + 14.0;
+                        // Above the pictures when they leave room there, so a small one is not hidden.
+                        let h = g.size().y + 6.0;
+                        let y = if top - r.top() > h + 70.0 { top - h - 8.0 } else { top + 10.0 };
+                        let at = if is_left { pos2(x - 10.0 - w, y) } else { pos2(x + 10.0, y) };
+                        let pill = Rect::from_min_size(at, vec2(w, h));
+                        lp.rect_filled(pill, CornerRadius::same(6), Color32::from_black_alpha(150));
+                        lp.galley(pill.min + vec2(7.0, 3.0), g, Color32::WHITE);
+                    }
+                }
+                _ => {
+                    p.image(tex, img, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(fading.unwrap_or(1.0)));
+                }
+            }
             if fading.is_some() {
                 ctx.request_repaint();
             } else {
@@ -422,6 +591,78 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
             }
             p.line_segment([pos2(pa.right() + 6.0, pa.top() + 8.0), pos2(pa.right() + 6.0, pa.bottom() - 8.0)], Stroke::new(1.0, Color32::from_white_alpha(28)));
         }
+        // The filmstrip: the pointer near the bottom raises the folder's pictures there,
+        // the ones nearest it a little larger; a click goes to one.
+        let base = (fs * 3.6).round();
+        let near = pointer.is_some_and(|pp| r.contains(pp) && pp.y > r.bottom() - base * 2.3) && n > 1 && st.strip.is_none() && r.width() > 300.0;
+        let dt = ctx.input(|i| i.stable_dt).min(0.05);
+        let target = if near { 1.0 } else { 0.0 };
+        st.film = if !animations { target } else if target > st.film { (st.film + dt / 0.18).min(1.0) } else { (st.film - dt / 0.25).max(0.0) };
+        if st.film != target {
+            ctx.request_repaint();
+        }
+        let film_h = (base + 30.0) * st.film;
+        if st.film > 0.0 {
+            let ease = 1.0 - (1.0 - st.film).powi(3);
+            let band = Rect::from_min_max(pos2(r.left(), r.bottom() - (base * 1.6 + 30.0) * ease), r.max);
+            let mut shade = egui::Mesh::default();
+            shade.colored_vertex(band.left_top(), Color32::TRANSPARENT);
+            shade.colored_vertex(band.right_top(), Color32::TRANSPARENT);
+            shade.colored_vertex(band.left_bottom(), Color32::from_black_alpha((170.0 * ease) as u8));
+            shade.colored_vertex(band.right_bottom(), Color32::from_black_alpha((170.0 * ease) as u8));
+            shade.add_triangle(0, 1, 2);
+            shade.add_triangle(1, 3, 2);
+            ui.painter().add(shade);
+            let gap = 6.0;
+            let cy = r.bottom() - 14.0 - base / 2.0 + (1.0 - ease) * (base + 30.0);
+            let px = pointer.map_or(f32::NAN, |p| p.x);
+            let grow = |x: f32| if px.is_nan() { 1.0 } else { 1.0 + 0.5 * (-((x - px) / (base * 1.3)).powi(2)).exp() };
+            // Laid out from the picture shown, outwards both ways, as far as fits.
+            let mut slots: Vec<(usize, f32, f32)> = vec![(st.at, r.center().x, base * grow(r.center().x))];
+            for dir in [-1i64, 1] {
+                let (mut x, mut w) = (r.center().x, slots[0].2);
+                let mut i = st.at as i64;
+                loop {
+                    i += dir;
+                    if i < 0 || i as usize >= n {
+                        break;
+                    }
+                    let guess = x + dir as f32 * (w / 2.0 + gap + base / 2.0);
+                    let nw = base * grow(guess);
+                    x += dir as f32 * (w / 2.0 + gap + nw / 2.0);
+                    w = nw;
+                    if x - w / 2.0 < r.left() + 8.0 || x + w / 2.0 > r.right() - 8.0 {
+                        break;
+                    }
+                    slots.push((i as usize, x, w));
+                }
+            }
+            for (i, x, w) in slots {
+                let cell = Rect::from_center_size(pos2(x, cy - (w - base) / 2.0), vec2(w, w));
+                let resp = ui.interact(cell, Id::new(("filmstrip", i)), Sense::click());
+                crate::ui::note_control(ui, cell, "viewer filmstrip");
+                if resp.clicked() {
+                    to = Some(i);
+                }
+                let pic = &st.pics[i];
+                let p = ui.painter();
+                match app.thumbs.get(&pic.path, pic.modified, base * 1.6 * ppp) {
+                    Some(l) => {
+                        let [tw, th] = l.tex.size();
+                        let (tw, th) = (tw.max(1) as f32, th.max(1) as f32);
+                        let side = tw.min(th);
+                        let uv = Rect::from_min_max(pos2((tw - side) / 2.0 / tw, (th - side) / 2.0 / th), pos2(1.0 - (tw - side) / 2.0 / tw, 1.0 - (th - side) / 2.0 / th));
+                        p.image(l.tex.id(), cell, uv, Color32::WHITE.gamma_multiply(ease));
+                    }
+                    None => {
+                        p.rect_filled(cell, CornerRadius::same(4), Color32::from_white_alpha((30.0 * ease) as u8));
+                    }
+                }
+                if i == st.at {
+                    p.rect_stroke(cell.expand(1.5), CornerRadius::same(3), Stroke::new(2.0, Color32::WHITE.gamma_multiply(ease)), egui::StrokeKind::Outside);
+                }
+            }
+        }
         let mut pill_top = r.bottom();
         // The name, its tags and where it is in the folder, quietly, while the pointer
         // moves; the pinned picture's name under it, with a pin.
@@ -429,11 +670,11 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
             let mid = if pin_area.is_some() { cur_area.center().x } else { r.center().x };
             let room = if pin_area.is_some() { cur_area.width() } else { r.width() };
             let pos = format!("{} / {}", st.at + 1, n);
-            let pill = name_pill(ui, mid, r.bottom() - 18.0, room, &cur.name, &cur_tags, Some(&pos), false, st.playing, fs, label_a);
+            let pill = name_pill(ui, mid, r.bottom() - 18.0 - film_h, room, &cur.name, &cur_tags, Some(&pos), false, st.playing, fs, label_a);
             pill_top = pill.top();
             if let (Some(pa), Some((pp, ..))) = (pin_area, &pinned) {
                 let tags = crate::tags::get(&pp.path, |t| t.to_vec()).unwrap_or_default();
-                name_pill(ui, pa.center().x, r.bottom() - 18.0, pa.width(), &pp.name, &tags, None, true, false, fs, label_a);
+                name_pill(ui, pa.center().x, r.bottom() - 18.0 - film_h, pa.width(), &pp.name, &tags, None, true, false, fs, label_a);
             }
         }
         // The tag strip, above the name: every colour and word, those it has lit.
@@ -501,15 +742,16 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
                 close_now = true;
             }
             // Only where they fit beside the close button and clear of the arrows.
-            if r.width() > 420.0 {
-                let tools: [(&'static str, &str, bool, Do, &dyn Fn(&egui::Painter, Rect, Color32)); 5] = [
+            if r.width() > 470.0 {
+                let tools: [(&'static str, &str, bool, Do, &dyn Fn(&egui::Painter, Rect, Color32)); 6] = [
                     ("viewer trash", "Move to the trash (Delete)", false, Do::Trash, &symbol("trash-2")),
                     ("viewer rotate right", "Turn right (R)", false, Do::Turn(true), &symbol("turn")),
                     ("viewer rotate left", "Turn left (L)", false, Do::Turn(false), &|p: &egui::Painter, r: Rect, c: Color32| {
                         crate::symbols::paint_mirrored(p, r, "turn", c);
                     }),
                     ("viewer tags", "Tags (T)", st.strip.is_some(), Do::Strip, &symbol("tag")),
-                    ("viewer compare", "Compare beside this one (C)", st.pin.is_some(), Do::Pin, &symbol("columns-2")),
+                    ("viewer compare", "Compare beside this one (C)", st.pin.is_some() && st.wipe.is_none(), Do::Pin, &symbol("columns-2")),
+                    ("viewer wipe", "Compare over one another, a line to drag between them (W)", st.wipe.is_some(), Do::Wipe, &symbol("view-columns")),
                 ];
                 for (k, (what, tip, on, d, icon)) in tools.into_iter().enumerate() {
                     if button(corner(k as f32 + 1.0), what, tip, true, on, icon) {
@@ -553,6 +795,11 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
     }
     if close_now {
         close(app, st);
+        if animations {
+            st.shrink = Some(now);
+            ctx.request_repaint();
+            return true;
+        }
         return false;
     }
     true
@@ -569,6 +816,7 @@ enum Do {
     Undo,
     Strip,
     Pin,
+    Wipe,
 }
 
 /// Carry out `a`; false when the viewer has nothing left to show.
@@ -618,6 +866,16 @@ fn run(app: &mut App, ctx: &egui::Context, st: &mut State, a: Do, now: f64) -> b
                 Some(_) => None,
                 None => Some(cur),
             };
+            st.wipe = None;
+            st.zoom = 1.0;
+            st.pan = Vec2::ZERO;
+        }
+        Do::Wipe => {
+            // Over one another: pins this one first when nothing is pinned.
+            if st.pin.is_none() {
+                st.pin = Some(cur);
+            }
+            st.wipe = if st.wipe.is_some() { None } else { Some(0.5) };
             st.zoom = 1.0;
             st.pan = Vec2::ZERO;
         }

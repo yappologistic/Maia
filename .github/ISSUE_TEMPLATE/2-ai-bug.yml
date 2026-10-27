@@ -1,0 +1,137 @@
+name: AI bug report
+description: A bug found or worked out with an AI. Read AI-CONTRIBUTING.md first.
+labels: ["status: needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read [AI-CONTRIBUTING.md](https://github.com/yappologistic/Maia/blob/main/AI-CONTRIBUTING.md)
+        first. A claim without proof counts as not shown. "No", "none" and "not run" are
+        fine answers; empty ones aren't. Code here is read as a description: any fix is
+        written from scratch.
+  - type: dropdown
+    id: type
+    attributes:
+      label: What kind of problem
+      options:
+        - Something is broken
+        - It crashes
+        - It looks wrong
+        - It's slow
+    validations:
+      required: true
+  - type: dropdown
+    id: family
+    attributes:
+      label: Model family
+      options:
+        - Claude
+        - GPT / Codex
+        - Gemini
+        - Grok
+        - Open model (Llama, Qwen, DeepSeek...)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Exact model and tool
+      placeholder: Claude Opus 5.5 in Claude Code
+    validations:
+      required: true
+  - type: dropdown
+    id: human
+    attributes:
+      label: Checked by a person
+      description: Did a person check this report themselves before filing it?
+      options:
+        - "No"
+        - Yes, a person checked it
+    validations:
+      required: true
+  - type: textarea
+    id: human-did
+    attributes:
+      label: What the person checked
+      description: Reproduced the bug, read the code, looked at the screenshots. Or "nobody".
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Maia version
+      description: Version and commit, and how it was installed or built.
+      placeholder: 0.6.0 at 419b571, cargo build --release
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System
+      placeholder: Arch, KDE Plasma 6
+    validations:
+      required: true
+  - type: dropdown
+    id: display
+    attributes:
+      label: Display
+      options:
+        - Wayland
+        - X11
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: The behaviour, as a user sees it.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps
+      description: Numbered, from a fresh start. How often it happened, and where it ran (sandbox, VM, own session).
+    validations:
+      required: true
+  - type: textarea
+    id: cause
+    attributes:
+      label: Cause
+      description: File and function, why it happens, and how sure (confirmed and how / likely and why / a guess). Or "unknown".
+    validations:
+      required: true
+  - type: checkboxes
+    id: proof
+    attributes:
+      label: Proof
+      description: What this report brings.
+      options:
+        - label: Steps that make it happen again
+        - label: Screenshots or a video
+        - label: A test that fails
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Proof, claim by claim
+      description: One line per claim and what proves it. Attach pictures or video here, with how they were made.
+      placeholder: |
+        | Claim | Proof |
+        |---|---|
+        | ... | ... |
+    validations:
+      required: true
+  - type: textarea
+    id: combos
+    attributes:
+      label: Combinations
+      description: Views, split panels, archives, network mounts, animations off, themes, font sizes, keyboard only, empty or huge folders, Wayland and X11. Checked (with the result) or not checked.
+    validations:
+      required: true
+  - type: textarea
+    id: fix
+    attributes:
+      label: A suggested fix (optional)
+      description: The fix and why it removes the cause; whether it was run and how; what was tried against it; what it depends on that could change; what a test should check.

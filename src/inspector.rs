@@ -1096,7 +1096,7 @@ fn tool_button(ui: &mut Ui, label: &str, on: bool, tip: &str, pal: &theme::Palet
 
 pub fn inspector(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
     let pal = *env.pal;
-    let computer = tab::is_computer(&panel.tab().path);
+    let computer = tab::is_place(&panel.tab().path);
     let target: Option<Entry> = {
         let t = panel.tab();
         let idx = t.cursor.or_else(|| if t.selected.len() == 1 { t.selected.iter().next().copied() } else { None });
@@ -2391,6 +2391,11 @@ fn image_view(ui: &mut Ui, body: Rect, e: &Entry, ins: &mut Inspector, env: &mut
     let img_rect = Rect::from_center_size(area.center() + ins.pan, size);
     let clip = body;
     let painter = ui.painter().with_clip_rect(clip);
+    // The picture's own colours, softly around it, and the ones it is made of.
+    let colours = env.thumbs.get(&e.path, e.modified, want).map(|l| (l.glow, l.palette.clone()));
+    if let Some((glow, _)) = &colours {
+        crate::colours::paint_glow(&painter, img_rect, glow, crate::colours::glow_strength(pal.panel));
+    }
     checkerboard(&painter, img_rect.intersect(clip), &pal);
     painter.image(tex, img_rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
     // Pixel grid at high magnification.
@@ -2438,6 +2443,30 @@ fn image_view(ui: &mut Ui, body: Rect, e: &Entry, ins: &mut Inspector, env: &mut
     let r = Rect::from_min_size(pos2(body.right() - g.size().x - 18.0, body.bottom() - 24.0), g.size() + vec2(10.0, 6.0));
     ui.painter().rect_filled(r, CornerRadius::same(4), pal.raised.gamma_multiply(0.9));
     ui.painter().galley(r.min + vec2(5.0, 3.0), g, pal.text_dim);
+    // Its colours in a pill of their own on the left, the same height: one a click copies.
+    if let Some((_, palette)) = colours.filter(|(_, p)| !p.is_empty() && ins.crop.is_none()) {
+        let d = (r.height() - 8.0).max(8.0);
+        let gap = 4.0;
+        let n = palette.len();
+        let pill = Rect::from_min_size(pos2(body.left() + 8.0, r.top()), vec2(n as f32 * (d + gap) - gap + 8.0, r.height()));
+        if pill.right() + 8.0 < r.left() {
+            ui.painter().rect_filled(pill, CornerRadius::same(4), pal.raised.gamma_multiply(0.9));
+            for (i, (c, share)) in palette.iter().enumerate() {
+                let sr = Rect::from_min_size(pos2(pill.left() + 4.0 + i as f32 * (d + gap), pill.center().y - d / 2.0), vec2(d, d));
+                let resp = ui.interact(sr.expand(1.5), Id::new(("swatch", env.panel_id, i)), Sense::click());
+                crate::ui::note_control(ui, sr, "picture colour");
+                let hovered = resp.hovered();
+                ui.painter().rect_filled(if hovered { sr.expand(1.5) } else { sr }, CornerRadius::same(3), *c);
+                ui.painter().rect_stroke(sr, CornerRadius::same(3), Stroke::new(1.0, pal.border.gamma_multiply(0.6)), StrokeKind::Inside);
+                let hex = crate::colours::hex(*c);
+                let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(format!("{hex} · {}% of the picture · click to copy", (share * 100.0).round().max(1.0)));
+                if resp.clicked() {
+                    ui.ctx().copy_text(hex.clone());
+                    env.actions.push(crate::app::Action::Toast(format!("Copied {hex}")));
+                }
+            }
+        }
+    }
     let _ = fit_scale;
 }
 

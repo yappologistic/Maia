@@ -726,7 +726,7 @@ pub(crate) const DIALOG_RADIUS: u8 = 12;
 /// dark one's weight read as a smudge.
 pub(crate) fn popup_frame(pal: &Palette) -> egui::Frame {
     egui::Frame::NONE
-        .fill(pal.raised)
+        .fill(crate::frost::fill(pal.raised))
         .stroke(Stroke::new(1.0, pal.border))
         .corner_radius(CornerRadius::same(10))
         .inner_margin(egui::Margin::same(8))
@@ -903,6 +903,7 @@ pub(crate) fn centered_top<R>(ctx: &egui::Context, id: &str, width: f32, top: f3
         .order(egui::Order::Foreground)
         .fixed_pos(pos2((screen.center().x - w / 2.0).round(), screen.top() + top))
         .show(ctx, |ui| {
+            crate::frost::behind(ui, DIALOG_RADIUS);
             dialog_frame(pal)
                 .show(ui, |ui| {
                     ui.set_width(inner);
@@ -931,6 +932,7 @@ pub(crate) fn anchored_from<R>(ctx: &egui::Context, id: &str, pos: Pos2, pivot: 
     // remembers its last size and would cut a longer menu short (see ctxmenu.rs).
     let room = if pivot == Align2::LEFT_BOTTOM { pos.y - screen.top() - 26.0 } else { screen.height() - 16.0 - 10.0 }.max(60.0);
     let r = egui::Area::new(Id::new(id)).order(egui::Order::Foreground).pivot(pivot).fixed_pos(pos2(x, pos.y)).constrain_to(screen.shrink(6.0)).show(ctx, |ui| {
+        crate::frost::behind(ui, 10);
         popup_frame(pal)
             .inner_margin(egui::Margin::same(5))
             .show(ui, |ui| {
@@ -1220,6 +1222,8 @@ fn goto_items(app: &App, st: &mut GoToState, known: &crate::sidebar::Known, ctx:
     let label_of = |p: &Path| -> String {
         if tab::is_computer(p) {
             "Computer".into()
+        } else if tab::is_github(p) {
+            "GitHub".into()
         } else {
             p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.display().to_string())
         }
@@ -1227,7 +1231,7 @@ fn goto_items(app: &App, st: &mut GoToState, known: &crate::sidebar::Known, ctx:
     // Short location hint: the parent folder, with the home folder as ~.
     let home = fsx::home();
     let sub_of = |p: &Path| -> String {
-        if tab::is_computer(p) {
+        if tab::is_place(p) {
             return String::new();
         }
         let s = p.parent().map(|x| x.display().to_string()).unwrap_or_default();
@@ -1235,7 +1239,7 @@ fn goto_items(app: &App, st: &mut GoToState, known: &crate::sidebar::Known, ctx:
         if s.starts_with(&h) { format!("~{}", &s[h.len()..]) } else { s }
     };
     let push = |items: &mut Vec<GoItem>, p: &Path| {
-        items.push(GoItem { label: label_of(p), sub: sub_of(p), path: p.to_path_buf(), is_dir: tab::is_computer(p) || known.dirs.contains(p), header: false, usage: None });
+        items.push(GoItem { label: label_of(p), sub: sub_of(p), path: p.to_path_buf(), is_dir: tab::is_place(p) || known.dirs.contains(p), header: false, usage: None });
     };
     let header = |items: &mut Vec<GoItem>, s: &str| items.push(GoItem { label: s.into(), sub: String::new(), path: PathBuf::new(), is_dir: false, header: true, usage: None });
     if input.trim().is_empty() {
@@ -1389,7 +1393,7 @@ fn goto_items(app: &App, st: &mut GoToState, known: &crate::sidebar::Known, ctx:
             .collect();
         scored.sort_by(|a, b| b.0.cmp(&a.0));
         // Only folders known to exist (from the background snapshot or open tabs): no stat calls here.
-        for (_, p) in scored.into_iter().filter(|(_, p)| tab::is_computer(p) || known.dirs.contains(p) || tab_dirs.contains(p) || dests.contains(p)).take(200) {
+        for (_, p) in scored.into_iter().filter(|(_, p)| tab::is_place(p) || known.dirs.contains(p) || tab_dirs.contains(p) || dests.contains(p)).take(200) {
             push(&mut items, &p);
             // A folder seen only in an open tab is still a folder (it had a file's icon).
             if let Some(it) = items.last_mut() {
@@ -1471,7 +1475,7 @@ fn goto(app: &mut App, ctx: &egui::Context, st: &mut GoToState) -> bool {
     if k.tab {
         if let Some((p, true)) = &cur {
             st.back.push(st.input.clone());
-            st.input = if tab::is_computer(p) { "/".into() } else { format!("{}/", p.display()).replace("//", "/") };
+            st.input = if tab::is_place(p) { "/".into() } else { format!("{}/", p.display()).replace("//", "/") };
             st.focus = true;
         }
     }
@@ -1679,15 +1683,15 @@ pub(crate) fn applicable(app: &App, c: Cmd) -> bool {
         Cmd::RestoreTrash => t.path.starts_with(crate::sidebar::trash_dir()),
         Cmd::Undo => !app.undo.is_empty(),
         Cmd::Transfers => crate::transfers::live(app) > 0,
-        Cmd::PasteEarlier => !app.pastes.is_empty() && !tab::is_computer(&t.path),
-        Cmd::SendToPhone => t.archive.is_none() && !tab::is_computer(&t.path) && !t.targets_idx().is_empty(),
+        Cmd::PasteEarlier => !app.pastes.is_empty() && !tab::is_place(&t.path),
+        Cmd::SendToPhone => t.archive.is_none() && !tab::is_place(&t.path) && !t.targets_idx().is_empty(),
         Cmd::Redo => app.undo.can_redo(),
         Cmd::ReopenTab => !app.closed_tabs.is_empty(),
         Cmd::EditTags => t.archive.is_none() && !t.path.starts_with(crate::sidebar::trash_dir()) && crate::musictags::applies(&t.target_entries().iter().map(|e| (e.ext(), e.is_dir)).collect::<Vec<_>>()),
-        Cmd::CompressLocked => t.archive.is_none() && !tab::is_computer(&t.path) && !t.targets_idx().is_empty(),
-        Cmd::BatchRename => t.archive.is_none() && !tab::is_computer(&t.path) && !t.targets_idx().is_empty(),
-        Cmd::CopyTo => !tab::is_computer(&t.path) && !t.targets_idx().is_empty(),
-        Cmd::MoveTo => !tab::is_computer(&t.path) && t.archive.is_none() && !t.targets_idx().is_empty(),
+        Cmd::CompressLocked => t.archive.is_none() && !tab::is_place(&t.path) && !t.targets_idx().is_empty(),
+        Cmd::BatchRename => t.archive.is_none() && !tab::is_place(&t.path) && !t.targets_idx().is_empty(),
+        Cmd::CopyTo => !tab::is_place(&t.path) && !t.targets_idx().is_empty(),
+        Cmd::MoveTo => !tab::is_place(&t.path) && t.archive.is_none() && !t.targets_idx().is_empty(),
         Cmd::Rename | Cmd::Copy | Cmd::Cut | Cmd::Trash | Cmd::DeletePermanent | Cmd::Duplicate | Cmd::CreateLink => !t.targets_idx().is_empty(),
         Cmd::LoadLayout | Cmd::DeleteLayout => !app.ud.layouts.is_empty(),
         Cmd::SortFullAsc | Cmd::SortFullDesc => tab::is_computer(&t.path) && !(t.settings.sort == crate::config::SortKey::Usage && t.settings.desc == (c == Cmd::SortFullDesc)),
@@ -1698,10 +1702,10 @@ pub(crate) fn applicable(app: &App, c: Cmd) -> bool {
         Cmd::CloseLeftTabs => p.tabs.iter().take(p.active).any(|t| !t.pinned),
         Cmd::MoveTabRight => p.tabs.get(p.active + 1).is_some_and(|t| t.pinned == p.tab().pinned),
         Cmd::MoveTabLeft => p.active > 0 && p.tabs.get(p.active - 1).is_some_and(|t| t.pinned == p.tab().pinned),
-        Cmd::TabNewOrRecent | Cmd::ToggleFlatten | Cmd::OpenTerminal => !tab::is_computer(&t.path),
-        Cmd::OpenInEditor => !tab::is_computer(&t.path) && t.archive.is_none(),
-        Cmd::CopyPathRelative => !tab::is_computer(&t.path) && t.archive.is_none(),
-        Cmd::CopyCodeBlocks => !tab::is_computer(&t.path) && t.archive.is_none(),
+        Cmd::TabNewOrRecent | Cmd::ToggleFlatten | Cmd::OpenTerminal => !tab::is_place(&t.path),
+        Cmd::OpenInEditor => !tab::is_place(&t.path) && t.archive.is_none(),
+        Cmd::CopyPathRelative => !tab::is_place(&t.path) && t.archive.is_none(),
+        Cmd::CopyCodeBlocks => !tab::is_place(&t.path) && t.archive.is_none(),
         Cmd::Email => t.archive.is_none() && !t.target_entries().is_empty() && t.target_entries().iter().all(|e| !e.is_dir),
         Cmd::Print => t.archive.is_none() && !t.target_entries().is_empty() && t.target_entries().iter().all(|e| !e.is_dir && crate::sendto::printable(&e.name, e.ext())) && crate::drives::Tools::current().is_some_and(|t| crate::sendto::cups(&t)),
         Cmd::RotateLeft | Cmd::RotateRight | Cmd::ResizeHalf | Cmd::ResizeQuarter | Cmd::ResizeFit | Cmd::ResizeCustom => t.archive.is_none() && !t.path.starts_with(crate::sidebar::trash_dir()) && !t.target_entries().is_empty() && t.target_entries().iter().all(|e| !e.is_dir && crate::picfix::is_picture(e.ext())) && crate::drives::Tools::current().is_some_and(|t| crate::picfix::magick(&t).is_some()),
@@ -1711,24 +1715,24 @@ pub(crate) fn applicable(app: &App, c: Cmd) -> bool {
         Cmd::CompareFiles => t.archive.is_none() && t.target_entries().iter().filter(|e| !e.is_dir).count() == 2 && t.target_entries().len() == 2,
         Cmd::CopyWebLink | Cmd::OpenWebLink | Cmd::GitIgnore => t.archive.is_none() && crate::gitstatus::repo_for(&t.path).is_some(),
         Cmd::GitIgnoreExt => t.archive.is_none() && crate::gitstatus::repo_for(&t.path).is_some() && crate::share::shared_ext(t.target_entries().iter().map(|e| (e.path.as_path(), e.is_dir))).is_some(),
-        Cmd::CodeSearch | Cmd::FindTodos => !tab::is_computer(&t.path) && t.archive.is_none(),
-        Cmd::RunTask => !tab::is_computer(&t.path) && t.archive.is_none(),
-        Cmd::SaveSmart => !t.filter.trim().is_empty() && !t.content.on && t.smart.is_none() && !tab::is_computer(&t.path) && t.archive.is_none(),
-        Cmd::WhatsUsing => t.archive.is_none() && (!tab::is_computer(&t.path) || t.target_entries().iter().any(|e| tab::drive_dev(&e.path).is_none())),
-        Cmd::AddToShelf => t.archive.is_none() && !tab::is_computer(&t.path) && !t.targets_idx().is_empty(),
-        Cmd::ShelfMoveHere | Cmd::ShelfCopyHere => !app.shelf.items.is_empty() && t.archive.is_none() && !tab::is_computer(&t.path),
+        Cmd::CodeSearch | Cmd::FindTodos => !tab::is_place(&t.path) && t.archive.is_none(),
+        Cmd::RunTask => !tab::is_place(&t.path) && t.archive.is_none(),
+        Cmd::SaveSmart => !t.filter.trim().is_empty() && !t.content.on && t.smart.is_none() && !tab::is_place(&t.path) && t.archive.is_none(),
+        Cmd::WhatsUsing => t.archive.is_none() && (!tab::is_place(&t.path) || t.target_entries().iter().any(|e| tab::drive_dev(&e.path).is_none())),
+        Cmd::AddToShelf => t.archive.is_none() && !tab::is_place(&t.path) && !t.targets_idx().is_empty(),
+        Cmd::ShelfMoveHere | Cmd::ShelfCopyHere => !app.shelf.items.is_empty() && t.archive.is_none() && !tab::is_place(&t.path),
         Cmd::ClearShelf => !app.shelf.items.is_empty(),
-        Cmd::TidyFolder => !tab::is_computer(&t.path) && t.archive.is_none() && !t.path.starts_with(crate::sidebar::trash_dir()),
-        Cmd::CleanBuilds | Cmd::FindDuplicates | Cmd::SpaceUsed | Cmd::FreeUpSpace | Cmd::ViewPictures | Cmd::ViewCalendar => !tab::is_computer(&t.path) && t.archive.is_none(),
+        Cmd::TidyFolder => !tab::is_place(&t.path) && t.archive.is_none() && !t.path.starts_with(crate::sidebar::trash_dir()),
+        Cmd::CleanBuilds | Cmd::FindDuplicates | Cmd::SpaceUsed | Cmd::FreeUpSpace | Cmd::ViewPictures | Cmd::ViewCalendar => !tab::is_place(&t.path) && t.archive.is_none(),
         Cmd::PreviousVersions => t.archive.is_none() && !t.path.starts_with(crate::sidebar::trash_dir()) && matches!(t.target_entries().as_slice(), [e] if !e.is_dir),
         Cmd::CopyPathLine => p.line_hint.as_ref().is_some_and(|h| t.target_entries().iter().any(|e| e.path == h.0)),
         Cmd::OpenTabInWindow => p.tabs.len() > 0,
         Cmd::GroupDeleted | Cmd::GroupOriginal => crate::trashcan::is_trash_files(&t.path),
         Cmd::GroupFree | Cmd::GroupFs | Cmd::GroupFull => tab::is_computer(&t.path),
-        Cmd::GroupItems | Cmd::GroupUsage | Cmd::GroupName | Cmd::GroupType | Cmd::GroupDate | Cmd::GroupCreated | Cmd::GroupAccessed | Cmd::GroupSize => !tab::is_computer(&t.path) && !t.tree_active(),
-        Cmd::GroupTag => !tab::is_computer(&t.path) && !t.tree_active(),
-        Cmd::SortTags | Cmd::SortTaken | Cmd::SortDimensions | Cmd::SortDuration => !tab::is_computer(&t.path),
-        Cmd::GroupTaken | Cmd::GroupOrigin => !tab::is_computer(&t.path) && !t.tree_active(),
+        Cmd::GroupItems | Cmd::GroupUsage | Cmd::GroupName | Cmd::GroupType | Cmd::GroupDate | Cmd::GroupCreated | Cmd::GroupAccessed | Cmd::GroupSize => !tab::is_place(&t.path) && !t.tree_active(),
+        Cmd::GroupTag => !tab::is_place(&t.path) && !t.tree_active(),
+        Cmd::SortTags | Cmd::SortTaken | Cmd::SortDimensions | Cmd::SortDuration | Cmd::SortColour => !tab::is_place(&t.path),
+        Cmd::GroupTaken | Cmd::GroupOrigin => !tab::is_place(&t.path) && !t.tree_active(),
         Cmd::GroupExpandAll => t.settings.group != crate::config::GroupBy::None && !t.collapsed_groups.is_empty(),
         Cmd::GroupCollapseAll => t.settings.group != crate::config::GroupBy::None,
         _ => true,
@@ -1927,6 +1931,7 @@ fn palette(app: &mut App, ctx: &egui::Context, st: &mut PaletteState) -> bool {
     let pos = pos2((screen.center().x - w / 2.0).round(), screen.top() + top);
     note_layer(Id::new("palette"));
     let area = egui::Area::new(Id::new("palette")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+        crate::frost::behind(ui, 10);
         popup_frame(&pal).show(ui, |ui| {
             let (_, inner) = ui.allocate_space(vec2(w - 16.0, h - 16.0));
             let top_down = egui::Layout::top_down(egui::Align::Min);
@@ -3258,6 +3263,7 @@ fn options(app: &mut App, ctx: &egui::Context, st: &mut OptState) -> bool {
     let pos = pos2((screen.center().x - w / 2.0).round(), (screen.top() + ((screen.height() - h) / 2.0).clamp(12.0, 70.0)).round());
     note_layer(Id::new("options"));
     let area = egui::Area::new(Id::new("options")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+        crate::frost::behind(ui, DIALOG_RADIUS);
         dialog_frame(&pal).show(ui, |ui| {
             let (_, inner) = ui.allocate_space(vec2(w - 2.0 * DIALOG_PAD, h - 2.0 * DIALOG_PAD));
             let top_down = egui::Layout::top_down(egui::Align::Min);
@@ -4559,6 +4565,7 @@ fn themes(app: &mut App, ctx: &egui::Context) -> bool {
     let pos = pos2((screen.center().x - w / 2.0).round(), (screen.top() + ((screen.height() - h) / 2.0).clamp(12.0, 70.0)).round());
     note_layer(Id::new("themes"));
     let area = egui::Area::new(Id::new("themes")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+        crate::frost::behind(ui, DIALOG_RADIUS);
         dialog_frame(&pal).show(ui, |ui| {
             let (_, inner) = ui.allocate_space(vec2(w - 2.0 * DIALOG_PAD, h - 2.0 * DIALOG_PAD));
             let top_down = egui::Layout::top_down(egui::Align::Min);
@@ -5109,7 +5116,8 @@ fn sync(app: &mut App, ctx: &egui::Context, st: &mut crate::compare::SyncState) 
             dialog_buttons(ui, |ui| close = plain_button(ui, "Cancel", &pal).clicked());
             return;
         };
-        if plan.copy.is_empty() && plan.update.is_empty() && plan.extra.is_empty() && plan.unread.is_empty() {
+        let nothing = [plan.copy.is_empty(), plan.update.is_empty(), plan.extra.is_empty(), plan.unlisted.is_empty()];
+        if nothing.iter().all(|&n| n) {
             ui.label(egui::RichText::new("Both sides are the same already").color(pal.text_dim));
             dialog_buttons(ui, |ui| close = primary_button(ui, "Close", true, &pal).clicked());
             return;
@@ -5130,8 +5138,10 @@ fn sync(app: &mut App, ctx: &egui::Context, st: &mut crate::compare::SyncState) 
             if !plan.update.is_empty() {
                 dot(ui, crate::gitstatus::GREEN, format!("{} here, replacing the older ones there (to the trash)", count(plan.update.len(), "newer file", "newer files")));
             }
-            if !plan.unread.is_empty() {
-                dot(ui, pal.danger, if plan.unread.len() == 1 { "1 folder couldn't be read, so nothing in it changes".to_string() } else { format!("{} folders couldn't be read, so nothing in them changes", plan.unread.len()) });
+            match plan.unlisted.len() {
+                0 => {}
+                1 => dot(ui, pal.danger, "1 folder couldn't be read and is left as it is".to_string()),
+                n => dot(ui, pal.danger, format!("{n} folders couldn't be read and are left as they are")),
             }
             if extra > 0 {
                 let text = egui::RichText::new(format!("Mirror: also move {} only there to the trash", count(extra, "item", "items"))).color(if st.mirror { pal.danger } else { pal.text });
@@ -5147,7 +5157,7 @@ fn sync(app: &mut App, ctx: &egui::Context, st: &mut crate::compare::SyncState) 
             .iter()
             .map(|(_, d)| ("New", pal.accent, rel(d)))
             .chain(plan.update.iter().map(|(_, d)| ("Newer", crate::gitstatus::GREEN, rel(d))))
-            .chain(plan.unread.iter().map(|d| ("Unread", pal.danger, rel(d))))
+            .chain(plan.unlisted.iter().map(|d| ("Unread", pal.danger, rel(d))))
             .chain(plan.extra.iter().filter(|_| st.mirror).map(|d| ("Trash", pal.danger, rel(d))))
             .collect();
         group_label(ui, &format!("In “{}”", name(&st.to)), &pal);
@@ -5822,7 +5832,7 @@ fn path_menu(app: &mut App, ctx: &egui::Context, panel: u64, path: &Path, anchor
         return false;
     }
     let mut done = false;
-    let computer = tab::is_computer(path);
+    let computer = tab::is_place(path);
     let (_, rect) = anchored(ctx, "pathmenu", anchor, 250.0, &pal, |ui| {
         if !computer {
             if menu_item(ui, "Copy path", None, &pal) {
@@ -5978,7 +5988,7 @@ fn history(app: &mut App, ctx: &egui::Context, panel: u64, anchor: Pos2) -> bool
     let (_, rect) = anchored(ctx, "history", anchor, 320.0, &pal, |ui| {
         menu_heading(ui, "History", &pal);
         for (i, h) in hist.iter().take(15) {
-            let name = if tab::is_computer(h) { "Computer".into() } else { h.display().to_string() };
+            let name = if tab::is_computer(h) { "Computer".into() } else if tab::is_github(h) { "GitHub".into() } else { h.display().to_string() };
             let label = if *i == pos { format!("● {name}") } else { name };
             if menu_item(ui, &label, None, &pal) {
                 go = Some(h.clone());

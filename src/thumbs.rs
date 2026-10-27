@@ -21,7 +21,7 @@ pub fn can_thumb(e: &crate::fsx::Entry) -> bool {
         return false;
     }
     let ext = e.ext();
-    is_image_ext(ext) || ext == "svg" || crate::drives::Tools::current().is_some_and(|t| crate::extpic::can(&t, ext)) || crate::thumbcache::thumbnailer_for(&crate::mime::mime_db().for_name(&e.name, false, false)).is_some()
+    is_image_ext(ext) || ext == "svg" || crate::fontview::is_font(ext) || crate::drives::Tools::current().is_some_and(|t| crate::extpic::can(&t, ext)) || crate::thumbcache::thumbnailer_for(&crate::mime::mime_db().for_name(&e.name, false, false)).is_some()
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
@@ -38,6 +38,10 @@ pub struct Loaded {
     pub dims: [u32; 2],
     /// The picture's colour at a glance (`tone`).
     pub tone: egui::Color32,
+    /// The colours it is mostly made of, with their shares (`colours::palette`).
+    pub palette: Arc<[(egui::Color32, f32)]>,
+    /// Its colours by place, for the glow behind it (`colours::glow`).
+    pub glow: [egui::Color32; 16],
 }
 
 enum Slot {
@@ -50,9 +54,11 @@ struct Job {
     key: Key,
 }
 
+type Colours = (egui::Color32, Arc<[(egui::Color32, f32)]>, [egui::Color32; 16]);
+
 struct Done {
     key: Key,
-    result: Option<(ColorImage, [u32; 2], egui::Color32)>,
+    result: Option<(ColorImage, [u32; 2], Colours)>,
 }
 
 pub struct Thumbs {
@@ -89,8 +95,8 @@ impl Thumbs {
                     match job {
                         Some(j) => {
                             let result = decode(&j.key.path, j.key.size, j.key.mtime, tools.as_ref()).map(|(img, dims)| {
-                                let tone = tone(&img);
-                                (img, dims, tone)
+                                let colours = (tone(&img), crate::colours::palette(&img, 5).into(), crate::colours::glow(&img));
+                                (img, dims, colours)
                             });
                             if tx.send(Done { key: j.key, result }).is_err() {
                                 return;
@@ -156,13 +162,13 @@ impl Thumbs {
         let mut n = 0;
         while let Ok(d) = self.rx.try_recv() {
             match d.result {
-                Some((img, dims, tone)) => {
+                Some((img, dims, (tone, palette, glow))) => {
                     let bytes = img.width() * img.height() * 4;
                     let tex = ctx.load_texture(d.key.path.to_string_lossy(), img, TextureOptions::LINEAR);
                     self.used_bytes += bytes;
                     self.order.push_back(d.key.clone());
                     self.ready_by_path.insert(d.key.path.clone(), d.key.clone());
-                    self.slots.insert(d.key, Slot::Ready(Loaded { tex, at: Instant::now(), dims, tone }));
+                    self.slots.insert(d.key, Slot::Ready(Loaded { tex, at: Instant::now(), dims, tone, palette, glow }));
                 }
                 None => {
                     self.failed.insert(d.key.path.clone());
@@ -216,8 +222,22 @@ fn decode(path: &Path, max: u32, mtime: Option<SystemTime>, tools: Option<&crate
     make(path, max, mtime, tools).map(|(img, dims)| (to_color(img), dims))
 }
 
+/// A picture small (the shared cache's normal thumbnail when there is one), for working
+/// out its colours off the thumbnail workers.
+pub fn small(path: &Path, mtime: Option<SystemTime>, tools: Option<&crate::drives::Tools>) -> Option<ColorImage> {
+    make(path, 128, mtime, tools).map(|(img, _)| to_color(img))
+}
+
 fn make(path: &Path, max: u32, mtime: Option<SystemTime>, tools: Option<&crate::drives::Tools>) -> Option<(crate::imgdec::Rgba, [u32; 2])> {
     use crate::thumbcache as tc;
+    // A font draws its own: "Ag" in itself (quick, and not the desktop's way of showing it).
+    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if crate::fontview::is_font(&ext) {
+        return crate::fontview::tile(path, max.min(512)).map(|img| {
+            let d = [img.w, img.h];
+            (img, d)
+        });
+    }
     let cacheable = max <= 1024;
     if cacheable {
         if let Some((img, dims)) = tc::lookup(path, mtime, max) {

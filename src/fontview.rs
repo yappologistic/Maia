@@ -184,6 +184,41 @@ pub fn line(font: &FontRef, text: &str, px: f32) -> Option<(usize, usize, Vec<u8
     any.then_some((w, h, buf))
 }
 
+/// A font file's thumbnail: "Ag" in the font itself on a small paper card, `px` a side,
+/// so a folder of fonts reads at a glance.
+pub fn tile(path: &Path, px: u32) -> Option<crate::imgdec::Rgba> {
+    let m = std::fs::metadata(path).ok()?;
+    if !m.is_file() || m.len() > 64 << 20 {
+        return None;
+    }
+    let raw = std::fs::read(path).ok()?;
+    let d = sfnt(&raw).ok()?;
+    let font = FontRef::try_from_slice_and_index(&d, 0).ok()?;
+    let side = px.clamp(32, 512) as usize;
+    let (w, h, cov) = line(&font, "Ag", side as f32 * 0.46)?;
+    let mut out = vec![0u8; side * side * 4];
+    let (paper, ink) = ([0xf4u8, 0xf1, 0xea], [0x24u8, 0x24, 0x26]);
+    let rad = side as f32 * 0.12;
+    let (ox, oy) = ((side as i64 - w as i64) / 2, (side as i64 - h as i64) / 2);
+    for y in 0..side {
+        for x in 0..side {
+            // Rounded corners: the card's edge, a pixel soft.
+            let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+            let cx = fx.clamp(rad, side as f32 - rad);
+            let cy = fy.clamp(rad, side as f32 - rad);
+            let inside = (rad - ((fx - cx).powi(2) + (fy - cy).powi(2)).sqrt() + 0.5).clamp(0.0, 1.0);
+            let (gx, gy) = (x as i64 - ox, y as i64 - oy);
+            let c = if gx >= 0 && gy >= 0 && (gx as usize) < w && (gy as usize) < h { cov[gy as usize * w + gx as usize] as f32 / 255.0 } else { 0.0 };
+            let o = (y * side + x) * 4;
+            for k in 0..3 {
+                out[o + k] = (paper[k] as f32 + (ink[k] as f32 - paper[k] as f32) * c) as u8;
+            }
+            out[o + 3] = (inside * 255.0) as u8;
+        }
+    }
+    Some(crate::imgdec::Rgba { w: side as u32, h: side as u32, px: out })
+}
+
 /// What the preview shows: the names, the sample lines drawn at `ppp` pixels per point
 /// (size in points, then the picture), and whether this very file is installed.
 pub struct Preview {

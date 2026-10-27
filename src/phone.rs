@@ -455,7 +455,7 @@ pub struct State {
 pub fn open(app: &mut App) {
     let t = app.tab();
     let sel: Vec<crate::fsx::Entry> = t.target_entries().into_iter().cloned().collect();
-    if sel.is_empty() || crate::tab::is_computer(&t.path) || t.archive.is_some() {
+    if sel.is_empty() || crate::tab::is_place(&t.path) || t.archive.is_some() {
         app.toast("Select what to send");
         return;
     }

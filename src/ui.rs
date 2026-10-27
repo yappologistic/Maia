@@ -640,6 +640,20 @@ impl App {
     /// Tab strip for a panel within the current horizontal layout.
     pub fn tab_strip(&mut self, ui: &mut Ui, panel_id: u64, max_w: f32) {
         let pal = self.pal;
+        // Folders a running job copies, moves or unpacks into, and how far it is: their
+        // tabs show a ring in place of the folder icon.
+        let work: Vec<(PathBuf, f32)> = self.jobs.iter().filter_map(|j| {
+            let dest = match &j.kind {
+                crate::ops::OpKind::Copy { dest, .. } | crate::ops::OpKind::Move { dest, .. } | crate::ops::OpKind::Extract { dest, .. } => dest.clone(),
+                _ => return None,
+            };
+            let p = j.progress.lock().ok()?;
+            if p.finished {
+                return None;
+            }
+            let f = if p.total_bytes > 0 { p.done_bytes as f32 / p.total_bytes as f32 } else if p.total_items > 0 { p.done_items as f32 / p.total_items as f32 } else { 0.0 };
+            Some((dest, f.clamp(0.0, 1.0)))
+        }).collect();
         let Some(p) = self.panels.get(&panel_id) else { return };
         let n = p.tabs.len();
         let plus_w = 28.0;
@@ -729,8 +743,24 @@ impl App {
             if t.is_loading() {
                 spinner(ui.painter(), ic.center(), 5.5, pal.accent, now);
                 ui.ctx().request_repaint();
+            } else if let Some((_, f)) = work.iter().find(|(d, _)| *d == t.path) {
+                // A job's progress into this folder, as a ring.
+                note_control(ui, ic, "tab progress");
+                let c = ic.center();
+                let rad = ic.width() * 0.42;
+                ui.painter().circle_stroke(c, rad, Stroke::new(2.2, pal.border));
+                let steps = ((f * 40.0).ceil() as usize).max(1);
+                let pts: Vec<egui::Pos2> = (0..=steps).map(|k| {
+                    let a = -std::f32::consts::FRAC_PI_2 + f * std::f32::consts::TAU * k as f32 / steps as f32;
+                    c + vec2(a.cos(), a.sin()) * rad
+                }).collect();
+                if *f > 0.0 {
+                    ui.painter().add(egui::Shape::line(pts, Stroke::new(2.2, pal.accent)));
+                }
             } else if tab::is_computer(&t.path) {
                 paint_glyph(ui.painter(), ic, Glyph::Drive, pal.text_dim);
+            } else if tab::is_github(&t.path) {
+                crate::theme::paint_symbol(ui.painter(), ic, "user", pal.text_dim);
             } else if !crate::icons::dir(ui.painter(), ic, &t.path) {
                 crate::theme::paint_icon(ui.painter(), ic, crate::theme::FileCat::Folder, "", false);
             }
@@ -764,7 +794,7 @@ impl App {
             if resp.middle_clicked() && !t.pinned {
                 actions.push(Action::CloseTab { panel: panel_id, idx: i });
             }
-            if resp.double_clicked() && !tab::is_computer(&t.path) {
+            if resp.double_clicked() && !tab::is_place(&t.path) {
                 actions.push(Action::Open(Popup::properties(vec![t.path.clone()])));
             }
             if resp.secondary_clicked() {
@@ -933,7 +963,7 @@ impl App {
             let (show, hidden) = (self.cfg.show_readme, &self.ud.readme_hidden);
             let p = self.panels.get_mut(&id).expect("drawn panel");
             let t = p.tab_mut();
-            let fits = show && !tab::is_computer(&t.path) && t.archive.is_none() && !t.flatten && t.smart.is_none() && !t.content.on && t.filter.is_empty() && !t.settings.column_view && !t.settings.stack_view && !hidden.contains(&t.path) && !t.path.starts_with(crate::sidebar::trash_dir());
+            let fits = show && !tab::is_place(&t.path) && t.archive.is_none() && !t.flatten && t.smart.is_none() && !t.content.on && t.filter.is_empty() && !t.settings.column_view && !t.settings.stack_view && !hidden.contains(&t.path) && !t.path.starts_with(crate::sidebar::trash_dir());
             let chosen = self.cfg.readme_height;
             let room = list_rect.height();
             let want = if fits {
@@ -1006,7 +1036,19 @@ impl App {
                 list_rect
             }
         };
-        {
+        let github = self.panels.get(&id).is_some_and(|p| tab::is_github(&p.tab().path));
+        if github {
+            let App { panels, cfg, actions, github: page, .. } = self;
+            if let Some(panel) = panels.get_mut(&id) {
+                panel.rect = rect;
+                panel.list_rect = list_rect;
+                panel.inspector_rect = None;
+            }
+            let mut cu = ui.new_child(UiBuilder::new().max_rect(list_rect));
+            cu.set_clip_rect(list_rect.intersect(ui.clip_rect()));
+            crate::github::page(&mut cu, list_rect, page, cfg, &pal, actions, id);
+        }
+        if !github {
             let App { panels, cfg, thumbs, stats, recents_set, pinned_set, actions, keymap, drag, clipboard, ud, avatars, .. } = self;
             let panel = panels.get_mut(&id).unwrap();
             panel.rect = rect;
@@ -1077,7 +1119,7 @@ impl App {
             let show = |p: &Path| if tab::is_computer(p) { "Computer".to_string() } else { p.display().to_string() };
             (t.hist_pos.checked_sub(1).and_then(|i| t.history.get(i)).map(|h| show(&h.path)), t.history.get(t.hist_pos + 1).map(|h| show(&h.path)))
         };
-        let up_to = if tab::is_computer(&path) { None } else { Some(path.parent().map(|p| p.display().to_string()).unwrap_or_else(|| "Computer".into())) };
+        let up_to = if tab::is_computer(&path) { None } else if tab::is_github(&path) { Some("Computer".into()) } else { Some(path.parent().map(|p| p.display().to_string()).unwrap_or_else(|| "Computer".into())) };
         let r = glyph_button(ui, Glyph::Back, "", can_back, &pal);
         if cmd_tip(r, back_to, Cmd::Back, &self.keymap, &pal).clicked() {
             cmd = Some(Cmd::Back);
@@ -1107,7 +1149,7 @@ impl App {
             ui.painter().rect_filled(r, CornerRadius::same(5), pal.hover);
         }
         paint_bookmark(ui.painter(), Rect::from_center_size(r.center(), Vec2::splat(15.0)), bookmarked, if bookmarked { pal.text } else { pal.text_dim });
-        if cmd_tip(resp, Some(if bookmarked { "Remove bookmark".into() } else { "Bookmark this folder".into() }), Cmd::ToggleBookmark, &self.keymap, &pal).clicked() && !tab::is_computer(&path) {
+        if cmd_tip(resp, Some(if bookmarked { "Remove bookmark".into() } else { "Bookmark this folder".into() }), Cmd::ToggleBookmark, &self.keymap, &pal).clicked() && !tab::is_place(&path) {
             self.actions.push(Action::FocusPanel(id));
             if bookmarked {
                 self.actions.push(Action::BookmarkRemove(path.clone()));
@@ -1157,7 +1199,7 @@ impl App {
             self.popup = Popup::path_menu(id, path.to_path_buf(), ui.ctx().pointer_interact_pos().unwrap_or(rect.left_bottom()));
         }
         if !self.cfg.breadcrumbs {
-            let mut s = if tab::is_computer(path) { "Computer".into() } else { path.display().to_string() };
+            let mut s = if tab::is_computer(path) { "Computer".into() } else if tab::is_github(path) { "Computer › GitHub".into() } else { path.display().to_string() };
             if let Some(n) = &smart {
                 s = format!("{s} › {n}");
             }
@@ -1169,6 +1211,9 @@ impl App {
         let mut segs: Vec<(String, PathBuf)> = vec![];
         if tab::is_computer(path) {
             segs.push(("Computer".into(), path.to_path_buf()));
+        } else if tab::is_github(path) {
+            segs.push(("Computer".into(), PathBuf::from(tab::COMPUTER)));
+            segs.push(("GitHub".into(), path.to_path_buf()));
         } else {
             let home = fsx::home();
             let mut acc = PathBuf::new();
@@ -1238,8 +1283,33 @@ impl App {
             x += 20.0;
         }
         let n = segs.len();
+        // Going into a folder, the new names rise into the path; an accent line moves
+        // under the folder shown. Kept per panel: the path drawn and since when.
+        let now = ui.input(|i| i.time);
+        let anim = self.cfg.animations;
+        let key = Id::new(("crumb moves", id));
+        let (since, kept) = ui.ctx().data_mut(|d| {
+            let (old, t0, common) = d.get_temp::<(PathBuf, f64, usize)>(key).unwrap_or((path.to_path_buf(), -10.0, n));
+            if old == path {
+                (t0, common)
+            } else {
+                let same = old.components().zip(path.components()).take_while(|(a, b)| a == b).count();
+                // Computer and GitHub share their first segment with nothing on disk.
+                let same = if tab::is_place(&old) != tab::is_place(path) { 0 } else { same };
+                let common = if tab::is_computer(path) { 0 } else { segs.iter().take_while(|(_, sp)| sp.components().count() <= same && path.starts_with(sp)).count() };
+                d.insert_temp(key, (path.to_path_buf(), now, common));
+                (now, common)
+            }
+        });
+        let rise = if anim { (((now - since) / 0.22).clamp(0.0, 1.0)) as f32 } else { 1.0 };
+        let rise = 1.0 - (1.0 - rise).powi(3);
+        if rise < 1.0 {
+            ui.ctx().request_repaint();
+        }
+        let mut under: Option<Rect> = None;
         for (i, (label, p)) in segs.iter().enumerate().skip(start) {
             let last = i + 1 == n;
+            let fresh = i >= kept && rise < 1.0;
             let room = widths[i].min(rect.right() - x - 4.0).max(20.0);
             let dropped_here = matches!(&self.popup, Popup::PathDropdown(st) if st.panel == id && st.dir == *p);
             let g = listing::elided(ui, label, font.clone(), room - 10.0, if dropped_here { Color32::WHITE } else if last { pal.text } else { pal.text_dim });
@@ -1254,7 +1324,11 @@ impl App {
             } else if resp.hovered() {
                 ui.painter().rect_filled(r, CornerRadius::same(5), pal.hover);
             }
-            ui.painter().galley(pos2(r.left() + 6.0, r.center().y - g.size().y / 2.0), g, pal.text);
+            let (dy, a) = if fresh { (6.0 * (1.0 - rise), rise) } else { (0.0, 1.0) };
+            ui.painter().galley(pos2(r.left() + 6.0, r.center().y - g.size().y / 2.0 + dy), g, pal.text.gamma_multiply(a));
+            if last {
+                under = Some(Rect::from_min_max(pos2(r.left() + 6.0, r.bottom() - 3.0), pos2(r.left() + 6.0 + (w - 12.0).max(4.0), r.bottom() - 1.0)));
+            }
             if resp.clicked() {
                 self.actions.push(Action::Navigate { panel: id, path: p.clone() });
             }
@@ -1266,7 +1340,7 @@ impl App {
             }
             x += w;
             // Separator chevron opens the subfolder dropdown for this segment.
-            if !tab::is_computer(p) || !last {
+            if !tab::is_place(p) || !last {
                 let sr = Rect::from_min_size(pos2(x, rect.top() + 3.0), vec2(sep_w, rect.height() - 6.0));
                 let sresp = ui.interact(sr, Id::new(("crumb_sep", id, i)), Sense::click());
                 if sresp.hovered() {
@@ -1291,11 +1365,28 @@ impl App {
                 break;
             }
         }
+        // The line under the folder shown slides to it from the last one.
+        if let Some(u) = under {
+            let t = if anim { 0.22 } else { 0.0 };
+            let l = ui.ctx().animate_value_with_time(Id::new(("crumb line l", id)), u.left(), t);
+            let r = ui.ctx().animate_value_with_time(Id::new(("crumb line r", id)), u.right(), t);
+            let line = Rect::from_min_max(pos2(l.min(r - 4.0), u.top()), pos2(r, u.bottom()));
+            if line.is_finite() && rect.contains(line.center()) {
+                ui.painter().rect_filled(line, CornerRadius::same(1), pal.accent.gamma_multiply(0.85));
+            }
+        }
     }
 
     fn footer_ui(&mut self, ui: &mut Ui, id: u64, rect: Rect) {
         let pal = self.pal;
         ui.painter().line_segment([rect.left_top(), rect.right_top()], Stroke::new(1.0, pal.border));
+        // The GitHub page has no files to filter or count: only when its answers are from.
+        if self.panels.get(&id).is_some_and(|p| tab::is_github(&p.tab().path)) {
+            let s = self.github.status_line();
+            let g = listing::elided(ui, &s, FontId::proportional(self.cfg.font_size - 1.5), rect.width() - 24.0, pal.text_dim);
+            ui.painter().galley(pos2(rect.left() + 12.0, rect.center().y - g.size().y / 2.0), g, pal.text_dim);
+            return;
+        }
         let mut child = ui.new_child(UiBuilder::new().max_rect(rect.shrink2(vec2(8.0, 2.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
         let ui = &mut child;
         ui.spacing_mut().item_spacing.x = 4.0;
@@ -1305,6 +1396,7 @@ impl App {
         let history = p.inspector.as_ref().is_some_and(|i| i.git.is_some());
         let t = p.tab_mut();
         let (vf, tf, vfi, tfi) = t.counts;
+        let glance = crate::glance::shares(t);
         let types_on = !t.settings.only_types.is_empty();
         let flatten = t.flatten || t.expand_all_on;
         let flat_only = t.flatten;
@@ -1410,6 +1502,16 @@ impl App {
                     self.actions.push(Action::FocusPanel(id));
                     self.popup = Popup::types(id);
                 }
+            }
+            // What kinds of file fill the folder, as a ring; pointing at it names them.
+            if !glance.is_empty() && ui.available_width() >= 24.0 {
+                let (r, resp) = ui.allocate_exact_size(vec2(24.0, 20.0), Sense::hover());
+                note_control(ui, r, "folder at a glance");
+                if resp.hovered() {
+                    ui.painter().rect_filled(r, CornerRadius::same(5), pal.hover);
+                }
+                crate::glance::paint_ring(ui, Rect::from_center_size(r.center(), Vec2::splat(13.0)), &glance, &pal);
+                resp.on_hover_text(crate::glance::describe(&glance));
             }
             let count = |v: usize, t: usize| if v == t { fmt_count(t) } else { format!("{}/{}", fmt_count(v), fmt_count(t)) };
             let file_icon = move |p: &egui::Painter, r: Rect| {
@@ -1837,6 +1939,18 @@ impl App {
                         } else {
                             ui.label(egui::RichText::new(line).small().color(pal.text_dim));
                         }
+                        // Bytes copied: the speed over time, under the figures.
+                        if p.total_bytes > 0 && p.within.is_none() && waiting.is_none() {
+                            let samples = crate::speedline::sample(j.id, p.done_bytes, ui.input(|i| i.time));
+                            if samples.len() >= 2 {
+                                let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
+                                note_control(ui, r, "job speed");
+                                crate::speedline::paint(ui, r, &samples, &pal);
+                            }
+                            if !done {
+                                ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+                            }
+                        }
                         if !done && !p.current.is_empty() && p.clash.is_none() {
                             // One line, cut with "…": a long name wrapped and the card grew and
                             // shrank from file to file.
@@ -1893,6 +2007,7 @@ impl App {
                 if let Some(k) = remove {
                     self.jobs.remove(k);
                 }
+                crate::speedline::keep_only(&self.jobs.iter().map(|j| j.id).collect::<Vec<_>>());
                 if let Some((msg, at)) = &self.toast {
                     let el = at.elapsed().as_secs_f32();
                     if el < 3.0 {

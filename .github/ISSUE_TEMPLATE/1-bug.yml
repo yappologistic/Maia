@@ -1,0 +1,77 @@
+name: Bug report
+description: Something in Maia is broken, crashes, looks wrong or is slow.
+labels: ["found by: person", "status: needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One problem per issue. Search the open issues first. Found it with an AI? Use the
+        **AI bug report** form instead.
+  - type: dropdown
+    id: type
+    attributes:
+      label: What kind of problem
+      options:
+        - Something is broken
+        - It crashes
+        - It looks wrong
+        - It's slow
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Maia version
+      description: "`maia --version`, or About Maia in the command palette. And how you installed it."
+      placeholder: 0.6.0, from the AppImage
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: Distribution and desktop.
+      placeholder: Fedora 43, GNOME
+    validations:
+      required: true
+  - type: dropdown
+    id: display
+    attributes:
+      label: Display
+      options:
+        - Wayland
+        - X11
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps
+      description: What you did, from opening Maia.
+      placeholder: |
+        1. Open a folder with 2,000 photos
+        2. Switch to icons
+        3. Scroll to the bottom
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: checkboxes
+    id: proof
+    attributes:
+      label: Proof
+      description: What this report brings. Attach screenshots or a short video below; check them for anything personal first.
+      options:
+        - label: Steps that make it happen again
+        - label: Screenshots or a video
+        - label: A test that fails
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, a video, error text, what you've already tried.

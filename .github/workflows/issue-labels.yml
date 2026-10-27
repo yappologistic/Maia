@@ -1,0 +1,58 @@
+# A new issue filed through a form gets labels for its answers: the kind of problem, the
+# display, what proof it brings and, for AI reports, the model and whether a person
+# checked it. Only on opening, so labels changed by hand later stay as they are.
+name: Issue labels
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.issue.body || "";
+            // A form's answers come as "### Question" followed by the answer.
+            const answers = {};
+            for (const part of body.split(/^### /m).slice(1)) {
+              const nl = part.indexOf("\n");
+              answers[part.slice(0, nl).trim()] = part.slice(nl + 1).trim();
+            }
+            const pick = (question, map) => map[(answers[question] || "").trim()];
+            const labels = [
+              pick("What kind of problem", {
+                "Something is broken": "type: bug",
+                "It crashes": "type: crash",
+                "It looks wrong": "type: looks wrong",
+                "It's slow": "type: slow",
+              }),
+              pick("Display", { "Wayland": "on: Wayland", "X11": "on: X11" }),
+              pick("Model family", {
+                "Claude": "model: Claude",
+                "GPT / Codex": "model: GPT / Codex",
+                "Gemini": "model: Gemini",
+                "Grok": "model: Grok",
+                "Open model (Llama, Qwen, DeepSeek...)": "model: open model",
+                "Other": "model: other",
+              }),
+              pick("Checked by a person", { "No": "found by: AI", "Yes, a person checked it": "found by: AI + person" }),
+            ];
+            if ("Proof" in answers) {
+              const ticked = (text) => answers["Proof"].includes(`- [X] ${text}`) || answers["Proof"].includes(`- [x] ${text}`);
+              const proof = [
+                ["Steps that make it happen again", "proof: steps"],
+                ["Screenshots or a video", "proof: screenshots / video"],
+                ["A test that fails", "proof: test"],
+              ].filter(([text]) => ticked(text)).map(([, label]) => label);
+              labels.push(...(proof.length ? proof : ["proof: none"]));
+            }
+            const add = labels.filter(Boolean);
+            if (add.length) {
+              await github.rest.issues.addLabels({ ...context.repo, issue_number: context.payload.issue.number, labels: add });
+            }

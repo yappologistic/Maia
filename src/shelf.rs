@@ -104,7 +104,7 @@ impl Shelf {
 /// The selection, onto the shelf.
 pub fn add_selection(app: &mut App) {
     let t = app.tab();
-    if crate::tab::is_computer(&t.path) || t.archive.is_some() {
+    if crate::tab::is_place(&t.path) || t.archive.is_some() {
         app.toast("Only files and folders go on the shelf");
         return;
     }
@@ -124,7 +124,7 @@ pub fn add_selection(app: &mut App) {
 /// empties the shelf; a copy keeps it for the next folder.
 pub fn put_here(app: &mut App, mv: bool) {
     let dest = app.panel().path();
-    if crate::tab::is_computer(&dest) || app.tab().archive.is_some() {
+    if crate::tab::is_place(&dest) || app.tab().archive.is_some() {
         app.toast("The shelf goes into a folder");
         return;
     }
@@ -240,7 +240,7 @@ pub fn strip(app: &mut App, ui: &mut Ui) {
     if cr.on_hover_text("Clear the shelf").clicked() {
         actions.push(Action::Cmd(crate::commands::Cmd::ClearShelf));
     }
-    let here = app.panels.get(&app.active).map(|p| p.path()).is_some_and(|p| !crate::tab::is_computer(&p));
+    let here = app.panels.get(&app.active).map(|p| p.path()).is_some_and(|p| !crate::tab::is_place(&p));
     if here {
         if button(ui, "Move Here", true, "shelf move", &mut right) {
             actions.push(Action::Cmd(crate::commands::Cmd::ShelfMoveHere));

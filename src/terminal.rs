@@ -389,7 +389,7 @@ impl Pane {
 /// Computer view, an archive, the trash or a kernel filesystem).
 fn place(t: &crate::tab::Tab) -> Option<PathBuf> {
     let p = &t.path;
-    let real = t.archive.is_none() && p.is_absolute() && !crate::tab::is_computer(p);
+    let real = t.archive.is_none() && p.is_absolute() && !crate::tab::is_place(p);
     (real && !p.ancestors().any(crate::trashcan::is_trash_files) && !crate::fsx::is_virtual_fs(p) && p.is_dir()).then(|| p.clone())
 }
 

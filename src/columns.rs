@@ -142,7 +142,7 @@ pub fn sync(t: &mut Tab, c: &ViewCtx) {
     }
     // What the tab lists is copied when it lands, so leaving the folder leaves its column
     // filled. A listing big enough to make the copy cost is read again instead.
-    let plain = !t.flatten && t.smart.is_none() && !tab::is_computer(&t.path) && t.error.is_none();
+    let plain = !t.flatten && t.smart.is_none() && !tab::is_place(&t.path) && t.error.is_none();
     if plain && !t.is_loading() && t.loaded_at.is_some() && t.loaded_at != st.copied && t.entries.len() <= COPY_MAX {
         st.copied = t.loaded_at;
         let entries: Vec<Entry> = t.entries.iter().filter(|e| e.depth == 0).cloned().collect();
@@ -161,7 +161,7 @@ pub fn sync(t: &mut Tab, c: &ViewCtx) {
         }
     }
     // The folder under the cursor, while it is the only one picked.
-    let under = t.cursor.filter(|_| t.selected.len() <= 1).and_then(|i| t.entries.get(i as usize)).filter(|e| e.is_dir && e.depth != DEAD && tab::drive_dev(&e.path).is_none() && !tab::is_computer(&e.path));
+    let under = t.cursor.filter(|_| t.selected.len() <= 1).and_then(|i| t.entries.get(i as usize)).filter(|e| e.is_dir && e.depth != DEAD && tab::drive_dev(&e.path).is_none() && !tab::is_place(&e.path));
     st.preview = under.map(|e| e.path.clone());
     // Columns follow the tab's sort and the hidden-file options.
     let look = (t.settings.sort, t.settings.desc, t.settings.show_files, c.show_hidden, c.show_system, c.folders_first, c.recents_on_top);
@@ -248,7 +248,7 @@ pub fn watch(t: &mut Tab, changed: &[PathBuf], want: &mut HashSet<PathBuf>) {
     }
     // Nothing inside an archive can be watched (it is not on disk as folders).
     let archive = t.archive.as_deref();
-    want.extend(st.shown().filter(|p| !tab::is_computer(p) && archive.is_none_or(|a| !p.starts_with(a))).cloned());
+    want.extend(st.shown().filter(|p| !tab::is_place(p) && archive.is_none_or(|a| !p.starts_with(a))).cloned());
     for col in st.cols.iter_mut().filter(|c| changed.contains(&c.tab.path)) {
         col.tab.reload();
     }

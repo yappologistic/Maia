@@ -1,0 +1,20 @@
+name: Idea
+description: Something Maia could do, or do better.
+labels: ["type: idea", "status: needs triage"]
+body:
+  - type: markdown
+    attributes:
+      value: Maia stays small on purpose, so some good ideas won't fit.
+  - type: textarea
+    id: need
+    attributes:
+      label: What you're trying to do
+      description: And where Maia gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+    validations:
+      required: true

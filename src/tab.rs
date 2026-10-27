@@ -18,6 +18,18 @@ pub fn is_computer(p: &Path) -> bool {
     p.as_os_str() == COMPUTER || p.to_str().is_some_and(|s| s.ends_with(":computer") && !s.contains('/') && s.len() < 24)
 }
 
+/// Your GitHub profile (`github.rs`): a place Maia draws, not a folder.
+pub const GITHUB: &str = "maia:github";
+
+pub fn is_github(p: &Path) -> bool {
+    p.as_os_str() == GITHUB
+}
+
+/// Computer or GitHub: places with nothing on disk behind them, where nothing is written.
+pub fn is_place(p: &Path) -> bool {
+    is_computer(p) || is_github(p)
+}
+
 /// Computer view rows for drives that aren't mounted: "maia:drive:/dev/sdb1".
 pub const DRIVE: &str = "maia:drive:";
 
@@ -141,6 +153,19 @@ pub struct Tab {
     pub nav_row_step: usize,
     pub nav_col_step: usize,
     pub cursor_screen_pos: Option<egui::Pos2>,
+    /// Where the items on screen were drawn last frame (their picture or icon): the
+    /// viewer grows a picture out of its place and puts it back there.
+    pub item_rects: Vec<(u32, egui::Rect)>,
+    /// The folder under the pointer fanning out its pictures (`peek.rs`).
+    pub peek: crate::peek::Peek,
+    /// Years marked on the scrollbar of a list sorted by a date (`ribbon.rs`).
+    pub ribbon: crate::ribbon::Ribbon,
+    /// Rows easing to their new places after the order changed (`glide.rs`).
+    pub glide: crate::glide::Glide,
+    /// Counts the times the shown order was worked out.
+    pub view_gen: u64,
+    /// What kinds of file fill the list, for the status bar's ring (`glance.rs`).
+    pub glance: crate::glance::Glance,
     pub pending_rename: Option<PathBuf>,
     pub rubber: Option<Rubber>,
     pub shown_zoom: f32,
@@ -255,6 +280,12 @@ impl Tab {
             nav_row_step: 1,
             nav_col_step: 0,
             cursor_screen_pos: None,
+            item_rects: Vec::new(),
+            peek: Default::default(),
+            ribbon: Default::default(),
+            glide: Default::default(),
+            view_gen: 0,
+            glance: Default::default(),
             pending_rename: None,
             rubber: None,
             shown_zoom: -1.0,
@@ -292,6 +323,8 @@ impl Tab {
         }
         let base = if is_computer(&self.path) {
             "Computer".to_string()
+        } else if is_github(&self.path) {
+            "GitHub".to_string()
         } else if self.path == Path::new("/") {
             "/".to_string()
         } else if let Some((_, name)) = crate::sidebar::net_root(&self.path).filter(|r| r.0 == self.path) {
@@ -314,6 +347,13 @@ impl Tab {
         self.archive = None;
         if is_computer(&self.path) {
             self.load_computer();
+            return;
+        }
+        if is_github(&self.path) {
+            self.walk = None;
+            self.loading = None;
+            self.flatten = false;
+            self.set_entries(vec![]);
             return;
         }
         if !self.path.is_dir() {
@@ -489,7 +529,7 @@ impl Tab {
 
     /// Is the tree view active (Details view, not flattened)?
     pub fn tree_active(&self) -> bool {
-        !self.flatten && crate::listing::mode_of(&self.settings) == crate::listing::Mode::Tree && !is_computer(&self.path) && self.archive.is_none()
+        !self.flatten && crate::listing::mode_of(&self.settings) == crate::listing::Mode::Tree && !is_place(&self.path) && self.archive.is_none()
     }
 
     pub fn toggle_expand(&mut self, dir: &Path) {
@@ -558,7 +598,7 @@ impl Tab {
             }
             return;
         }
-        if is_computer(&self.path) || self.rename.is_some() {
+        if is_place(&self.path) || self.rename.is_some() {
             return;
         }
         if c.gone.iter().any(|g| self.path.starts_with(g)) {
@@ -809,7 +849,7 @@ impl Tab {
         if is_computer(&self.path) {
             return;
         }
-        let Some(parent) = self.path.parent().map(|p| p.to_path_buf()) else {
+        let Some(parent) = self.path.parent().filter(|_| !is_github(&self.path)).map(|p| p.to_path_buf()) else {
             let s = settings(Path::new(COMPUTER));
             self.navigate(PathBuf::from(COMPUTER), s);
             return;
@@ -822,7 +862,7 @@ impl Tab {
     }
 
     pub fn set_flatten(&mut self, on: bool) {
-        if is_computer(&self.path) || self.archive.is_some() || self.flatten == on {
+        if is_place(&self.path) || self.archive.is_some() || self.flatten == on {
             return;
         }
         self.flatten = on;
@@ -1002,6 +1042,7 @@ impl Tab {
         let content = self.content.take();
         self.rebuild_inner(c, content.as_ref());
         self.content.put(content);
+        self.view_gen += 1;
         self.last_rebuild = Some(std::time::Instant::now());
         self.last_rebuild_ms = t0.elapsed().as_secs_f32() * 1000.0;
     }
@@ -1261,6 +1302,7 @@ impl Tab {
             let keyed: Option<Vec<Option<u64>>> = match s.sort {
                 SortKey::Tags => Some(crate::tags::sort_keys(top.iter().map(|&i| entries[i as usize].path.as_path()))),
                 SortKey::Taken | SortKey::Dimensions | SortKey::Duration => Some(top.iter().map(|&i| crate::facts::sort_key(&entries[i as usize], s.sort)).collect()),
+                SortKey::Colour => Some(top.iter().map(|&i| crate::colours::sort_key(&entries[i as usize])).collect()),
                 _ => None,
             };
             let by_name = |a: &u32, b: &u32| compare(&entries[*a as usize], &entries[*b as usize], SortKey::Name, s.desc, c, tm);
@@ -1274,7 +1316,7 @@ impl Tab {
                     SortKey::Folders => stat(e).map(|x| x.folders as u64).unwrap_or(0),
                     SortKey::Files => stat(e).map(|x| x.files as u64).unwrap_or(0),
                     SortKey::Deleted => when(tm.get(&e.path).and_then(|t| t.1)),
-                    SortKey::Type | SortKey::Original | SortKey::Tags | SortKey::Taken | SortKey::Dimensions | SortKey::Duration => return None,
+                    SortKey::Type | SortKey::Original | SortKey::Tags | SortKey::Taken | SortKey::Dimensions | SortKey::Duration | SortKey::Colour => return None,
                 })
             };
             if !matches!(s.sort, SortKey::Type | SortKey::Original) || keyed.is_some() {
@@ -1698,6 +1740,10 @@ fn compare(a: &Entry, b: &Entry, key: SortKey, desc: bool, c: &ViewCtx, trash: &
             }
         }
         SortKey::Taken | SortKey::Dimensions | SortKey::Duration => match (crate::facts::sort_key(a, key), crate::facts::sort_key(b, key)) {
+            (Some(x), Some(y)) => x.cmp(&y),
+            (x, y) => return y.is_none().cmp(&x.is_none()).reverse().then_with(|| natural_cmp(a.lname(), b.lname())),
+        },
+        SortKey::Colour => match (crate::colours::sort_key(a), crate::colours::sort_key(b)) {
             (Some(x), Some(y)) => x.cmp(&y),
             (x, y) => return y.is_none().cmp(&x.is_none()).reverse().then_with(|| natural_cmp(a.lname(), b.lname())),
         },

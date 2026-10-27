@@ -69,7 +69,7 @@ impl Drop for State {
 pub fn pump(t: &mut Tab, hidden: bool) {
     let name = crate::query::name_part(&t.filter);
     let q = name.trim();
-    let active = t.content.on && !q.is_empty() && !crate::tab::is_computer(&t.path);
+    let active = t.content.on && !q.is_empty() && !crate::tab::is_place(&t.path);
     let same = match &t.content.key {
         None => !active,
         Some(k) => active && k.0 == q && k.1 == t.path && k.2 == t.flatten && k.3 == hidden && k.4 == t.expanded.len(),

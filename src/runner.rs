@@ -78,6 +78,34 @@ struct Runner {
     sock: Option<PathBuf>,
     #[cfg(feature = "testkit")]
     tk: Option<crate::testkit::Driver>,
+    /// The texture a frame is copied into for a theme's wash (`wash.rs`), made once.
+    wash_tex: Option<(egui_glow::glow::Texture, egui::TextureId)>,
+}
+
+/// The frame just painted (still in the back buffer) copied into a texture egui draws:
+/// the old window a new theme washes over. None when the copy fails.
+fn copy_frame(gl: &egui_glow::glow::Context, painter: &mut egui_glow::Painter, slot: &mut Option<(egui_glow::glow::Texture, egui::TextureId)>, size: [u32; 2]) -> Option<(egui::TextureId, [u32; 2])> {
+    use egui_glow::glow::{self, HasContext as _};
+    unsafe {
+        let (tex, id) = match *slot {
+            Some(s) => s,
+            None => {
+                let t = gl.create_texture().ok()?;
+                let id = painter.register_native_texture(t);
+                *slot = Some((t, id));
+                (t, id)
+            }
+        };
+        while gl.get_error() != glow::NO_ERROR {}
+        gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE as i32);
+        gl.copy_tex_image_2d(glow::TEXTURE_2D, 0, glow::RGBA, 0, 0, size[0] as i32, size[1] as i32, 0);
+        gl.bind_texture(glow::TEXTURE_2D, None);
+        (gl.get_error() == glow::NO_ERROR).then_some((id, size))
+    }
 }
 
 pub fn run(opts: Options, paths: Vec<PathBuf>, listener: Option<(std::os::unix::net::UnixListener, PathBuf)>) {
@@ -104,6 +132,7 @@ pub fn run(opts: Options, paths: Vec<PathBuf>, listener: Option<(std::os::unix::
         sock: None,
         #[cfg(feature = "testkit")]
         tk: None,
+        wash_tex: None,
     };
     if let Err(e) = event_loop.run_app(&mut r) {
         crate::signals::log(&format!("event loop stopped: {e}"));
@@ -232,6 +261,11 @@ impl Runner {
         if let Some(path) = shot {
             crate::testkit::save_frame(&gl.glow, size, &path);
         }
+        if app.wash.wanted() {
+            let got = copy_frame(&gl.glow, painter, &mut self.wash_tex, size);
+            app.wash.copied(got);
+            window.request_redraw();
+        }
         if gl.wayland {
             window.pre_present_notify();
         }
@@ -290,7 +324,9 @@ impl ApplicationHandler<UserEvent> for Runner {
         if let Some(p) = &self.opts.picker {
             crate::picker::set_parent(&gl.window, &p.pick.parent);
         }
-        let painter = egui_glow::Painter::new(gl.glow.clone(), "", None, true).or_die("Could not create the painter");
+        #[allow(unused_mut)]
+        let mut painter = egui_glow::Painter::new(gl.glow.clone(), "", None, true).or_die("Could not create the painter");
+        crate::frost::setup(&gl.glow, &mut painter);
         #[allow(unused_mut)]
         let mut state = egui_winit::State::new(self.ctx.clone(), egui::ViewportId::ROOT, el, Some(gl.window.scale_factor() as f32), el.system_theme(), Some(painter.max_texture_side()));
         // Before the window is shown, as the accessibility bus wants. The tree is only

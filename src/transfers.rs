@@ -258,6 +258,7 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
     let mut moved: Option<(u64, Option<u64>)> = None;
     let room = (st.anchor.top() - screen.top() - 16.0).max(80.0);
     let r = egui::Area::new(Id::unique("transfers")).order(egui::Order::Foreground).pivot(Align2::RIGHT_BOTTOM).fixed_pos(pos2(x, st.anchor.top() - 6.0)).constrain_to(screen.shrink(6.0)).show(ctx, |ui| {
+        crate::frost::behind(ui, 10);
         pp::popup_frame(&pal).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
             ui.set_width(width - 24.0);
             egui::ScrollArea::vertical().max_height(room).auto_shrink([false, true]).show(ui, |ui| {
