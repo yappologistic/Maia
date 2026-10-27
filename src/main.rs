@@ -170,6 +170,7 @@ fn main() {
     memory::tune();
     let mut paths: Vec<PathBuf> = vec![];
     let mut new_window = false;
+    let mut props = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -245,6 +246,8 @@ fn main() {
                 }
                 return;
             }
+            // The paths that follow get their Properties, in the open window or a new one.
+            "--properties" => props = true,
             "--window" => {
                 new_window = true;
                 if let Some(p) = args.next() {
@@ -259,12 +262,13 @@ fn main() {
             }
         }
     }
+    let first = props.then(|| single::Request::Properties(paths.clone()));
     // A launch that isn't asking for its own window hands its folders to the open one.
     let listener = if new_window || !config::load_config().single_instance {
         None
     } else {
         let sock = single::socket_path();
-        if single::forward_to(&sock, &paths) {
+        if first.as_ref().map_or_else(|| single::forward_to(&sock, &paths), |r| single::send(&sock, r)) {
             return;
         }
         single::claim_at(&sock).map(|l| (l, sock))
@@ -274,7 +278,7 @@ fn main() {
         portal::refresh();
     });
     runner::run(
-        runner::Options { title: "Maia", app_id: if cfg!(feature = "testkit") { "io.github.yappologistic.Maia.test" } else { "io.github.yappologistic.Maia" }, size: [1240.0, 780.0], min_size: [520.0, 340.0], icon: install::window_icon(), picker: None },
+        runner::Options { title: "Maia", app_id: if cfg!(feature = "testkit") { "io.github.yappologistic.Maia.test" } else { "io.github.yappologistic.Maia" }, size: [1240.0, 780.0], min_size: [520.0, 340.0], icon: install::window_icon(), picker: None, first },
         paths,
         listener,
     );
@@ -308,6 +312,6 @@ fn pick() {
     // A class of its own, for window rules: a compositor can float and size dialogs.
     let title: &'static str = Box::leak(p.title().into_boxed_str());
     let app_id = if cfg!(feature = "testkit") { "io.github.yappologistic.Maia.test" } else { "io.github.yappologistic.Maia.Picker" };
-    runner::run(runner::Options { title, app_id, size: [980.0, 640.0], min_size: [520.0, 340.0], icon: install::window_icon(), picker: Some(Box::new(p)) }, vec![start], None);
+    runner::run(runner::Options { title, app_id, size: [980.0, 640.0], min_size: [520.0, 340.0], icon: install::window_icon(), picker: Some(Box::new(p)), first: None }, vec![start], None);
     picker::write_answer(&mut unsafe { std::fs::File::from_raw_fd(answer) });
 }

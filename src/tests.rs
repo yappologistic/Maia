@@ -13657,5 +13657,15 @@ fn file_manager_calls_reach_the_window_as_asked() {
     }
     // The bus starts that service, not a window, for the name.
     assert!(crate::fm1::service_file(Path::new("/opt/maia/bin/maia")).ends_with("Exec=/opt/maia/bin/maia --fm1\n"));
+    // A window it has to start gets Properties on its command line, not over a socket
+    // it may not listen on; a call naming no path starts nothing.
+    use crate::fm1::launch_args;
+    let os = |v: &[&str]| v.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
+    assert_eq!(launch_args(&Request::Properties(vec![PathBuf::from("/home/a.txt")])), Some(os(&["--properties", "/home/a.txt"])));
+    assert_eq!(launch_args(&Request::Show(vec![PathBuf::from("/home/a.txt")])), Some(os(&["/home/a.txt"])));
+    assert_eq!(launch_args(&Request::Focus), Some(vec![]));
+    for r in [Request::Open(vec![]), Request::Show(vec![]), Request::Properties(vec![])] {
+        assert_eq!(launch_args(&r), None, "{r:?}");
+    }
     let _ = std::fs::remove_dir_all(&d);
 }

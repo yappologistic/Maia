@@ -27,6 +27,9 @@ pub struct Options {
     /// A picker window: the app's request it answers (no single-instance socket, no
     /// "Show in folder" name; those are the main window's).
     pub picker: Option<Box<crate::picker::Picker>>,
+    /// A request the window answers as soon as it is up (`--properties`, which the
+    /// file-manager service starts a window with).
+    pub first: Option<crate::single::Request>,
 }
 
 enum UserEvent {
@@ -328,6 +331,9 @@ impl ApplicationHandler<UserEvent> for Runner {
                 let _ = p.send_event(UserEvent::Repaint(Duration::ZERO));
             });
             self.sock = Some(sock);
+        }
+        if let Some(r) = self.opts.first.take() {
+            let _ = tx.send(r);
         }
         // "Show in folder" from other apps, over the session bus.
         let p = self.proxy.clone();

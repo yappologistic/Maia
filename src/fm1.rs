@@ -411,29 +411,44 @@ pub fn run_backend() -> bool {
     true
 }
 
+/// What a new window is started with for `r`: its paths, after `--properties` for
+/// Properties (so it asks for them itself, with or without the single-instance socket).
+/// None for a request that names no path: nothing to show.
+pub fn launch_args(r: &Request) -> Option<Vec<std::ffi::OsString>> {
+    let (flag, paths) = match r {
+        Request::Open(p) | Request::Show(p) => (None, p),
+        Request::Properties(p) => (Some("--properties"), p),
+        Request::Focus => return Some(vec![]),
+    };
+    if paths.is_empty() {
+        return None;
+    }
+    Some(flag.map(std::ffi::OsString::from).into_iter().chain(paths.iter().map(|p| p.clone().into_os_string())).collect())
+}
+
 /// Give `r` to the open window, or start one for it, in a scope of its own.
 fn hand_over(r: Request) {
-    let sock = crate::single::socket_path();
-    if crate::single::send(&sock, &r) {
+    let Some(args) = launch_args(&r) else { return };
+    if crate::single::send(&crate::single::socket_path(), &r) {
         return;
     }
-    let paths = match &r {
-        Request::Open(p) | Request::Show(p) | Request::Properties(p) => p.clone(),
-        Request::Focus => vec![],
-    };
     let exe = exe();
-    let scoped = std::process::Command::new("systemd-run").args(["--user", "--scope", "--collect", "--quiet", "--"]).arg(&exe).args(&paths).stdin(std::process::Stdio::null()).spawn();
-    if scoped.is_err() {
-        let _ = std::process::Command::new(&exe).args(&paths).stdin(std::process::Stdio::null()).spawn();
-    }
-    // A new window shows the folders; properties are asked for once it listens.
-    if matches!(r, Request::Properties(_)) {
-        for _ in 0..50 {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            if crate::single::send(&sock, &r) {
-                break;
+    let scoped = std::process::Command::new("systemd-run").args(["--user", "--scope", "--collect", "--quiet", "--"]).arg(&exe).args(&args).stdin(std::process::Stdio::null()).spawn();
+    // systemd-run lasts as long as the window. One that ends at once and fails could
+    // not make the scope (no user manager), so the window starts directly instead.
+    let started = scoped.is_ok_and(|mut c| {
+        for _ in 0..10 {
+            match c.try_wait() {
+                Ok(Some(s)) => return s.success(),
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+                Err(_) => return false,
             }
         }
+        std::thread::spawn(move || c.wait());
+        true
+    });
+    if !started {
+        let _ = std::process::Command::new(&exe).args(&args).stdin(std::process::Stdio::null()).spawn();
     }
 }
 
