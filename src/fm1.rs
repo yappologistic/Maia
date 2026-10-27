@@ -437,18 +437,25 @@ fn hand_over(r: Request) {
     // systemd-run lasts as long as the window. One that ends at once and fails could
     // not make the scope (no user manager), so the window starts directly instead.
     let started = scoped.is_ok_and(|mut c| {
+        let mut lost = false;
         for _ in 0..10 {
             match c.try_wait() {
                 Ok(Some(s)) => return s.success(),
                 Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
-                Err(_) => return false,
+                Err(_) => {
+                    lost = true;
+                    break;
+                }
             }
         }
+        // Reaped when it ends, as this process lasts the whole session.
         std::thread::spawn(move || c.wait());
-        true
+        !lost
     });
     if !started {
-        let _ = std::process::Command::new(&exe).args(&args).stdin(std::process::Stdio::null()).spawn();
+        if let Ok(mut c) = std::process::Command::new(&exe).args(&args).stdin(std::process::Stdio::null()).spawn() {
+            std::thread::spawn(move || c.wait());
+        }
     }
 }
 
