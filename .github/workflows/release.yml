@@ -1,6 +1,6 @@
 # A version tag (v0.2.1) builds Maia for x86_64 and ARM64 Linux on Ubuntu 22.04, so
 # the downloads run on glibc 2.35 and newer, and publishes them as that tag's release:
-# the program alone (what Update fetches), a tarball, a .deb, an .rpm and an AppImage
+# the program alone (what Update fetches), a tarball, a .deb, an .rpm, a pacman package and an AppImage
 # for each, their checksums, and the crates' licence notices. Each package is installed
 # or run once before it is published. The tag's message is the release text. The
 # nightly is pinned: build-dist.sh's size flags are nightly-only.
@@ -55,7 +55,7 @@ jobs:
 
       - name: Packaging tools
         run: |
-          sudo apt-get install -y --no-install-recommends rpm desktop-file-utils
+          sudo apt-get install -y --no-install-recommends rpm zstd desktop-file-utils
           # appimagetool 1.9.0, checked against the copy it was tried with.
           case "${{ matrix.arch }}" in
             x86_64) sum=46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1 ;;
@@ -78,8 +78,9 @@ jobs:
       - name: Check the packages
         run: |
           v="${GITHUB_REF_NAME#v}"
+          pv=$(printf '%s' "$v" | tr - _)
           # Every format was made.
-          ls out/*.tar.gz out/*.deb out/*.rpm out/*.AppImage
+          ls out/*.tar.gz out/*.deb out/*.rpm out/*.pkg.tar.zst out/*.AppImage
           # The .deb installs with its dependencies and runs.
           sudo apt-get install -y ./out/maia_*.deb
           maia --version | grep -qx "maia $v"
@@ -87,6 +88,9 @@ jobs:
           # The .rpm says what it is and holds what it should.
           rpm -qip out/maia-*.rpm
           rpm -qlp out/maia-*.rpm | grep -qx /usr/bin/maia
+          # The pacman package holds the program and says what it is.
+          zstd -dc out/maia-*.pkg.tar.zst | tar -tf - | grep -qx usr/bin/maia
+          zstd -dc out/maia-*.pkg.tar.zst | tar -xOf - .PKGINFO | grep -qx "pkgver = $pv-1"
           # The AppImage starts (unpacked: the runner has no FUSE).
           APPIMAGE_EXTRACT_AND_RUN=1 ./out/Maia-*.AppImage --version | grep -qx "maia $v"
           # The tarball installs where it's told.
