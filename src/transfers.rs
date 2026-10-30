@@ -10,6 +10,10 @@ use crate::ops::{Clash, Conflict, Job};
 use crate::popups as pp;
 use crate::theme::Palette;
 
+/// Where the card's text begins, inside its rows and outside them: the job's name, what
+/// it is doing, the queue's heading and the names waiting all start on one line.
+const TEXT_X: f32 = 12.0;
+
 pub struct State {
     /// The chip it opens above.
     pub anchor: Rect,
@@ -17,11 +21,13 @@ pub struct State {
     sel: Option<u64>,
     /// The waiting job being dragged to another place.
     drag: Option<u64>,
+    /// The waiting ones are folded away under their heading.
+    fold: bool,
 }
 
 impl State {
     pub fn new(anchor: Rect) -> State {
-        State { anchor, sel: None, drag: None }
+        State { anchor, sel: None, drag: None, fold: false }
     }
 }
 
@@ -81,10 +87,15 @@ struct Snap {
     id: u64,
     label: String,
     frac: f32,
-    /// How much is done: "15.6 of 45.8 MB · 3 of 12 files", and "paused" when it is.
-    line: String,
-    /// When it will be done and how fast it goes: "2 min left · 38 MB/s".
+    /// How much is done, in the job's own row: "15.6 of 45.8 MB", else "3 of 12 items".
+    amount: String,
+    /// Under it, on the left: when it will be done and how fast it goes ("2 min left ·
+    /// 38 MB/s"), or why it isn't going ("paused").
     pace: String,
+    /// And on the right: "3 of 12 files", when the amount was in bytes.
+    count: String,
+    /// What a waiting one will move, when known.
+    size: String,
     current: String,
     paused: bool,
     waiting: bool,
@@ -105,27 +116,29 @@ fn snap(j: &Job) -> Option<Snap> {
         _ => 0.0,
     };
     let el = p.since.unwrap_or(j.started).elapsed().saturating_sub(p.held).as_secs_f64().max(0.001);
-    let mut parts = vec![];
-    let mut pace = String::new();
-    if p.total_bytes > 0 {
-        parts.push(of_size(p.done_bytes, p.total_bytes));
-    }
-    if p.total_files > 1 {
-        parts.push(format!("{} of {} files", crate::table::fmt_count(p.done_files), crate::table::fmt_count(p.total_files)));
+    let files = if p.total_files > 1 {
+        format!("{} of {} files", crate::table::fmt_count(p.done_files), crate::table::fmt_count(p.total_files))
     } else if p.total_items > 1 {
-        parts.push(format!("{} of {} items", p.done_items, p.total_items));
-    }
-    if paused {
-        parts.push("paused".into());
+        format!("{} of {} items", p.done_items, p.total_items)
+    } else {
+        String::new()
+    };
+    // Bytes where they are counted, the files beneath; else the items in the row.
+    let (amount, count) = if p.total_bytes > 0 { (of_size(p.done_bytes, p.total_bytes), files) } else { (files, String::new()) };
+    let pace = if paused {
+        "paused".into()
     } else if p.clash.is_some() {
-        parts.push("waiting for you".into());
+        "waiting for you".into()
     } else if p.total_bytes > 0 && p.done_bytes > 0 {
         let s = p.done_bytes as f64 / el;
-        pace = format!("{} left · {}/s", crate::ui::time_left(p.total_bytes.saturating_sub(p.done_bytes) as f64 / s), crate::fsx::fmt_size(s as u64));
+        format!("{} left · {}/s", crate::ui::time_left(p.total_bytes.saturating_sub(p.done_bytes) as f64 / s), crate::fsx::fmt_size(s as u64))
     } else if p.within.is_some() {
-        pace = format!("{:.0}%", frac * 100.0);
-    }
-    Some(Snap { id: j.id, label: j.label.clone(), frac, line: parts.join(" · "), pace, current: p.current.clone(), paused, waiting: p.waiting.is_some(), clash: p.clash.clone(), same: p.same })
+        format!("{:.0}%", frac * 100.0)
+    } else {
+        String::new()
+    };
+    let size = if p.total_bytes > 0 { crate::fsx::fmt_size(p.total_bytes) } else { String::new() };
+    Some(Snap { id: j.id, label: j.label.clone(), frac, amount, pace, count, size, current: p.current.clone(), paused, waiting: p.waiting.is_some(), clash: p.clash.clone(), same: p.same })
 }
 
 /// A name already taken, asked inside its job: Keep both, Replace, Skip (Merge for two
@@ -215,6 +228,10 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
     let (alt_up, alt_down) = (take(Modifiers::ALT, Key::ArrowUp), take(Modifiers::ALT, Key::ArrowDown));
     let (up, down) = (take(Modifiers::NONE, Key::ArrowUp), take(Modifiers::NONE, Key::ArrowDown));
     let (space, del, enter) = (take(Modifiers::NONE, Key::Space), take(Modifiers::NONE, Key::Delete), take(Modifiers::NONE, Key::Enter));
+    // The keys walk the queue: folded, it opens for them.
+    if up || down || alt_up || alt_down {
+        st.fold = false;
+    }
     let at = st.sel.and_then(|s| ids.iter().position(|&x| x == s));
     if down {
         st.sel = ids.get(at.map_or(0, |a| (a + 1).min(ids.len().saturating_sub(1)))).copied();
@@ -272,17 +289,32 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
                     if n > 0 {
                         ui.add_space(10.0);
                     }
-                    let top = ui.cursor().top();
-                    let h = ui.text_style_height(&egui::TextStyle::Body).max(22.0);
+                    // The job is a row that fills as it goes, its name on the left and how
+                    // much is done on the right; when it will be done goes underneath.
+                    let h = (ui.text_style_height(&egui::TextStyle::Body) + 14.0).max(30.0).round();
                     let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
                     // Pause and cancel show while the job is pointed at; a paused one keeps
                     // its play button, the way back.
-                    let block = Rect::from_min_max(pos2(row.left(), top), pos2(row.right(), top + h + 40.0));
+                    let block = Rect::from_min_max(row.min, pos2(row.right(), row.bottom() + 22.0));
                     let near = ui.rect_contains_pointer(block);
-                    let mut right = row.right();
+                    let p = ui.painter();
+                    p.rect(row, CornerRadius::same(7), pal.card().lerp_to_gamma(pal.text, if pal.dark { 0.05 } else { 0.045 }), Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+                    // Eased between the worker's reports, a quarter second apart.
+                    let shown = crate::kit::slide(ui.ctx(), Id::new(("transfer fill", s.id)), s.frac.clamp(0.0, 1.0));
+                    let tone = if s.paused { pal.text_dim } else { pal.accent };
+                    if shown > 0.002 {
+                        let fx = row.left() + 1.0 + shown * (row.width() - 2.0);
+                        let fill = Rect::from_min_max(row.min, pos2(fx, row.bottom())).shrink(1.0);
+                        ui.painter().rect_filled(fill, CornerRadius::same(6), tone.gamma_multiply(if pal.dark { 0.28 } else { 0.2 }));
+                        if shown < 0.998 {
+                            ui.painter().line_segment([pos2(fx - 1.0, row.top() + 1.0), pos2(fx - 1.0, row.bottom() - 1.0)], Stroke::new(2.0, tone));
+                        }
+                    }
+                    let mut right = row.right() - 10.0;
                     if near || s.paused {
-                        let x_r = Rect::from_center_size(pos2(row.right() - 11.0, row.center().y), Vec2::splat(22.0));
-                        let p_r = Rect::from_center_size(pos2(x_r.left() - 13.0, row.center().y), Vec2::splat(22.0));
+                        let x_r = Rect::from_center_size(pos2(row.right() - 4.0 - 11.0, row.center().y), Vec2::splat(22.0));
+                        // Alone (paused, not pointed at), the play button takes the end.
+                        let p_r = if near { Rect::from_center_size(pos2(x_r.left() - 13.0, row.center().y), Vec2::splat(22.0)) } else { x_r };
                         if near && icon_button(ui, x_r, "x", "Cancel", "transfer cancel", &pal) {
                             cancel = Some(s.id);
                         }
@@ -291,24 +323,26 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
                         }
                         right = p_r.left() - 6.0;
                     }
-                    // The name on the left; when it will be done and how fast, on the right.
-                    let pg = ui.painter().layout_no_wrap(s.pace.clone(), small.clone(), pal.text_dim);
-                    let pw = if s.pace.is_empty() { 0.0 } else { pg.size().x + 12.0 };
-                    if pw > 0.0 {
-                        ui.painter().galley(pos2(right - pg.size().x, row.center().y - pg.size().y / 2.0), pg, pal.text_dim);
+                    let mut aw = 0.0;
+                    if !s.amount.is_empty() {
+                        let ag = crate::listing::tabular(ui, &s.amount, small.clone(), (right - row.left()) * 0.5, pal.text_dim);
+                        aw = ag.size().x + 12.0;
+                        ui.painter().galley(pos2(right - ag.size().x, (row.center().y - ag.size().y / 2.0).round()), ag, pal.text_dim);
                     }
-                    let title = crate::listing::elided(ui, &s.label, crate::theme::semibold(fs), (right - pw - row.left()).max(20.0), pal.text);
-                    ui.painter().galley(pos2(row.left(), row.center().y - title.size().y / 2.0), title, pal.text);
-                    ui.add_space(3.0);
-                    let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 5.0), Sense::hover());
-                    ui.painter().rect_filled(bar, CornerRadius::same(3), pal.raised.lerp_to_gamma(pal.text, if pal.dark { 0.12 } else { 0.1 }));
-                    let fill = Rect::from_min_size(bar.min, vec2((bar.width() * s.frac.clamp(0.0, 1.0)).max(5.0), bar.height()));
-                    ui.painter().rect_filled(fill, CornerRadius::same(3), if s.paused { pal.text_dim } else { pal.accent });
-                    ui.add_space(1.0);
-                    if !s.line.is_empty() {
-                        let lg = crate::listing::tabular(ui, &s.line, small.clone(), ui.available_width(), pal.text_dim);
-                        let (lr, _) = ui.allocate_exact_size(vec2(ui.available_width(), lg.size().y), Sense::hover());
-                        ui.painter().galley(lr.min, lg, pal.text_dim);
+                    let title = crate::listing::elided(ui, &s.label, crate::theme::semibold(fs), (right - aw - row.left() - TEXT_X).max(20.0), pal.text);
+                    ui.painter().galley(pos2(row.left() + TEXT_X, (row.center().y - title.size().y / 2.0).round()), title, pal.text);
+                    if !s.pace.is_empty() || !s.count.is_empty() {
+                        ui.add_space(2.0);
+                        let lh = ui.painter().layout_no_wrap("0".into(), small.clone(), pal.text_dim).size().y;
+                        let (lr, _) = ui.allocate_exact_size(vec2(ui.available_width(), lh), Sense::hover());
+                        let mut cw = 0.0;
+                        if !s.count.is_empty() {
+                            let cg = crate::listing::tabular(ui, &s.count, small.clone(), lr.width() * 0.5, pal.text_dim);
+                            cw = cg.size().x + 12.0;
+                            ui.painter().galley(pos2(lr.right() - 10.0 - cg.size().x, lr.top()), cg, pal.text_dim);
+                        }
+                        let pg = crate::listing::tabular(ui, &s.pace, small.clone(), (lr.width() - cw - 22.0).max(20.0), pal.text_dim);
+                        ui.painter().galley(pos2(lr.left() + TEXT_X, lr.top()), pg, pal.text_dim);
                     }
                     // The file at hand, when the title does not already name it.
                     if !s.current.is_empty() && s.clash.is_none() && !s.label.contains(s.current.as_str()) {
@@ -322,15 +356,28 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
                     }
                 }
                 if !waiting.is_empty() {
+                    // A dashed rule: the queue is part of the same work, not another list.
                     if !running.is_empty() {
-                        ui.add_space(12.0);
+                        ui.add_space(8.0);
+                        let y = ui.cursor().top().round() + 0.5;
+                        let (l, r) = (ui.min_rect().left(), ui.min_rect().left() + ui.available_width());
+                        crate::kit::dashed_rule(ui.painter(), pos2(l, y), pos2(r, y), &pal);
+                        ui.add_space(8.0);
                     }
+                    // Its heading folds it away, and says how many wait.
                     let lf = crate::theme::semibold((fs * 0.8).round());
-                    let (lr, _) = ui.allocate_exact_size(vec2(ui.available_width(), lf.size + 6.0), Sense::hover());
-                    ui.painter().text(pos2(lr.left(), lr.center().y), Align2::LEFT_CENTER, "Waiting", lf, pal.text_dim);
+                    let (lr, lresp) = ui.allocate_exact_size(vec2(ui.available_width(), lf.size + 8.0), Sense::click());
+                    crate::ui::note_control(ui, lr, "transfer waiting heading");
+                    let hc = if lresp.hovered() { pal.text } else { pal.text_dim };
+                    ui.painter().text(pos2(lr.left() + TEXT_X, lr.center().y), Align2::LEFT_CENTER, format!("Waiting · {}", waiting.len()), lf, hc);
+                    let turn = crate::kit::slide(ui.ctx(), Id::new("transfers fold turn"), if st.fold { 0.0 } else { 1.0 });
+                    crate::kit::chevron(ui.painter(), pos2(lr.right() - 14.0, lr.center().y), turn, hc);
+                    if lresp.clicked() {
+                        st.fold = !st.fold;
+                    }
                     let row_h = (fs * 1.35 + 8.0).round();
                     let mut rects: Vec<(u64, Rect)> = vec![];
-                    for s in &waiting {
+                    for s in waiting.iter().filter(|_| !st.fold) {
                         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
                         rects.push((s.id, r));
                         let on = st.sel == Some(s.id);
@@ -354,7 +401,7 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
                         }
                         let mut text_right = r.right() - 8.0;
                         if shown {
-                            grip(ui.painter(), pos2(r.left() + 10.0, r.center().y), pal.text_dim);
+                            grip(ui.painter(), pos2(r.left() + 5.0, r.center().y), pal.text_dim);
                             let x_r = Rect::from_center_size(pos2(r.right() - 13.0, r.center().y), Vec2::splat(22.0));
                             if icon_button(ui, x_r, "x", "Cancel", "transfer cancel", &pal) {
                                 cancel = Some(s.id);
@@ -374,8 +421,15 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
                         }
                         // The row's own part, where it is picked up: its buttons are theirs.
                         crate::ui::note_control(ui, Rect::from_min_max(r.min, pos2(text_right + 4.0, r.max.y)), "transfer waiting");
-                        let lg = crate::listing::elided(ui, &s.label, FontId::proportional(fs), text_right - (r.left() + 24.0), pal.text);
-                        ui.painter().galley(pos2(r.left() + 24.0, r.center().y - lg.size().y / 2.0), lg, pal.text);
+                        // What it will move, while its buttons don't need the room.
+                        if !shown && !s.size.is_empty() {
+                            let sg = crate::listing::tabular(ui, &s.size, small.clone(), r.width() * 0.3, pal.text_dim);
+                            let sw = sg.size().x;
+                            ui.painter().galley(pos2(r.right() - 8.0 - sw, (r.center().y - sg.size().y / 2.0).round()), sg, pal.text_dim);
+                            text_right = r.right() - 8.0 - sw - 12.0;
+                        }
+                        let lg = crate::listing::elided(ui, &s.label, FontId::proportional(fs), text_right - (r.left() + TEXT_X), pal.text);
+                        ui.painter().galley(pos2(r.left() + TEXT_X, (r.center().y - lg.size().y / 2.0).round()), lg, pal.text);
                     }
                     // A drag: a line where it would go, and the move once let go.
                     if let Some(d) = st.drag {

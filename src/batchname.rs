@@ -286,25 +286,30 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
             field(ui, &mut st.rules.find, "rename find", "", w);
             ui.label(egui::RichText::new("with").size(small).color(pal.text_dim));
             field(ui, &mut st.rules.replace, "rename replace", "", w);
-            if crate::devtools::chip(ui, "Aa", st.rules.case_sensitive, "rename match case", "Match case", &pal, false) {
+            // Switches, lit in the accent's tint while on, not buttons.
+            if crate::kit::toggle(ui, "Aa", st.rules.case_sensitive, false, "rename match case", "Match case", &pal) {
                 st.rules.case_sensitive = !st.rules.case_sensitive;
             }
-            if crate::devtools::chip(ui, ".*", st.rules.regex, "rename regex", "Regular expression; $1 in the replacement is its first group", &pal, true) {
+            if crate::kit::toggle(ui, ".*", st.rules.regex, true, "rename regex", "Regular expression; $1 in the replacement is its first group", &pal) {
                 st.rules.regex = !st.rules.regex;
             }
         });
         ui.horizontal(|ui| {
             label(ui, "Case");
-            for (c, l, what) in [(Case::Keep, "As is", "rename case keep"), (Case::Lower, "lower", "rename case lower"), (Case::Upper, "UPPER", "rename case upper"), (Case::Title, "Title", "rename case title")] {
-                if crate::devtools::chip(ui, l, st.rules.case == c, what, l, &pal, false) {
-                    st.rules.case = c;
-                }
+            // One choice of four, under a pill that slides to it.
+            let cases = [Case::Keep, Case::Lower, Case::Upper, Case::Title];
+            let cur = cases.iter().position(|c| *c == st.rules.case).unwrap_or(0);
+            if let Some(k) = crate::kit::segmented(ui, Id::new("rename case"), &["As is", "lower", "UPPER", "Title"], &["rename case keep", "rename case lower", "rename case upper", "rename case title"], &[], cur, 12.0, 22.0, &pal) {
+                st.rules.case = cases[k];
             }
         });
         ui.add_space(8.0);
         // Old beside new: the new name in the theme's text, a clash in red with why.
         let row_h = (fs * 1.35 + 10.0).round();
         let news = st.new.as_ref().ok();
+        // What the new names don't share, lit in the accent: the counter, or the part taken
+        // from each file. Worked out on the names as they stand, in characters.
+        let (pre, suf) = news.map(|v| varying(v)).unwrap_or((usize::MAX, 0));
         egui::ScrollArea::vertical().id_salt("batch rename list").max_height(list_max).min_scrolled_height((n as f32 * row_h).min(list_max)).auto_shrink([false, true]).show_rows(ui, row_h, n, |ui, range| {
             for i in range {
                 let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::hover());
@@ -320,13 +325,22 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
                 ui.painter().galley(pos2(r.left() + 8.0, r.center().y - g.size().y / 2.0), g, pal.text_dim);
                 ui.painter().text(pos2(r.left() + 8.0 + half + 12.0, r.center().y), egui::Align2::CENTER_CENTER, "→", font.clone(), pal.text_dim);
                 let x = r.left() + half + 34.0;
-                let (text, col) = match bad {
-                    Some(why) => (format!("{new}  ({why})"), pal.danger),
-                    None if new == old => (new, pal.text_dim),
-                    None => (new, pal.text),
+                let room = r.right() - 8.0 - x;
+                let g = match bad {
+                    Some(why) => crate::listing::elided(ui, &format!("{new}  ({why})"), font, room, pal.danger),
+                    None if new == old => crate::listing::elided(ui, &new, font, room, pal.text_dim),
+                    None => {
+                        let chars: Vec<char> = new.chars().collect();
+                        let (a, b) = (pre.min(chars.len()), chars.len().saturating_sub(suf).max(pre.min(chars.len())));
+                        let mut job = egui::text::LayoutJob::default();
+                        for (t, c) in [(&chars[..a], pal.text), (&chars[a..b], pal.accent), (&chars[b..], pal.text)] {
+                            job.append(&t.iter().collect::<String>(), 0.0, egui::TextFormat { font_id: font.clone(), color: c, ..Default::default() });
+                        }
+                        job.wrap = egui::text::TextWrapping { max_width: room, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+                        ui.fonts_mut(|f| f.layout_job(job))
+                    }
                 };
-                let g = crate::listing::elided(ui, &text, font, r.right() - 8.0 - x, col);
-                ui.painter().galley(pos2(x, r.center().y - g.size().y / 2.0), g, col);
+                ui.painter().galley(pos2(x, r.center().y - g.size().y / 2.0), g, pal.text);
             }
         });
         ui.add_space(6.0);
@@ -355,4 +369,17 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
         return false;
     }
     true
+}
+
+/// How many characters every name in `names` starts with, and ends with, alike: what lies
+/// between is what tells them apart. A single name has nothing to tell apart from.
+fn varying(names: &[String]) -> (usize, usize) {
+    if names.len() < 2 {
+        return (usize::MAX, 0);
+    }
+    let cs: Vec<Vec<char>> = names.iter().map(|n| n.chars().collect()).collect();
+    let short = cs.iter().map(|c| c.len()).min().unwrap_or(0);
+    let pre = (0..short).take_while(|&i| cs.iter().all(|c| c[i] == cs[0][i])).count();
+    let suf = (0..short - pre).take_while(|&i| cs.iter().all(|c| c[c.len() - 1 - i] == cs[0][cs[0].len() - 1 - i])).count();
+    (pre, suf)
 }

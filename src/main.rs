@@ -66,6 +66,7 @@ mod imgdec;
 mod inspector;
 mod install;
 mod jump;
+mod kit;
 mod linecount;
 mod listing;
 mod markdown;

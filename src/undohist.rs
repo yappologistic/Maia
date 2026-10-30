@@ -4,7 +4,9 @@
 //! back where a later change expects it gone. Doing one again does the ones before it
 //! first, for the same reason.
 
-use egui::{CornerRadius, FontId, Sense, pos2, vec2};
+use std::time::SystemTime;
+
+use egui::{CornerRadius, FontId, Rect, Sense, Shape, pos2, vec2};
 
 use crate::app::{App, UndoKind, UndoStack};
 use crate::popups as pp;
@@ -40,6 +42,31 @@ fn what(k: &UndoKind) -> &'static str {
     }
 }
 
+/// When a change was made, as the listing says it, the day left out for today's: every
+/// row would say "Today" otherwise.
+fn clock(t: SystemTime, pattern: &str) -> String {
+    let now = SystemTime::now();
+    if pattern.is_empty() && crate::timefmt::local_day(t) == crate::timefmt::local_day(now) {
+        let tm = crate::timefmt::local(t);
+        format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
+    } else {
+        crate::timefmt::date(t, pattern)
+    }
+}
+
+/// The band over what a press of the button takes back or does again: `kit::lift`, with
+/// the accent's bar down its left edge.
+fn band_shape(r: Rect, pal: &crate::theme::Palette) -> Shape {
+    if r.height() < 1.0 {
+        return Shape::Noop;
+    }
+    let mut v = vec![Shape::rect_filled(r, CornerRadius::same(6), crate::kit::lift(pal))];
+    if !pal.strong {
+        v.push(Shape::rect_filled(Rect::from_min_max(pos2(r.left() + 2.0, r.top() + 8.0), pos2(r.left() + 5.0, (r.bottom() - 8.0).max(r.top() + 9.0))), CornerRadius::same(2), pal.accent));
+    }
+    Shape::Vec(v)
+}
+
 pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
     let pal = app.pal;
     let k = pp::take_keys(ctx);
@@ -73,6 +100,15 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
                 area = area.vertical_scroll_offset((st.sel as f32 * row_h - list_max / 2.0 + row_h / 2.0).clamp(0.0, most));
             }
             area.show_rows(ui, row_h, rows, |ui, range| {
+                // Everything from now to the chosen row goes with it: one band, drawn under
+                // the rows, that grows and shrinks to the row picked.
+                let band = ui.painter().add(egui::Shape::Noop);
+                let first = range.start;
+                let (lo, hi) = if redoing { (st.sel, rn.saturating_sub(1)) } else { (rn, st.sel) };
+                let (left, width) = (ui.cursor().left(), ui.available_width());
+                // Where the rows land, measured as they are laid out: the band reaches
+                // rows scrolled out of sight by the same step.
+                let mut tops: Vec<f32> = vec![];
                 for j in range {
                     // Row j < rn is Redo's, rn - j steps away; row j >= rn the change
                     // j - rn steps back from the latest.
@@ -84,23 +120,19 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
                         },
                     };
                     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
-                    // Everything between now and the chosen row goes with it: one band.
-                    let on = j == st.sel;
-                    let going = if redoing { j > st.sel && j < rn } else { j >= rn && j < st.sel };
-                    if on {
-                        ui.painter().rect_filled(r, CornerRadius::same(6), pal.selected);
-                    } else if going {
-                        ui.painter().rect_filled(r, CornerRadius::same(6), pal.selected.gamma_multiply(0.45));
-                    } else if resp.hovered() {
-                        ui.painter().rect_filled(r, CornerRadius::same(6), pal.hover);
+                    tops.push(r.top());
+                    let going = j >= lo && j <= hi;
+                    if !going && resp.hovered() {
+                        ui.painter().rect_filled(r, CornerRadius::same(6), crate::kit::touch(&pal));
                     }
                     // Now: between what can be done again and what can be taken back.
                     if j == rn && rn > 0 {
                         ui.painter().hline(r.x_range().shrink(6.0), r.top(), egui::Stroke::new(1.0, pal.border));
                     }
-                    let (tc, dc) = if on { (pal.on_sel(), pal.on_sel_dim()) } else if undone { (pal.text_dim, pal.text_dim) } else { (pal.text, pal.text_dim) };
-                    let when = crate::devtools::ago(when);
-                    let wg = ui.painter().layout_no_wrap(when, FontId::proportional(small), dc);
+                    let loud = going && pal.strong;
+                    let (tc, dc) = if loud { (pal.on_sel(), pal.on_sel_dim()) } else if undone && !going { (pal.text_dim, pal.text_dim) } else { (pal.text, pal.text_dim) };
+                    let when = when.map(|t| clock(t, &app.cfg.date_format)).unwrap_or_default();
+                    let wg = crate::listing::tabular(ui, &when, FontId::proportional(small), 120.0, dc);
                     let ww = wg.size().x;
                     ui.painter().galley(pos2(r.right() - 12.0 - ww, r.top() + 7.0 + (fs * 1.35 - wg.size().y) / 2.0), wg, dc);
                     let x = r.left() + 12.0;
@@ -118,6 +150,14 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
                     if resp.double_clicked() {
                         take = Some(j);
                     }
+                }
+                if let Some(&t0) = tops.first() {
+                    let pitch = if tops.len() > 1 { tops[1] - t0 } else { row_h + ui.spacing().item_spacing.y };
+                    let origin = t0 - first as f32 * pitch;
+                    let top = crate::kit::slide(ui.ctx(), egui::Id::new("undo band top"), lo as f32 * pitch);
+                    let bottom = crate::kit::slide(ui.ctx(), egui::Id::new("undo band bottom"), hi as f32 * pitch + row_h);
+                    let band_r = Rect::from_min_max(pos2(left, origin + top), pos2(left + width, origin + bottom));
+                    ui.painter().set(band, band_shape(band_r, &pal));
                 }
             });
         }

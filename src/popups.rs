@@ -1013,19 +1013,17 @@ pub(crate) fn hint_chips(ui: &mut Ui, items: &[(&str, &str)], pal: &Palette) {
             }
             // A key and its label wrap together, as one block measured first: wrapped apart, a
             // label began the next line on its own, away from its key.
-            let g = ui.painter().layout_no_wrap(k.to_string(), FontId::proportional(10.5), pal.text_dim);
+            let font = FontId::proportional(10.5);
+            let (_, kw) = crate::kit::caps_layout(ui.painter(), k, 0.0, 0.0, &font, pal);
+            let ch = (font.size * 1.55).round().max(16.0) + 1.0;
             let lg = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(11.0), pal.text_dim);
-            let chip = g.size() + vec2(10.0, 6.0);
             // A key that shares the next one's label ("Up" "Down" to navigate) has none of
             // its own; an empty label threw off the wrapped row and the chips overlapped.
-            let lw = if label.is_empty() { 0.0 } else { 4.0 + lg.size().x };
-            let (whole, _) = ui.allocate_exact_size(vec2(chip.x + lw, chip.y.max(lg.size().y)), Sense::hover());
-            let r = Rect::from_min_size(pos2(whole.left(), whole.center().y - chip.y / 2.0), chip);
-            ui.painter().rect(r, CornerRadius::same(4), pal.bg, Stroke::new(1.0, pal.border), StrokeKind::Inside);
-            ui.painter().galley(r.min + vec2(5.0, 3.0), g, pal.text_dim);
-            crate::ui::note_control(ui, r, "key hint");
+            let lw = if label.is_empty() { 0.0 } else { 5.0 + lg.size().x };
+            let (whole, _) = ui.allocate_exact_size(vec2(kw + lw, ch.max(lg.size().y)), Sense::hover());
+            let w = crate::kit::paint_caps(ui, k, whole.left(), whole.center().y - 0.5, &font, true, pal);
             if !label.is_empty() {
-                ui.painter().galley(pos2(r.right() + 4.0, whole.center().y - lg.size().y / 2.0), lg, pal.text_dim);
+                ui.painter().galley(pos2(whole.left() + w + 5.0, whole.center().y - lg.size().y / 2.0), lg, pal.text_dim);
             }
             if !label.is_empty() {
                 ui.add_space(6.0);
@@ -1041,6 +1039,17 @@ pub(crate) fn row(ui: &mut Ui, h: f32, selected: bool, pal: &Palette, paint: imp
         ui.painter().rect_filled(r, CornerRadius::same(6), pal.selected);
     } else if resp.hovered() {
         ui.painter().rect_filled(r, CornerRadius::same(6), pal.hover);
+    }
+    paint(ui, r);
+    resp
+}
+
+/// A row of a dialog's left column, 30 high: the chosen one's highlight is drawn under
+/// the column, sliding (`kit::chosen`), so it takes no fill of its own.
+fn rail_row(ui: &mut Ui, on: bool, pal: &Palette, paint: impl FnOnce(&Ui, Rect)) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
+    if !on && resp.hovered() {
+        ui.painter().rect_filled(r, CornerRadius::same(6), crate::kit::touch(pal));
     }
     paint(ui, r);
     resp
@@ -1064,13 +1073,13 @@ fn highlight_into(job: &mut egui::text::LayoutJob, text: &str, q: &fuzzy::Query,
 fn menu_item(ui: &mut Ui, label: &str, chip: Option<String>, pal: &Palette) -> bool {
     let resp = row(ui, 26.0, false, pal, |ui, r| {
         // Fit the row (leaving room for the shortcut chip); paths keep their tail.
-        let chip_w = chip.as_ref().map(|c| ui.painter().layout_no_wrap(c.clone(), FontId::proportional(11.0), pal.text_dim).size().x + 22.0).unwrap_or(0.0);
+        let chip_w = chip.as_ref().map(|c| crate::kit::caps_layout(ui.painter(), c, 0.0, 0.0, &FontId::proportional(10.5), pal).1 + 16.0).unwrap_or(0.0);
         let room = (r.width() - 20.0 - chip_w).max(24.0);
         let font = FontId::proportional(13.0);
         let g = if label.contains('/') { crate::listing::elided_tail(ui, label, font, room, pal.text) } else { crate::listing::elided(ui, label, font, room, pal.text) };
         ui.painter().galley(pos2(r.left() + 10.0, r.center().y - g.size().y / 2.0), g, pal.text);
         if let Some(c) = &chip {
-            crate::ui::paint_chip(ui.painter(), pos2(r.right() - 6.0, r.center().y), c, pal);
+            crate::kit::hotkey(ui.painter(), pos2(r.right() - 6.0, r.center().y), c, pal);
         }
     });
     resp.clicked()
@@ -1362,11 +1371,12 @@ fn goto_items(app: &App, st: &mut GoToState, known: &crate::sidebar::Known, ctx:
         }
         // A destination typed down to its folder ("~/Photos/") is that folder: first.
         if st.dest.is_some() && input.ends_with('/') && st.dir_cache.as_ref().is_some_and(|(d, _)| *d == dir) {
-            items.push(GoItem { label: label_of(&dir), sub: dir.parent().map(|p| format!("› {}", p.display())).unwrap_or_default(), path: dir.clone(), is_dir: true, header: false, usage: None });
+            items.push(GoItem { label: label_of(&dir), sub: dir.parent().map(home_short).unwrap_or_default(), path: dir.clone(), is_dir: true, header: false, usage: None });
         }
         for (_, n, d) in scored.into_iter().take(300) {
             let p = dir.join(n);
-            items.push(GoItem { label: n.clone(), sub: format!("› {}", dir.display()), path: p, is_dir: d, header: false, usage: None });
+            // What is inside the folder typed needs no path of its own: the field says it.
+            items.push(GoItem { label: n.clone(), sub: String::new(), path: p, is_dir: d, header: false, usage: None });
         }
     } else {
         // Fuzzy across places, bookmarks, recents, mounts and folders seen in open tabs.
@@ -1610,19 +1620,29 @@ fn goto(app: &mut App, ctx: &egui::Context, st: &mut GoToState) -> bool {
                 }
                 let sel = i == st.sel;
                 let in_root = st.input.trim().is_empty();
-                let resp = row(ui, row_h, sel, &pal, |ui, r| {
+                // Chosen quietly, with the accent's mark at the edge (`kit::chosen`); a
+                // high-contrast theme keeps its solid selection (`loud`).
+                let loud = sel && pal.strong;
+                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
+                if sel {
+                    crate::kit::chosen(ui.painter(), r, 6, &pal);
+                } else if resp.hovered() {
+                    ui.painter().rect_filled(r, CornerRadius::same(6), crate::kit::touch(&pal));
+                }
+                {
+                    let ui = &*ui;
                     // Root items are indented under their group header.
                     let x0 = r.left() + if in_root { 30.0 } else { 6.0 };
                     let ic = Rect::from_center_size(pos2(x0 + 10.0, r.center().y), Vec2::splat(16.0));
                     if tab::is_computer(&it.path) || it.usage.is_some() {
-                        paint_glyph(ui.painter(), ic, Glyph::Drive, if sel { pal.on_sel() } else { pal.text_dim });
+                        paint_glyph(ui.painter(), ic, Glyph::Drive, if loud { pal.on_sel() } else { pal.text_dim });
                     } else if !(it.is_dir && crate::icons::dir(ui.painter(), ic, &it.path)) {
                         let ext = it.path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
                         theme::paint_icon(ui.painter(), ic, theme::categorize(&ext, it.is_dir, false), "", false);
                     }
-                    let tc = if sel { pal.on_sel() } else { pal.text };
+                    let tc = if loud { pal.on_sel() } else { pal.text };
                     let tx = x0 + 26.0;
-                    let mut job = highlight_job(&it.label, &q, FontId::proportional(13.0), tc, if sel { tc } else { pal.accent });
+                    let mut job = highlight_job(&it.label, &q, FontId::proportional(13.0), tc, if loud { tc } else { pal.accent });
                     // One line ending in "…" inside the row; with a location hint, keep room for it.
                     let room = r.right() - tx - if it.sub.is_empty() { 8.0 } else { 90.0 };
                     job.wrap = egui::text::TextWrapping { max_width: room.max(40.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
@@ -1633,16 +1653,17 @@ fn goto(app: &mut App, ctx: &egui::Context, st: &mut GoToState) -> bool {
                     if let Some(u) = it.usage {
                         let bar = Rect::from_min_size(pos2(tx, r.center().y + 6.0), vec2(90.0, 4.0));
                         ui.painter().rect_filled(bar, CornerRadius::same(1), pal.border);
-                        ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * u.clamp(0.0, 1.0), bar.height())), CornerRadius::same(1), if sel { pal.on_sel() } else { pal.accent });
+                        ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * u.clamp(0.0, 1.0), bar.height())), CornerRadius::same(1), if loud { pal.on_sel() } else { pal.accent });
                     }
                     if !it.sub.is_empty() {
                         let chev = Rect::from_center_size(pos2(tx + gw + 10.0, r.center().y), Vec2::splat(9.0));
-                        let sc = if sel { pal.on_sel_dim() } else { pal.text_dim.gamma_multiply(0.75) };
+                        let sc = if loud { pal.on_sel_dim() } else { pal.text_dim.gamma_multiply(0.75) };
                         paint_glyph(ui.painter(), chev, Glyph::ChevronRight, sc);
-                        let sub = crate::listing::elided(ui, &it.sub, FontId::proportional(11.5), (r.right() - chev.right() - 10.0).max(20.0), sc);
+                        // A path keeps its end, where the folders it names are.
+                        let sub = crate::listing::elided_tail(ui, &it.sub, FontId::proportional(11.5), (r.right() - chev.right() - 10.0).max(20.0), sc);
                         ui.painter().galley(pos2(chev.right() + 4.0, r.center().y - sub.size().y / 2.0), sub, sc);
                     }
-                });
+                }
                 if sel && (k.up || k.down || k.page_down || k.page_up) {
                     resp.scroll_to_me(None);
                 }
@@ -1779,7 +1800,7 @@ fn cmd_row_as(ui: &mut Ui, app: &App, c: Cmd, title: &str) -> bool {
         ui.painter().text(pos2(r.left() + 10.0, r.center().y), Align2::LEFT_CENTER, title, FontId::proportional(13.0), if enabled { pal.text } else { pal.text_dim.gamma_multiply(0.6) });
         let mut x = r.right() - 6.0;
         for ch in chips.iter().rev() {
-            x -= crate::ui::paint_chip(ui.painter(), pos2(x, r.center().y), ch, &pal) + 3.0;
+            x -= crate::kit::hotkey(ui.painter(), pos2(x, r.center().y), ch, &pal) + 5.0;
         }
     });
     enabled && resp.clicked()
@@ -2002,15 +2023,21 @@ fn palette(app: &mut App, ctx: &egui::Context, st: &mut PaletteState) -> bool {
             let mut sui = ui.new_child(egui::UiBuilder::new().max_rect(side).layout(top_down));
             egui::ScrollArea::vertical().id_salt("palette categories").max_height(side.height()).auto_shrink([false, false]).show(&mut sui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
+                // The chosen category's highlight slides to it, under the rows.
+                if let Some(k) = rail.iter().position(|&rc| rc == st.cat) {
+                    let top = ui.cursor().top();
+                    let y = crate::kit::slide(ui.ctx(), Id::new("palette category pill"), k as f32 * 32.0) + top;
+                    crate::kit::chosen(ui.painter(), Rect::from_min_size(pos2(ui.cursor().left(), y), vec2(ui.available_width(), 30.0)), 6, &pal);
+                }
                 for &rc in &rail {
                     let on = rc == st.cat;
                     let n = count(rc);
                     // While searching, categories without a match step back.
                     let quiet = searching && n == 0;
                     let name = rc.map_or("All", |c| c.name());
-                    let resp = row(ui, 30.0, on, &pal, |ui, r| {
+                    let resp = rail_row(ui, on, &pal, |ui, r| {
                         let faint = pal.text_dim.gamma_multiply(0.55);
-                        let (gc, tc) = if on { (pal.on_sel(), pal.on_sel()) } else if quiet { (faint, faint) } else { (pal.text_dim, pal.text) };
+                        let (gc, tc) = if on { (crate::kit::on_lift(&pal), crate::kit::on_lift(&pal)) } else if quiet { (faint, faint) } else { (pal.text_dim, pal.text) };
                         let gx = if narrow { r.center().x } else { r.left() + 16.0 };
                         let gr = Rect::from_center_size(pos2(gx.round(), r.center().y.round()), Vec2::splat(13.0));
                         match rc {
@@ -2020,7 +2047,7 @@ fn palette(app: &mut App, ctx: &egui::Context, st: &mut PaletteState) -> bool {
                         if !narrow {
                             let mut right = r.right() - 8.0;
                             if searching && n > 0 {
-                                let ng = ui.painter().layout_no_wrap(n.to_string(), FontId::proportional(11.0), if on { pal.on_sel_dim() } else { pal.text_dim });
+                                let ng = crate::listing::tabular(ui, &n.to_string(), FontId::proportional(11.0), 60.0, if on && pal.strong { pal.on_sel_dim() } else { pal.text_dim });
                                 right -= ng.size().x;
                                 ui.painter().galley(pos2(right, (r.center().y - ng.size().y / 2.0).round()), ng, pal.text_dim);
                                 right -= 6.0;
@@ -2040,6 +2067,9 @@ fn palette(app: &mut App, ctx: &egui::Context, st: &mut PaletteState) -> bool {
             // Back to the top by scrolling there: a jump would lose to a scroll still
             // under way from the keys before.
             let mut top = std::mem::take(&mut st.top);
+            // A new search or category brings its rows in one after another.
+            let key = Id::new((st.query.trim(), rail.iter().position(|&r| r == st.cat))).value();
+            let since = crate::kit::since_change(ctx, Id::new("palette arrive"), key);
             egui::ScrollArea::vertical().id_salt("palette list").max_height(main.height()).auto_shrink([false, false]).show(&mut mui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 // Room on the right for the scroll bar.
@@ -2070,7 +2100,11 @@ fn palette(app: &mut App, ctx: &egui::Context, st: &mut PaletteState) -> bool {
                             ui.scroll_to_rect(r, None);
                         }
                         let look = CmdLook { sel, first: j == 0, cat: searching && st.cat.is_none(), compact };
-                        let (a, hovered) = palette_row(ui, app, c, r, vi, &look, &q, &pal);
+                        let t = crate::kit::arrive(ctx, since, vi);
+                        let opacity = ui.opacity();
+                        ui.set_opacity(opacity * t);
+                        let (a, hovered) = palette_row(ui, app, c, r.translate(vec2(0.0, ((1.0 - t) * 5.0).round())), vi, &look, &q, &pal);
+                        ui.set_opacity(opacity);
                         if hovered {
                             shown = Some(c);
                         }
@@ -2189,21 +2223,24 @@ fn palette_row(ui: &mut Ui, app: &App, c: Cmd, r: Rect, i: usize, look: &CmdLook
     let resp = ui.interact(r, Id::new(("palette row", i)), Sense::click());
     let hovered = resp.hovered() || ui.rect_contains_pointer(r);
     let inside = r.shrink(2.0);
+    // Chosen quietly, a lighter step with the accent's mark at its edge: a saturated
+    // block in each column fought for the eye, and drowned the matched letters.
     if look.sel {
-        ui.painter().rect_filled(inside, CornerRadius::same(6), pal.selected);
+        crate::kit::chosen(ui.painter(), inside, 6, pal);
     } else if hovered {
-        ui.painter().rect_filled(inside, CornerRadius::same(6), pal.hover);
+        ui.painter().rect_filled(inside, CornerRadius::same(6), crate::kit::touch(pal));
     }
-    // The dim grey and the accent sink into a saturated selection.
-    let (dim, acc) = if look.sel { (pal.on_sel_dim(), pal.on_sel()) } else { (pal.text_dim, pal.accent) };
-    let tcol = if !enabled { dim.gamma_multiply(0.7) } else if look.sel { pal.on_sel() } else { pal.text };
+    // A high-contrast theme keeps its saturated selection, where the dim grey and the
+    // accent would sink.
+    let (dim, acc) = if look.sel && pal.strong { (pal.on_sel_dim(), pal.on_sel()) } else { (pal.text_dim, pal.accent) };
+    let tcol = if !enabled { dim.gamma_multiply(0.7) } else if look.sel { crate::kit::on_lift(pal) } else { pal.text };
     let cy = r.center().y;
     let mut out = None;
     // Right to left: hotkeys, then the row's buttons while it is pointed at or chosen.
     let mut x = r.right() - 10.0;
     for b in app.keymap.bindings(c).iter().rev() {
         let label = commands::binding_to_string(b);
-        let w = crate::ui::paint_chip(ui.painter(), pos2(x, cy), &label, pal);
+        let w = crate::kit::hotkey(ui.painter(), pos2(x, cy), &label, pal);
         let cr = Rect::from_min_max(pos2(x - w, cy - 9.0), pos2(x, cy + 9.0));
         if ui.interact(cr, Id::new(("chip", i, &label)), Sense::click()).on_hover_text("Click to remove this hotkey").clicked() {
             out = Some(RowAct::Remove(b.clone()));
@@ -2660,8 +2697,18 @@ fn update_control(ui: &mut Ui, app: &mut App, pal: &Palette) {
     use crate::update::State;
     let ctx = ui.ctx().clone();
     let dim = |ui: &mut Ui, s: &str| ui.label(egui::RichText::new(s).size(12.0).color(pal.text_dim));
-    let button = |ui: &mut Ui, label: &str, accent: bool| {
-        let b = if accent { ui.add(egui::Button::new(egui::RichText::new(label).color(Color32::WHITE)).fill(pal.accent)) } else { ui.button(label) };
+    // Something under way: a small spinner before its words (the row lays out right to
+    // left, so it is added after them).
+    let busy = |ui: &mut Ui, s: &str| {
+        dim(ui, s);
+        let (r, _) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::hover());
+        crate::ui::spinner(ui.painter(), r.center(), 5.0, pal.text_dim, ui.input(|i| i.time));
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+    };
+    // Quiet, as every button in Options is; one to act on (a new version, a restart to
+    // finish it) has the accent's dot rather than its fill.
+    let button = |ui: &mut Ui, label: &str, news: bool| {
+        let b = crate::kit::button_in(ui, label, OPT_FIELD_H, news, pal);
         crate::ui::note_control(ui, b.rect, "update button");
         b
     };
@@ -2673,8 +2720,7 @@ fn update_control(ui: &mut Ui, app: &mut App, pal: &Palette) {
             dim(ui, concat!("Maia ", env!("CARGO_PKG_VERSION")));
         }
         State::Checking => {
-            dim(ui, "Checking…");
-            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            busy(ui, "Checking…");
         }
         State::Latest => {
             if button(ui, "Check again", false).clicked() {
@@ -2692,12 +2738,10 @@ fn update_control(ui: &mut Ui, app: &mut App, pal: &Palette) {
             }
         }
         State::Downloading(v) => {
-            dim(ui, &format!("Downloading {}…", v.trim_start_matches('v')));
-            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            busy(ui, &format!("Downloading {}…", v.trim_start_matches('v')));
         }
         State::Installing(v) => {
-            dim(ui, &format!("Installing {}…", v.trim_start_matches('v')));
-            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            busy(ui, &format!("Installing {}…", v.trim_start_matches('v')));
         }
         State::Ready(v) => {
             if button(ui, "Restart", true).clicked() {
@@ -2743,6 +2787,26 @@ fn choice<T: PartialEq + Clone>(ui: &mut Ui, id: &str, cur: &mut T, opts: &[(T, 
     false
 }
 
+/// A choice among two to four short names, side by side under a pill that slides to the
+/// one picked; more, or too long to leave the title its room, as `choice`'s one button.
+fn pick<T: PartialEq + Clone>(ui: &mut Ui, id: &str, cur: &mut T, pal: &Palette, opts: &[(T, &str)]) -> bool {
+    let labels: Vec<&str> = opts.iter().map(|(_, l)| *l).collect();
+    let size = 11.5;
+    if (2..=4).contains(&opts.len()) && crate::kit::segmented_width(ui, &labels, size) <= ui.available_width().min(260.0) {
+        let i = opts.iter().position(|(v, _)| v == cur).unwrap_or(0);
+        let h = OPT_FIELD_H;
+        // The part after the chosen one is the "choice" a click steps on to, as the
+        // one-button form's click does.
+        let notes: Vec<&'static str> = (0..opts.len()).map(|k| if k == (i + 1) % opts.len() { "choice" } else { "choice part" }).collect();
+        let pick = crate::kit::segmented(ui, Id::new(("choice", id)), &labels, &notes, &[], i, size, h, pal);
+        if let Some(k) = pick {
+            *cur = opts[k].0.clone();
+        }
+        return pick.is_some();
+    }
+    choice(ui, id, cur, opts)
+}
+
 /// Options' switch, for other pages that want one.
 pub(crate) fn switch(ui: &mut Ui, on: &mut bool, pal: &Palette) -> bool {
     toggle(ui, on, pal)
@@ -2764,20 +2828,6 @@ fn toggle(ui: &mut Ui, on: &mut bool, pal: &Palette) -> bool {
         return true;
     }
     false
-}
-
-fn stepper(ui: &mut Ui, v: &mut f32, step: f32, min: f32, max: f32, pal: &Palette) -> bool {
-    let mut changed = false;
-    if ui.add(egui::Button::new("+").min_size(vec2(22.0, 20.0))).clicked() {
-        *v = (*v + step).min(max);
-        changed = true;
-    }
-    ui.label(egui::RichText::new(format!("{v:.1}")).color(pal.text));
-    if ui.add(egui::Button::new("−").min_size(vec2(22.0, 20.0))).clicked() {
-        *v = (*v - step).max(min);
-        changed = true;
-    }
-    changed
 }
 
 /// Is option `o` at its default value? `reset` restores it.
@@ -2854,14 +2904,26 @@ fn opt_default(c: &mut crate::config::Config, o: Opt, reset: bool) -> bool {
     }
 }
 
-fn option_control(ui: &mut Ui, app: &mut App, o: Opt) -> bool {
+/// A slider's size in Options: a text field's, so they line up down a card and stand
+/// as tall as each other.
+const OPT_FIELD_W: f32 = 150.0;
+const OPT_FIELD_H: f32 = 20.0;
+
+/// `keys`: the row has the keyboard, and its slider takes Left and Right.
+fn option_control(ui: &mut Ui, app: &mut App, o: Opt, keys: bool) -> bool {
     let pal = app.pal;
     let layouts: Vec<String> = app.ud.layouts.keys().cloned().collect();
-    option_control_inner(ui, app, o, &pal, &layouts)
+    option_control_inner(ui, app, o, &pal, &layouts, keys)
 }
 
-fn option_control_inner(ui: &mut Ui, app: &mut App, o: Opt, pal: &Palette, layouts: &[String]) -> bool {
+fn option_control_inner(ui: &mut Ui, app: &mut App, o: Opt, pal: &Palette, layouts: &[String], keys: bool) -> bool {
     let pal = *pal;
+    // Numbers on a slider whose fill is the value, all of one width so they line up
+    // down a card.
+    let slider = |ui: &mut Ui, what: &str, v: &mut f32, min: f32, max: f32, step: f32, dec: usize| {
+        let h = OPT_FIELD_H;
+        crate::kit::fill_slider(ui, Id::new(("opt slider", what)), v, min, max, step, false, OPT_FIELD_W.min(ui.available_width()), h, keys, "", &[], |x| format!("{x:.dec$}"), &pal)
+    };
     if o == Opt::DefaultFm {
         let mut on = app.default_fm() == Some(true);
         if toggle(ui, &mut on, &pal) {
@@ -2879,10 +2941,16 @@ fn option_control_inner(ui: &mut Ui, app: &mut App, o: Opt, pal: &Palette, layou
     let c = &mut app.cfg;
     match o {
         Opt::Font => ui.add(egui::TextEdit::singleline(&mut c.font_family).hint_text(egui::RichText::new("System font").color(pal.text_dim)).desired_width(150.0).margin(egui::Margin::symmetric(5, 2))).lost_focus(),
-        Opt::InspectorFontSize => stepper(ui, &mut c.inspector_font_size, 0.5, 8.0, 28.0, &pal),
-        Opt::LineSpacing => ui.add(egui::Slider::new(&mut c.preview_line_spacing, 1.0..=2.0).step_by(0.05).fixed_decimals(2)).changed(),
+        Opt::InspectorFontSize => slider(ui, "inspector font size", &mut c.inspector_font_size, 8.0, 28.0, 0.5, 1),
+        Opt::LineSpacing => slider(ui, "line spacing", &mut c.preview_line_spacing, 1.0, 2.0, 0.05, 2),
         Opt::RectButtons => toggle(ui, &mut c.rect_buttons, &pal),
-        Opt::AssetCache => ui.add(egui::Slider::new(&mut c.asset_cache_mb, 32..=2048).suffix(" MB").logarithmic(true)).changed(),
+        Opt::AssetCache => {
+            let mut mb = c.asset_cache_mb as f32;
+            let h = OPT_FIELD_H;
+            let ch = crate::kit::fill_slider(ui, Id::new("opt slider asset cache"), &mut mb, 32.0, 2048.0, 1.0, true, OPT_FIELD_W.min(ui.available_width()), h, keys, "", &[], |x| format!("{:.0} MB", x), &pal);
+            c.asset_cache_mb = mb.round() as u32;
+            ch
+        }
         Opt::Theme => {
             // The theme as a small swatch and its name; the picker shows them all.
             let t = c.theme;
@@ -2892,7 +2960,7 @@ fn option_control_inner(ui: &mut Ui, app: &mut App, o: Opt, pal: &Palette, layou
             // and its swatch.
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
-                let b = ui.button("Choose…");
+                let b = crate::kit::button_in(ui, "Choose…", OPT_FIELD_H, false, &pal);
                 crate::ui::note_control(ui, b.rect, "choose theme");
                 open = b.clicked();
                 ui.label(egui::RichText::new(t.label()).size(12.5));
@@ -2909,12 +2977,12 @@ fn option_control_inner(ui: &mut Ui, app: &mut App, o: Opt, pal: &Palette, layou
         Opt::FollowSystem => toggle(ui, &mut c.follow_system_theme, &pal),
         Opt::SyntaxTheme => toggle(ui, &mut c.syntax_theme, &pal),
         Opt::Round => toggle(ui, &mut c.round_corners, &pal),
-        Opt::FontSize => stepper(ui, &mut c.font_size, 0.5, 9.0, 24.0, &pal),
-        Opt::Spacing => ui.add(egui::Slider::new(&mut c.spacing, 0.8..=1.6).step_by(0.05).fixed_decimals(2)).changed(),
+        Opt::FontSize => slider(ui, "font size", &mut c.font_size, 9.0, 24.0, 0.5, 1),
+        Opt::Spacing => slider(ui, "spacing", &mut c.spacing, 0.8, 1.6, 0.05, 2),
         Opt::Animations => toggle(ui, &mut c.animations, &pal),
         Opt::Tooltips => toggle(ui, &mut c.tooltips, &pal),
         Opt::AltRows => toggle(ui, &mut c.alt_rows, &pal),
-        Opt::InactiveOpacity => ui.add(egui::Slider::new(&mut c.inactive_opacity, 0.4..=1.0)).changed(),
+        Opt::InactiveOpacity => slider(ui, "inactive opacity", &mut c.inactive_opacity, 0.4, 1.0, 0.05, 2),
         Opt::Breadcrumbs => toggle(ui, &mut c.breadcrumbs, &pal),
         Opt::CompactPaths => toggle(ui, &mut c.compact_paths, &pal),
         Opt::ShowExt => toggle(ui, &mut c.show_ext, &pal),
@@ -2923,7 +2991,7 @@ fn option_control_inner(ui: &mut Ui, app: &mut App, o: Opt, pal: &Palette, layou
         Opt::FoldersFirst => toggle(ui, &mut c.folders_first, &pal),
         Opt::HighlightRecents => toggle(ui, &mut c.highlight_recents, &pal),
         Opt::RecentsOnTop => toggle(ui, &mut c.recents_on_top, &pal),
-        Opt::TrackRecents => choice(ui, "recents", &mut c.recents_store, &[(RecentsStore::Persistent, "Persistent"), (RecentsStore::Session, "This session"), (RecentsStore::Off, "Off")]),
+        Opt::TrackRecents => pick(ui, "recents", &mut c.recents_store, &pal, &[(RecentsStore::Persistent, "Persistent"), (RecentsStore::Session, "This session"), (RecentsStore::Off, "Off")]),
         Opt::CalcSizes => toggle(ui, &mut c.folder_sizes, &pal),
         Opt::SizesSsd => toggle(ui, &mut c.sizes_ssd, &pal),
         Opt::SizesHdd => toggle(ui, &mut c.sizes_hdd, &pal),
@@ -2934,7 +3002,7 @@ fn option_control_inner(ui: &mut Ui, app: &mut App, o: Opt, pal: &Palette, layou
         Opt::Meaning => toggle(ui, &mut c.semantic_search, &pal),
         Opt::MeaningPictures => toggle(ui, &mut c.semantic_pictures, &pal),
         Opt::GitPictures => toggle(ui, &mut c.github_pictures, &pal),
-        Opt::TrashAge => choice(ui, "trash age", &mut c.trash_days, &[(0, "Never"), (7, "After 7 days"), (30, "After 30 days"), (90, "After 90 days")]),
+        Opt::TrashAge => pick(ui, "trash age", &mut c.trash_days, &pal, &[(0, "Never"), (7, "After 7 days"), (30, "After 30 days"), (90, "After 90 days")]),
         Opt::Editor => {
             // Empty is Auto: the hint says what that comes to here.
             let hint = crate::editor::auto_label().map_or("Auto".to_string(), |l| format!("Auto: {l}"));
@@ -2942,7 +3010,7 @@ fn option_control_inner(ui: &mut Ui, app: &mut App, o: Opt, pal: &Palette, layou
             crate::ui::note_control(ui, r.rect, "editor field");
             r.lost_focus()
         }
-        Opt::IgnoredFiles => choice(ui, "ignored", &mut c.git_ignored, &[(IgnoredFiles::Dim, "Dim"), (IgnoredFiles::Hide, "Hide"), (IgnoredFiles::Show, "Show")]),
+        Opt::IgnoredFiles => pick(ui, "ignored", &mut c.git_ignored, &pal, &[(IgnoredFiles::Dim, "Dim"), (IgnoredFiles::Hide, "Hide"), (IgnoredFiles::Show, "Show")]),
         Opt::MeaningFolders => ui.add(egui::TextEdit::singleline(&mut c.semantic_folders).hint_text(egui::RichText::new("~/Documents").color(pal.text_dim)).desired_width(150.0).margin(egui::Margin::symmetric(5, 2))).lost_focus(),
         Opt::DefaultFm | Opt::Picker => false,
         Opt::Updates => {
@@ -2952,7 +3020,7 @@ fn option_control_inner(ui: &mut Ui, app: &mut App, o: Opt, pal: &Palette, layou
         Opt::Tour => {
             // Right to left: What's New at the edge, the tour beside it.
             for (label, c, what) in [("What's new", Cmd::WhatsNew, "whats new button"), ("Tour", Cmd::Welcome, "tour button")] {
-                let b = ui.button(label);
+                let b = crate::kit::button_in(ui, label, OPT_FIELD_H, false, &pal);
                 crate::ui::note_control(ui, b.rect, what);
                 if b.clicked() {
                     app.actions.push(Action::Cmd(c));
@@ -2961,7 +3029,7 @@ fn option_control_inner(ui: &mut Ui, app: &mut App, o: Opt, pal: &Palette, layou
             false
         }
         Opt::CustomActions => {
-            let b = ui.button("Edit…");
+            let b = crate::kit::button_in(ui, "Edit…", OPT_FIELD_H, false, &pal);
             crate::ui::note_control(ui, b.rect, "option button");
             if b.clicked() {
                 app.actions.push(Action::Cmd(Cmd::CustomActions));
@@ -2976,7 +3044,7 @@ fn option_control_inner(ui: &mut Ui, app: &mut App, o: Opt, pal: &Palette, layou
                 Opt::ResetAll => ("Reset…", Cmd::ResetConfig),
                 _ => ("Install", Cmd::Install),
             };
-            let b = ui.button(label);
+            let b = crate::kit::button_in(ui, label, OPT_FIELD_H, false, &pal);
             crate::ui::note_control(ui, b.rect, "option button");
             if b.clicked() {
                 app.actions.push(Action::Cmd(c));
@@ -2987,7 +3055,7 @@ fn option_control_inner(ui: &mut Ui, app: &mut App, o: Opt, pal: &Palette, layou
             let r = ui.add(egui::TextEdit::singleline(&mut c.inspector_font).hint_text(egui::RichText::new("monospace").color(pal.text_dim)).desired_width(150.0).margin(egui::Margin::symmetric(5, 2)));
             r.changed()
         }
-        Opt::Thumbnails => choice(ui, "thumbs", &mut c.thumbnails, &[(ThumbMode::LocalDisks, "Local disks"), (ThumbMode::AllDrives, "All drives"), (ThumbMode::Never, "Never")]),
+        Opt::Thumbnails => pick(ui, "thumbs", &mut c.thumbnails, &pal, &[(ThumbMode::LocalDisks, "Local disks"), (ThumbMode::AllDrives, "All drives"), (ThumbMode::Never, "Never")]),
         Opt::ThumbFill => toggle(ui, &mut c.thumb_fill, &pal),
         Opt::CheckCopies => toggle(ui, &mut c.check_copies, &pal),
         Opt::ScrollBeyond => toggle(ui, &mut c.scroll_beyond, &pal),
@@ -2999,18 +3067,18 @@ fn option_control_inner(ui: &mut Ui, app: &mut App, o: Opt, pal: &Palette, layou
         Opt::DblClickParent => toggle(ui, &mut c.dblclick_bg_parent, &pal),
         Opt::PictureViewer => toggle(ui, &mut c.picture_viewer, &pal),
         Opt::ReverseScroll => toggle(ui, &mut c.reverse_scroll, &pal),
-        Opt::CharKey => choice(ui, "charkey", &mut c.char_key_action, &[(CharKeyAction::TriggerHotkey, "Hotkeys, else filter"), (CharKeyAction::Filter, "Filter"), (CharKeyAction::Jump, "Jump to name")]),
-        Opt::MiddleClick => choice(ui, "middle", &mut c.middle_click, &[(MiddleClick::OpenInSplit, "Open in split"), (MiddleClick::OpenInNewTab, "Open in new tab")]),
-        Opt::InspectorLayout => choice(ui, "insp", &mut c.inspector_layout, &[(InspectorLayout::Auto, "Auto"), (InspectorLayout::Right, "Right"), (InspectorLayout::Bottom, "Bottom")]),
+        Opt::CharKey => pick(ui, "charkey", &mut c.char_key_action, &pal, &[(CharKeyAction::TriggerHotkey, "Hotkeys, else filter"), (CharKeyAction::Filter, "Filter"), (CharKeyAction::Jump, "Jump to name")]),
+        Opt::MiddleClick => pick(ui, "middle", &mut c.middle_click, &pal, &[(MiddleClick::OpenInSplit, "Open in split"), (MiddleClick::OpenInNewTab, "Open in new tab")]),
+        Opt::InspectorLayout => pick(ui, "insp", &mut c.inspector_layout, &pal, &[(InspectorLayout::Auto, "Auto"), (InspectorLayout::Right, "Right"), (InspectorLayout::Bottom, "Bottom")]),
         Opt::Startup => {
             let mut opts: Vec<(Startup, String)> = vec![(Startup::LastSession, "Last session".into()), (Startup::Home, "Home folder".into())];
             for l in layouts {
                 opts.push((Startup::Layout(l.clone()), format!("Layout: {l}")));
             }
             let refs: Vec<(Startup, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
-            choice(ui, "startup", &mut c.startup, &refs)
+            pick(ui, "startup", &mut c.startup, &pal, &refs)
         }
-        Opt::NewTab => choice(ui, "newtab", &mut c.new_tab, &[(NewTabShows::Current, "Current folder"), (NewTabShows::Home, "Home"), (NewTabShows::Computer, "Computer")]),
+        Opt::NewTab => pick(ui, "newtab", &mut c.new_tab, &pal, &[(NewTabShows::Current, "Current folder"), (NewTabShows::Home, "Home"), (NewTabShows::Computer, "Computer")]),
     }
 }
 
@@ -3020,6 +3088,8 @@ struct RowLook {
     /// A search result: the section's name goes before the title.
     label: bool,
     selected: bool,
+    /// The arrows chose it: its slider takes Left and Right.
+    keys: bool,
     scroll: bool,
     first: bool,
 }
@@ -3072,7 +3142,7 @@ fn option_row(ui: &mut Ui, app: &mut App, oi: usize, r: Rect, look: &RowLook, q:
     if inert {
         cui.disable();
     }
-    if option_control(&mut cui, app, o) {
+    if option_control(&mut cui, app, o, look.selected && look.keys) {
         changed = true;
     }
     let mut left = cui.min_rect().left();
@@ -3129,7 +3199,7 @@ pub(crate) fn option_changed(app: &mut App, ctx: &egui::Context) {
 pub(crate) fn option_in(ui: &mut Ui, app: &mut App, o: Opt, r: Rect, first: bool) -> bool {
     let Some(oi) = OPTS.iter().position(|x| x.0 == o) else { return false };
     let pal = app.pal;
-    let look = RowLook { compact: false, label: false, selected: false, scroll: false, first };
+    let look = RowLook { compact: false, label: false, selected: false, keys: false, scroll: false, first };
     option_row(ui, app, oi, r, &look, &fuzzy::Query::new(""), &pal).0
 }
 
@@ -3138,19 +3208,17 @@ pub(crate) fn hint_row(ui: &Ui, r: Rect, items: &[(&str, &str)], pal: &Palette) 
     let p = ui.painter();
     let cy = r.center().y;
     let mut x = r.left();
+    let font = FontId::proportional(10.5);
     for (k, label) in items {
-        let kg = p.layout_no_wrap(k.to_string(), FontId::proportional(10.5), pal.text_dim);
+        let (_, kw) = crate::kit::caps_layout(p, k, 0.0, 0.0, &font, pal);
         let lg = p.layout_no_wrap(label.to_string(), FontId::proportional(11.0), pal.text_dim);
-        let (ks, ls) = (kg.size(), lg.size());
-        if x + ks.x + 14.0 + ls.x > r.right() {
+        let ls = lg.size();
+        if x + kw + 5.0 + ls.x > r.right() {
             break;
         }
-        let kr = Rect::from_min_size(pos2(x, (cy - (ks.y + 6.0) / 2.0).round()), ks + vec2(10.0, 6.0));
-        p.rect(kr, CornerRadius::same(4), pal.bg, Stroke::new(1.0, pal.border), StrokeKind::Inside);
-        p.galley(kr.min + vec2(5.0, 3.0), kg, pal.text_dim);
-        crate::ui::note_control(ui, kr, "key hint");
-        p.galley(pos2(kr.right() + 4.0, (cy - ls.y / 2.0).round()), lg, pal.text_dim);
-        x = kr.right() + 4.0 + ls.x + 14.0;
+        let w = crate::kit::paint_caps(ui, k, x, cy - 0.5, &font, true, pal);
+        p.galley(pos2(x + w + 5.0, (cy - ls.y / 2.0).round()), lg, pal.text_dim);
+        x += w + 5.0 + ls.x + 14.0;
     }
 }
 
@@ -3216,7 +3284,12 @@ fn options(app: &mut App, ctx: &egui::Context, st: &mut OptState) -> bool {
     let searching = !st.query.trim().is_empty();
     let rows: Vec<usize> = if searching { find_options(&st.query) } else { (0..OPTS.len()).filter(|&i| OPTS[i].1 == section).collect() };
     // Install only for a copy that isn't the installed one.
-    let rows: Vec<usize> = rows.into_iter().filter(|&i| OPTS[i].0 != Opt::Install || !crate::install::installed_here()).collect();
+    let all: Vec<usize> = rows.into_iter().filter(|&i| OPTS[i].0 != Opt::Install || !crate::install::installed_here()).collect();
+    // A section's groups fold away, for as long as Maia runs; the keys walk the rows
+    // still out, and a search finds every option, folded or not.
+    let fold_id = Id::new("options folded");
+    let folded: Vec<&'static str> = if searching { vec![] } else { ctx.data(|d| d.get_temp::<Vec<&'static str>>(fold_id)).unwrap_or_default() };
+    let rows: Vec<usize> = all.iter().copied().filter(|&i| !folded.contains(&OPTS[i].2)).collect();
     if up && st.sel > 0 {
         st.sel -= 1;
         st.scroll_to_sel = true;
@@ -3274,6 +3347,7 @@ fn options(app: &mut App, ctx: &egui::Context, st: &mut OptState) -> bool {
     let mut toggle_compact = false;
     let mut go_section = None;
     let mut clicked_row = None;
+    let mut fold_click: Option<&'static str> = None;
     // A larger window than the other dialogs, of a fixed size so it does not jump
     // between sections; it shrinks with the window.
     let screen = ctx.content_rect();
@@ -3328,14 +3402,19 @@ fn options(app: &mut App, ctx: &egui::Context, st: &mut OptState) -> bool {
             let mut sui = ui.new_child(egui::UiBuilder::new().max_rect(side).layout(top_down));
             egui::ScrollArea::vertical().id_salt("opt sections").max_height(side.height()).auto_shrink([false, false]).show(&mut sui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
+                // The section on show has a highlight that slides to it, under the rows.
+                if let Some(k) = Section::ALL.iter().position(|&s| s == section).filter(|_| !searching) {
+                    let top = ui.cursor().top();
+                    let y = crate::kit::slide(ui.ctx(), Id::new("options section pill"), k as f32 * 32.0) + top;
+                    crate::kit::chosen(ui.painter(), Rect::from_min_size(pos2(ui.cursor().left(), y), vec2(ui.available_width(), 30.0)), 6, &pal);
+                }
                 for sec in Section::ALL {
-                    // Chosen as a listing's selection is: its fill under the usual text.
                     let on = !searching && sec == section;
                     // While searching, sections without a match step back.
                     let quiet = searching && !hits.contains(&sec);
-                    let resp = row(ui, 30.0, on, &pal, |ui, r| {
+                    let resp = rail_row(ui, on, &pal, |ui, r| {
                         let faint = pal.text_dim.gamma_multiply(0.55);
-                        let (gc, tc) = if on { (pal.text, pal.text) } else if quiet { (faint, faint) } else { (pal.text_dim, pal.text) };
+                        let (gc, tc) = if on { (crate::kit::on_lift(&pal), crate::kit::on_lift(&pal)) } else if quiet { (faint, faint) } else { (pal.text_dim, pal.text) };
                         let gx = if narrow { r.center().x } else { r.left() + 16.0 };
                         sec.paint(ui.painter(), Rect::from_center_size(pos2(gx.round(), r.center().y.round()), Vec2::splat(14.0)), gc);
                         if !narrow {
@@ -3360,32 +3439,63 @@ fn options(app: &mut App, ctx: &egui::Context, st: &mut OptState) -> bool {
                 // Room on the right for the scroll bar.
                 let cw = (ui.available_width() - 10.0).floor();
                 let mut k = 0;
-                while k < rows.len() {
+                // The row's place among those the keys walk (a folded group's are not).
+                let mut vi = 0;
+                while k < all.len() {
                     // Search results are one card; a section has a card per group.
-                    let group = if searching { "" } else { OPTS[rows[k]].2 };
-                    let n = if searching { rows.len() } else { rows[k..].iter().take_while(|&&i| OPTS[i].2 == group).count() };
+                    let group = if searching { "" } else { OPTS[all[k]].2 };
+                    let n = if searching { all.len() } else { all[k..].iter().take_while(|&&i| OPTS[i].2 == group).count() };
                     if k > 0 {
                         ui.add_space(12.0);
                     }
+                    let shut = folded.contains(&group);
                     if !group.is_empty() {
-                        let (hr, _) = ui.allocate_exact_size(vec2(cw, 20.0), Sense::hover());
-                        ui.painter().text(pos2(hr.left() + 4.0, hr.center().y - 1.0), Align2::LEFT_CENTER, group, FontId::proportional(11.5), pal.text_dim);
-                    }
-                    let (card, _) = ui.allocate_exact_size(vec2(cw, n as f32 * row_h), Sense::hover());
-                    ui.painter().rect(card, CornerRadius::same(8), card_fill, Stroke::new(1.0, card_line), StrokeKind::Inside);
-                    for j in 0..n {
-                        let vi = k + j;
-                        let r = Rect::from_min_size(card.min + vec2(0.0, j as f32 * row_h), vec2(cw, row_h));
-                        let look = RowLook { compact, label: searching, selected: (st.keyed || searching) && vi == st.sel, scroll: st.scroll_to_sel && vi == st.sel, first: j == 0 };
-                        let (c, clicked) = option_row(ui, app, rows[vi], r, &look, &q, &pal);
-                        changed |= c;
-                        if clicked {
-                            clicked_row = Some(vi);
+                        let (hr, hresp) = ui.allocate_exact_size(vec2(cw, 20.0), Sense::click());
+                        crate::ui::note_control(ui, hr, "option group");
+                        let hot = hresp.hovered();
+                        let c = if hot { pal.text } else { pal.text_dim };
+                        // Folded, it says how many it holds.
+                        let label = if shut { format!("{group} · {n}") } else { group.to_string() };
+                        ui.painter().text(pos2(hr.left() + 4.0, hr.center().y - 1.0), Align2::LEFT_CENTER, label, FontId::proportional(11.5), c);
+                        // The chevron shows while pointed at, and stays on a folded group.
+                        let turn = crate::kit::slide(ui.ctx(), Id::new(("options fold turn", group)), if shut { 0.0 } else { 1.0 });
+                        if hot || shut || turn < 0.99 {
+                            crate::kit::chevron(ui.painter(), pos2(hr.right() - 10.0, hr.center().y - 1.0), turn, c);
                         }
+                        if hresp.clicked() {
+                            fold_click = Some(group);
+                        }
+                    }
+                    // The card closes up under its heading, rows clipped at its foot.
+                    let open = if group.is_empty() { 1.0 } else { crate::kit::slide(ui.ctx(), Id::new(("options fold", group)), if shut { 0.0 } else { 1.0 }) };
+                    let h = (n as f32 * row_h * open).round();
+                    if h >= 1.0 {
+                        let (card, _) = ui.allocate_exact_size(vec2(cw, h), Sense::hover());
+                        ui.painter().rect(card, CornerRadius::same(8), card_fill, Stroke::new(1.0, card_line), StrokeKind::Inside);
+                        let clip = ui.clip_rect().intersect(card);
+                        ui.scope(|ui| {
+                            ui.set_clip_rect(clip);
+                            for j in 0..n {
+                                let r = Rect::from_min_size(card.min + vec2(0.0, j as f32 * row_h), vec2(cw, row_h));
+                                if r.top() >= card.bottom() {
+                                    break;
+                                }
+                                let here = if shut { usize::MAX } else { vi + j };
+                                let look = RowLook { compact, label: searching, selected: (st.keyed || searching) && here == st.sel, keys: st.keyed, scroll: st.scroll_to_sel && here == st.sel, first: j == 0 };
+                                let (c, clicked) = option_row(ui, app, all[k + j], r, &look, &q, &pal);
+                                changed |= c;
+                                if clicked && !shut {
+                                    clicked_row = Some(here);
+                                }
+                            }
+                        });
+                    }
+                    if !shut {
+                        vi += n;
                     }
                     k += n;
                 }
-                if rows.is_empty() {
+                if all.is_empty() {
                     ui.add_space(28.0);
                     ui.vertical_centered(|ui| ui.label(egui::RichText::new("No option matches").size(12.5).color(pal.text_dim)));
                 }
@@ -3398,6 +3508,18 @@ fn options(app: &mut App, ctx: &egui::Context, st: &mut OptState) -> bool {
     crate::ui::note_popup(rect);
     if let Some(vi) = clicked_row {
         st.sel = vi;
+    }
+    if let Some(g) = fold_click {
+        let mut f = folded;
+        match f.iter().position(|x| *x == g) {
+            Some(i) => {
+                f.remove(i);
+            }
+            None => f.push(g),
+        }
+        ctx.data_mut(|d| d.insert_temp(fold_id, f));
+        st.sel = 0;
+        st.keyed = false;
     }
     if let Some(sec) = go_section {
         section = sec;
@@ -3634,19 +3756,62 @@ fn saved_view(app: &mut App, ctx: &egui::Context, panel: u64) -> bool {
     if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
         return false;
     }
+    // What the view holds, named as the menus name it, so it is plain what would be kept.
+    let mut parts: Vec<String> = vec![];
+    parts.push(if settings.column_view { "Columns".into() } else if settings.stack_view { "Stack".into() } else { crate::listing::view_name(settings.zoom).into() });
+    if let Some(c) = crate::config::Column::ALL.iter().find(|c| c.sort_key() == Some(settings.sort)) {
+        parts.push(format!("{} {}", c.title(), if settings.desc { "↓" } else { "↑" }));
+    }
+    if let Some(g) = commands::GROUP_CMDS.iter().find(|c| c.group_key() == Some(settings.group)).filter(|_| settings.group != crate::config::GroupBy::None) {
+        parts.push(g.info().title.replace("Group By", "Grouped by"));
+    }
+    match settings.only_types.as_slice() {
+        [] => {}
+        [t] => parts.push(format!("{t} only")),
+        ts => parts.push(format!("{} types", ts.len())),
+    }
+    if !settings.show_folders {
+        parts.push("No folders".into());
+    }
+    if !settings.show_files {
+        parts.push("No files".into());
+    }
     let (_, rect) = anchored(ctx, "savedview", anchor, 300.0, &pal, |ui| {
-        ui.label(egui::RichText::new("Saved view settings").strong());
-        ui.label(egui::RichText::new("View size, columns, sort, grouping and type filters.").small().color(pal.text_dim));
+        ui.label(egui::RichText::new("Keep this view").strong());
+        ui.add_space(6.0);
+        // Where it is kept: one choice of three, under a pill that slides to it.
+        let scopes = [None, Some(SaveScope::ThisFolder), Some(SaveScope::Subfolders)];
+        let cur = scopes.iter().position(|s| *s == current).unwrap_or(0);
+        let pick = crate::kit::segmented(ui, Id::new("saved view scope"), &["Nowhere", "This folder", "And below"], &["view scope none", "view scope folder", "view scope below"], &["Folders without a view of their own follow the one you were in", "Kept for this folder only", "Kept for this folder and every folder inside it"], cur, 12.0, 24.0, &pal);
+        if let Some(k) = pick {
+            choice_v = Some(scopes[k]);
+        }
         ui.add_space(4.0);
-        for (v, label) in [(None, "None (inherit)"), (Some(SaveScope::ThisFolder), "This folder"), (Some(SaveScope::Subfolders), "This folder and subfolders")] {
-            if ui.radio(current == v, label).clicked() {
-                choice_v = Some(v);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+            for t in &parts {
+                let g = ui.painter().layout_no_wrap(t.clone(), FontId::proportional(11.5), pal.text_dim);
+                let (r, _) = ui.allocate_exact_size(g.size() + vec2(12.0, 6.0), Sense::hover());
+                ui.painter().rect(r, CornerRadius::same(5), pal.card(), Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+                ui.painter().galley(r.min + vec2(6.0, 3.0), g, pal.text_dim);
             }
-        }
-        ui.separator();
-        if ui.button("Set as default for all folders").clicked() {
-            set_default = true;
-        }
+        });
+        ui.add_space(8.0);
+        let y = ui.cursor().top().round() + 0.5;
+        let x = ui.cursor().left();
+        crate::kit::dashed_rule(ui.painter(), pos2(x, y), pos2(x + ui.available_width(), y), &pal);
+        ui.add_space(8.0);
+        // At the popup's own size, as its other words are: at the window's font it ran
+        // into the line beside it.
+        // A row of its own height: a right-to-left layout alone takes all the height the
+        // menu's scroll area offers, and the popup ran down the window.
+        ui.allocate_ui_with_layout(vec2(ui.available_width(), 26.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let b = crate::kit::small_button(ui, "Use for every folder", &pal);
+            crate::ui::note_control(ui, b.rect, "view default");
+            if b.on_hover_text("Folders without a view of their own open in this one").clicked() {
+                set_default = true;
+            }
+        });
     });
     if let Some(v) = choice_v {
         match v {
@@ -3685,77 +3850,75 @@ fn zoom(app: &mut App, ctx: &egui::Context, panel: u64, anchor: Pos2) -> bool {
     if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
         return false;
     }
-    // Opens above the footer chip. The named views sit beside a vertical slider, each
-    // at the height of its zoom value, so the dense views bunch up at the bottom; Columns
-    // and Stack, which have no zoom, below them. It hangs from its lower edge, whatever the
-    // Spacing.
-    let (w, track) = (176.0, 168.0);
+    // Opens above the footer chip, hanging from its lower edge whatever the Spacing. The
+    // icons' size on a slider at the top (its marks at M, L and XL); under it every view
+    // as a row, the one shown under a highlight that slides to the one picked. Columns
+    // and Stack, which have no size, after a rule.
+    let w = 176.0;
     let columns = t.settings.column_view;
     let stacked = t.settings.stack_view;
+    let z = t.settings.zoom;
+    let icons = !columns && !stacked && z >= 0.3 - 1e-3;
+    // The last icon size, for the Icons row and the slider while another view shows.
+    let last_id = Id::new(("view popup icon size", panel));
+    let last: f32 = if z >= 0.3 - 1e-3 { z } else { ctx.data(|d| d.get_temp(last_id)).unwrap_or(0.3) };
+    ctx.data_mut(|d| d.insert_temp(last_id, last));
     let (mut set_columns, mut set_stack) = (false, false);
     let (_, rect) = anchored_from(ctx, "zoom", pos2(anchor.x - w + 30.0, anchor.y - 10.0), Align2::LEFT_BOTTOM, w, &pal, |ui| {
-        let (r, resp) = ui.allocate_exact_size(vec2(w - 16.0, track + 20.0), Sense::click_and_drag());
-        let rail_x = r.right() - 10.0;
-        let (y0, y1) = (r.bottom() - 10.0, r.top() + 10.0);
-        let y_of = |v: f32| y0 + (y1 - y0) * v;
-        let z = t.settings.zoom;
+        let cw = w - 16.0;
         let mut set = None;
-        let painter = ui.painter();
-        for (name, v) in crate::listing::VIEW_STOPS {
-            let y = y_of(v);
-            let lr = Rect::from_min_max(pos2(r.left(), y - 10.0), pos2(rail_x - 14.0, y + 10.0));
-            let on = !columns && !stacked && (crate::listing::view_name(z) == name || (name == "M Icons" && (z - 0.3).abs() < 0.001));
-            let hov = ui.rect_contains_pointer(lr);
+        let mut iz = last;
+        let name = |v: f32| crate::listing::view_name(v).trim_end_matches(" Icons").to_string();
+        if crate::kit::fill_slider(ui, Id::new(("view popup size", panel)), &mut iz, 0.3, 1.0, 0.005, false, cw, 24.0, false, "Size", &[0.65], name, &pal) {
+            set = Some(iz);
+        }
+        ui.add_space(4.0);
+        let rows: [(&str, crate::listing::Mode, bool); 6] = [
+            ("Icons", crate::listing::mode_for(last), icons),
+            ("List", crate::listing::Mode::List, !columns && !stacked && crate::listing::view_name(z) == "List"),
+            ("Tree", crate::listing::Mode::Tree, !columns && !stacked && crate::listing::view_name(z) == "Tree"),
+            ("Details", crate::listing::Mode::Details, !columns && !stacked && crate::listing::view_name(z) == "Details"),
+            ("Columns", crate::listing::Mode::Columns, columns),
+            ("Stack", crate::listing::Mode::Stack, stacked),
+        ];
+        let pill = ui.painter().add(egui::Shape::Noop);
+        let origin = ui.cursor().top();
+        let mut on_top = None;
+        for (k, (label, mode, on)) in rows.into_iter().enumerate() {
+            if k == 4 {
+                let (sep, _) = ui.allocate_exact_size(vec2(cw, 5.0), Sense::hover());
+                ui.painter().line_segment([pos2(sep.left() + 4.0, sep.center().y), pos2(sep.right() - 4.0, sep.center().y)], Stroke::new(1.0, pal.border));
+            }
+            let (r, resp) = ui.allocate_exact_size(vec2(cw, 26.0), Sense::click());
+            crate::ui::note_control(ui, r, "view row");
             if on {
-                painter.rect_filled(lr, CornerRadius::same(4), pal.accent);
-            } else if hov {
-                painter.rect_filled(lr, CornerRadius::same(4), pal.hover);
+                on_top = Some(r.top() - origin);
+            } else if resp.hovered() {
+                ui.painter().rect_filled(r, CornerRadius::same(5), crate::kit::touch(&pal));
             }
-            let col = if on { Color32::WHITE } else { pal.text };
-            crate::listing::paint_view_glyph(painter, Rect::from_center_size(pos2(lr.left() + 12.0, y), Vec2::splat(11.0)), crate::listing::mode_for(v), col);
-            painter.text(pos2(lr.left() + 26.0, y), Align2::LEFT_CENTER, name, FontId::proportional(12.5), col);
-            if !on && v > 0.25 {
-                painter.line_segment([pos2(lr.left() + 26.0, y + 10.0), pos2(lr.right(), y + 10.0)], Stroke::new(1.0, pal.border.gamma_multiply(0.6)));
-            }
-            if hov && resp.clicked() {
-                set = Some(v);
-            }
-        }
-        // Slider rail and knob.
-        painter.line_segment([pos2(rail_x, y0), pos2(rail_x, y1)], Stroke::new(4.0, pal.border));
-        painter.line_segment([pos2(rail_x, y0), pos2(rail_x, y_of(z))], Stroke::new(4.0, pal.accent.gamma_multiply(0.6)));
-        painter.circle_filled(pos2(rail_x, y_of(z)), 7.0, if columns || stacked { pal.text_dim } else { pal.accent });
-        if let Some(pp) = resp.interact_pointer_pos() {
-            if resp.dragged() || (resp.clicked() && pp.x > rail_x - 16.0) {
-                let v = ((pp.y - y0) / (y1 - y0)).clamp(0.0, 1.0);
-                // Snap the dense views to their stops; icons stay continuous.
-                set = Some(if v < 0.3 { (v * 10.0).round() / 10.0 } else { v });
+            let col = if on { crate::kit::on_lift(&pal) } else if resp.hovered() { pal.text } else { pal.text.gamma_multiply(0.9) };
+            crate::listing::paint_view_glyph(ui.painter(), Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), Vec2::splat(11.0)), mode, col);
+            ui.painter().text(pos2(r.left() + 30.0, r.center().y), Align2::LEFT_CENTER, label, FontId::proportional(12.5), col);
+            if resp.clicked() {
+                match k {
+                    0 => set = Some(last),
+                    1 => set = Some(0.2),
+                    2 => set = Some(0.1),
+                    3 => set = Some(0.0),
+                    4 => set_columns = true,
+                    _ => set_stack = true,
+                }
             }
         }
-        let (sep, _) = ui.allocate_exact_size(vec2(w - 16.0, 3.0), Sense::hover());
-        ui.painter().line_segment([pos2(sep.left() + 4.0, sep.center().y), pos2(sep.right() - 4.0, sep.center().y)], Stroke::new(1.0, pal.border));
-        let (cr, cresp) = ui.allocate_exact_size(vec2(w - 16.0, 20.0), Sense::click());
-        let lr = Rect::from_min_max(cr.min, pos2(rail_x - 14.0, cr.bottom()));
-        if columns {
-            ui.painter().rect_filled(lr, CornerRadius::same(4), pal.accent);
-        } else if cresp.hovered() {
-            ui.painter().rect_filled(lr, CornerRadius::same(4), pal.hover);
+        if let Some(y) = on_top {
+            let y = crate::kit::slide(ui.ctx(), Id::new(("view popup pill", panel)), y) + origin;
+            let r = Rect::from_min_size(pos2(ui.min_rect().left(), y), vec2(cw, 26.0));
+            let mut shapes = vec![egui::Shape::rect_filled(r, CornerRadius::same(5), crate::kit::lift(&pal))];
+            if !pal.strong {
+                shapes.push(egui::Shape::rect_filled(Rect::from_center_size(pos2(r.left() + 3.5, r.center().y), vec2(3.0, 12.0)), CornerRadius::same(2), pal.accent));
+            }
+            ui.painter().set(pill, egui::Shape::Vec(shapes));
         }
-        let col = if columns { Color32::WHITE } else { pal.text };
-        crate::listing::paint_view_glyph(ui.painter(), Rect::from_center_size(pos2(lr.left() + 12.0, lr.center().y), Vec2::splat(11.0)), crate::listing::Mode::Columns, col);
-        ui.painter().text(pos2(lr.left() + 26.0, lr.center().y), Align2::LEFT_CENTER, "Columns", FontId::proportional(12.5), col);
-        set_columns = cresp.clicked();
-        let (sr, sresp) = ui.allocate_exact_size(vec2(w - 16.0, 20.0), Sense::click());
-        let lr = Rect::from_min_max(sr.min, pos2(rail_x - 14.0, sr.bottom()));
-        if stacked {
-            ui.painter().rect_filled(lr, CornerRadius::same(4), pal.accent);
-        } else if sresp.hovered() {
-            ui.painter().rect_filled(lr, CornerRadius::same(4), pal.hover);
-        }
-        let col = if stacked { Color32::WHITE } else { pal.text };
-        crate::listing::paint_view_glyph(ui.painter(), Rect::from_center_size(pos2(lr.left() + 12.0, lr.center().y), Vec2::splat(11.0)), crate::listing::Mode::Stack, col);
-        ui.painter().text(pos2(lr.left() + 26.0, lr.center().y), Align2::LEFT_CENTER, "Stack", FontId::proportional(12.5), col);
-        set_stack = sresp.clicked();
         if let Some(v) = set {
             t.settings.zoom = v;
             t.dirty |= std::mem::take(&mut t.settings.column_view) | std::mem::take(&mut t.settings.stack_view);
@@ -4066,50 +4229,44 @@ fn compress(app: &mut App, ctx: &egui::Context, st: &mut CompressState) -> bool 
                 st.format = f;
             }
         }
-        ui.add_space(8.0);
-        ui.horizontal_wrapped(|ui| {
-            for f in Format::ALL {
-                let what = match f {
-                    Format::Zip => "compress zip",
-                    Format::TarGz => "compress tar.gz",
-                    Format::TarXz => "compress tar.xz",
-                    Format::SevenZ => "compress 7z",
-                };
-                let tip = match f {
-                    Format::Zip => "Opens anywhere; a password locks it with AES-256",
-                    Format::TarGz => "Keeps Linux permissions and links; quick",
-                    Format::TarXz => "Keeps Linux permissions and links; smaller, slower",
-                    Format::SevenZ => "Small; a password locks the names too",
-                };
-                if crate::devtools::chip(ui, f.label(), st.format == f, what, tip, &pal, false) && st.format != f {
-                    st.name = format!("{}{}", st.stem(), f.ext());
-                    st.format = f;
-                }
+        ui.add_space(10.0);
+        // Format and level, each one choice under a pill that slides to it, beside its name.
+        let label_w = ui.painter().layout_no_wrap("Password".into(), egui::TextStyle::Small.resolve(ui.style()), pal.text_dim).size().x + 12.0;
+        let side = |ui: &mut Ui, t: &str| {
+            let (r, _) = ui.allocate_exact_size(vec2(label_w, 24.0), Sense::hover());
+            ui.painter().text(pos2(r.left(), r.center().y), Align2::LEFT_CENTER, t, egui::TextStyle::Small.resolve(ui.style()), pal.text_dim);
+        };
+        ui.horizontal(|ui| {
+            side(ui, "Format");
+            let labels: Vec<&str> = Format::ALL.iter().map(|f| f.label()).collect();
+            let tips = ["Opens anywhere; a password locks it with AES-256", "Keeps Linux permissions and links; quick", "Keeps Linux permissions and links; smaller, slower", "Small; a password locks the names too"];
+            let cur = Format::ALL.iter().position(|f| *f == st.format).unwrap_or(0);
+            if let Some(k) = crate::kit::segmented(ui, Id::new("compress format"), &labels, &["compress zip", "compress tar.gz", "compress tar.xz", "compress 7z"], &tips, cur, 12.0, 24.0, &pal) {
+                let f = Format::ALL[k];
+                st.name = format!("{}{}", st.stem(), f.ext());
+                st.format = f;
             }
         });
         ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
-            for l in Level::ALL {
-                let (what, tip) = match l {
-                    Level::Fast => ("compress fast", "Quickest, a bigger archive"),
-                    Level::Normal => ("compress normal", "The tools' usual balance"),
-                    Level::Smallest => ("compress smallest", "Slowest, the smallest archive"),
-                };
-                if crate::devtools::chip(ui, l.label(), st.level == l, what, tip, &pal, false) {
-                    st.level = l;
-                }
+        ui.horizontal(|ui| {
+            side(ui, "Level");
+            let labels: Vec<&str> = Level::ALL.iter().map(|l| l.label()).collect();
+            let cur = Level::ALL.iter().position(|l| *l == st.level).unwrap_or(0);
+            if let Some(k) = crate::kit::segmented(ui, Id::new("compress level"), &labels, &["compress fast", "compress normal", "compress smallest"], &["Quickest, a bigger archive", "The tools' usual balance", "Slowest, the smallest archive"], cur, 12.0, 24.0, &pal) {
+                st.level = Level::ALL[k];
             }
         });
-        ui.add_space(8.0);
-        ui.label(egui::RichText::new("Password").small().color(pal.text_dim));
-        let hint = if lockable {
-            "None"
-        } else if st.format.lockable() {
-            "A locked 7z needs the 7z command"
-        } else {
-            "Only zip and 7-Zip take one"
-        };
-        let r = ui.add_enabled(lockable, egui::TextEdit::singleline(&mut st.password).password(true).hint_text(hint).desired_width(f32::INFINITY));
+        ui.add_space(4.0);
+        // The password, where the format takes one; else why not, in place of a dead field.
+        let r = ui.horizontal(|ui| {
+            side(ui, "Password");
+            if lockable {
+                ui.add(egui::TextEdit::singleline(&mut st.password).password(true).hint_text("None").desired_width(f32::INFINITY))
+            } else {
+                let why = if st.format.lockable() { "A locked 7z needs the 7z command" } else { "Only zip and 7-Zip take one" };
+                ui.label(egui::RichText::new(why).small().color(pal.text_dim))
+            }
+        }).inner;
         crate::ui::note_control(ui, r.rect, "compress password");
         if st.focus == Some(true) {
             r.request_focus();
@@ -4117,8 +4274,10 @@ fn compress(app: &mut App, ctx: &egui::Context, st: &mut CompressState) -> bool 
         }
         if lockable && !st.password.is_empty() {
             ui.add_space(4.0);
-            ui.label(egui::RichText::new("Again").small().color(pal.text_dim));
-            let r = ui.add(egui::TextEdit::singleline(&mut st.again).password(true).desired_width(f32::INFINITY));
+            let r = ui.horizontal(|ui| {
+                side(ui, "Again");
+                ui.add(egui::TextEdit::singleline(&mut st.again).password(true).desired_width(f32::INFINITY))
+            }).inner;
             crate::ui::note_control(ui, r.rect, "compress again");
         }
         match &problem {
@@ -4605,31 +4764,17 @@ fn themes(app: &mut App, ctx: &egui::Context) -> bool {
                     done = true;
                 }
                 ui.add_space(4.0);
-                let mut seg = |ui: &mut Ui| {
-                    for (k, label, id) in [(0u8, "All", "all themes"), (1, "Dark", "dark themes"), (2, "Light", "light themes")] {
-                        let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.0), pal.text);
-                        let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 18.0, 20.0), Sense::click());
-                        crate::ui::note_control(ui, r, id);
-                        let on = st.filter == k;
-                        if on {
-                            ui.painter().rect_filled(r, CornerRadius::same(4), pal.accent.gamma_multiply(0.85));
-                        } else if resp.hovered() {
-                            ui.painter().rect_filled(r, CornerRadius::same(4), pal.hover);
-                        }
-                        let c = if on { Color32::WHITE } else { pal.text_dim };
-                        ui.painter().text(r.center(), Align2::CENTER_CENTER, label, FontId::proportional(12.0), c);
-                        if resp.clicked() {
-                            st.filter = k;
-                            st.scroll_to_focus = true;
-                        }
-                    }
-                };
-                // Laid out left to right in a slot of its measured width (in a right-to-left
-                // row the cursor's left edge is infinite), centred on the search row.
-                let seg_w = ["All", "Dark", "Light"].iter().map(|l| ui.painter().layout_no_wrap(l.to_string(), FontId::proportional(12.0), pal.text).size().x + 18.0 + 1.0).sum::<f32>() + 4.0 + 6.0;
-                let (slot, _) = ui.allocate_exact_size(vec2(seg_w, 26.0), Sense::hover());
+                // All, Dark or Light under a pill that slides to the one picked, laid out
+                // left to right in a slot of its measured width (in a right-to-left row the
+                // cursor's left edge is infinite), centred on the search row.
+                let labels = ["All", "Dark", "Light"];
+                let seg_w = crate::kit::segmented_width(ui, &labels, 12.0);
+                let (slot, _) = ui.allocate_exact_size(vec2(seg_w + 6.0, 26.0), Sense::hover());
                 let mut sui = ui.new_child(egui::UiBuilder::new().max_rect(slot).layout(egui::Layout::left_to_right(egui::Align::Center)));
-                crate::inspector::seg_frame(&mut sui, &pal, |ui| seg(ui));
+                if let Some(k) = crate::kit::segmented(&mut sui, Id::new("theme filter"), &labels, &["all themes", "dark themes", "light themes"], &[], st.filter as usize, 12.0, 24.0, &pal) {
+                    st.filter = k as u8;
+                    st.scroll_to_focus = true;
+                }
                 let fw = (ui.available_width() - 4.0).floor();
                 ui.allocate_ui_with_layout(vec2(fw, 0.0), top_down, |ui| {
                     ui.set_width(fw);
@@ -4687,6 +4832,9 @@ fn themes(app: &mut App, ctx: &egui::Context) -> bool {
             let name_h = (12.5f32 * 1.35).round();
             let blurb_h = (11.0f32 * 1.35).round();
             let card_h = pad + preview_h + 8.0 + 4.0 + 8.0 + name_h + blurb_h + pad + 4.0;
+            // Another filter or search brings the cards in one after another.
+            let since = crate::kit::since_change(ctx, Id::new("theme cards arrive"), Id::new((st.filter, st.query.trim())).value());
+            let mut nth = 0;
             egui::ScrollArea::vertical().id_salt("theme cards").max_height(body.height()).auto_shrink([false, false]).show(&mut bui, |ui| {
                 ui.spacing_mut().item_spacing = vec2(gap, gap);
                 if groups.is_empty() {
@@ -4700,6 +4848,9 @@ fn themes(app: &mut App, ctx: &egui::Context) -> bool {
                         ui.horizontal(|ui| {
                             for &t in row {
                                 let (r, resp) = ui.allocate_exact_size(vec2(cw, card_h), Sense::click());
+                                let opacity = ui.opacity();
+                                ui.set_opacity(opacity * crate::kit::arrive(ui.ctx(), since, nth));
+                                nth += 1;
                                 crate::ui::note_control(ui, r, t.label());
                                 cards.push((t, r.center()));
                                 let chosen = t == current;
@@ -4744,6 +4895,7 @@ fn themes(app: &mut App, ctx: &egui::Context) -> bool {
                                     picked = Some(t);
                                     st.focus = Some(t);
                                 }
+                                ui.set_opacity(opacity);
                             }
                         });
                     }
@@ -5466,63 +5618,77 @@ fn perms_card(ui: &mut Ui, st: &mut PropState, items: &[(u32, u32, u32, bool)], 
             if on { c.set |= mask } else { c.clear |= mask }
         }
     };
-    let boxed = |ui: &mut Ui, r: Rect, id: Id, state: Option<bool>| -> bool {
-        let resp = ui.interact(r.expand(3.0), id, Sense::click());
-        match state {
-            Some(on) => checkbox_glyph(ui.painter(), r, on, pal),
-            None => {
-                ui.painter().rect_stroke(r, CornerRadius::same(3), Stroke::new(1.2, pal.accent), StrokeKind::Inside);
-                ui.painter().line_segment([r.center() - vec2(4.0, 0.0), r.center() + vec2(4.0, 0.0)], Stroke::new(1.8, pal.accent));
-            }
-        }
-        if resp.hovered() && state != Some(true) {
-            ui.painter().rect_stroke(r, CornerRadius::same(3), Stroke::new(1.2, pal.text_dim), StrokeKind::Inside);
-        }
-        if resp.has_focus() {
-            ui.painter().rect_stroke(r.expand(2.5), CornerRadius::same(5), Stroke::new(1.5, pal.accent), StrokeKind::Inside);
-        }
-        resp.clicked()
-    };
-    let col_w = 72.0;
     let row_h = 22.0;
     let dirs = items.iter().any(|i| i.3);
+    // A bit as a small word that is lit in the accent's tint while set: bare while clear,
+    // a hairline alone while the items differ.
+    let bit = |ui: &mut Ui, r: Rect, label: &str, id: Id, state: Option<bool>, tip: &str| -> bool {
+        let resp = ui.interact(r, id, Sense::click());
+        let t = crate::kit::slide(ui.ctx(), id.with("lit"), if state == Some(true) { 1.0 } else { 0.0 });
+        let (fill, line) = (pal.accent.gamma_multiply((if pal.dark { 0.24 } else { 0.16 }) * t), pal.accent.gamma_multiply(if state.is_none() { 0.45 } else { 0.45 * t }));
+        if t > 0.01 || state.is_none() {
+            ui.painter().rect(r, CornerRadius::same(5), fill, Stroke::new(1.0, line), StrokeKind::Inside);
+        } else {
+            // Clear, it keeps a field's faint edge: a control, not a stray letter.
+            ui.painter().rect(r, CornerRadius::same(5), if resp.hovered() { crate::kit::touch(pal) } else { Color32::TRANSPARENT }, Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+        }
+        if resp.has_focus() {
+            ui.painter().rect_stroke(r.expand(2.0), CornerRadius::same(6), Stroke::new(1.5, pal.accent), StrokeKind::Inside);
+        }
+        let c = if state != Some(false) || resp.hovered() { pal.text } else { pal.text_dim };
+        ui.painter().text(r.center(), Align2::CENTER_CENTER, label, FontId::proportional(12.0), c);
+        resp.on_hover_text(tip).clicked()
+    };
+    // One item: its mode as it will be, each row's digit beside it and the whole underneath.
+    let one = if let [(mode, _, _, is_dir)] = items { Some((st.change.mode(*mode, false), *is_dir)) } else { None };
     card(ui, pal, |ui| {
         ui.spacing_mut().item_spacing.y = 6.0;
-        let (head, _) = ui.allocate_exact_size(vec2(key_w + 12.0 + 3.0 * col_w, 18.0), Sense::hover());
-        for (k, h) in ["Read", "Write", "Execute"].iter().enumerate() {
-            let cx = head.left() + key_w + 12.0 + col_w * (k as f32 + 0.5);
-            ui.painter().text(pos2(cx, head.center().y), Align2::CENTER_CENTER, *h, FontId::proportional(11.5), pal.text_dim);
-        }
+        let what = |k: usize| match k {
+            0 => "Read",
+            1 => if dirs { "Write: add, rename and remove what is inside" } else { "Write" },
+            _ => if dirs { "Execute: open the folder" } else { "Execute: run it" },
+        };
         for (who, shift, names) in [("Owner", 6, ["owner read", "owner write", "owner execute"]), ("Group", 3, ["group read", "group write", "group execute"]), ("Others", 0, ["others read", "others write", "others execute"])] {
-            let (r, _) = ui.allocate_exact_size(vec2(key_w + 12.0 + 3.0 * col_w, row_h), Sense::hover());
+            let (r, _) = ui.allocate_exact_size(vec2(key_w + 12.0 + 3.0 * 30.0 + 24.0, row_h), Sense::hover());
             ui.painter().text(pos2(r.left(), r.center().y), Align2::LEFT_CENTER, who, body.clone(), pal.text);
-            for (k, bit) in [4u32, 2, 1].into_iter().enumerate() {
-                let mask = bit << shift;
-                let cx = r.left() + key_w + 12.0 + col_w * (k as f32 + 0.5);
-                let br = Rect::from_center_size(pos2(cx, r.center().y), Vec2::splat(16.0));
+            for (k, (b, l)) in [(4u32, "r"), (2, "w"), (1, "x")].into_iter().enumerate() {
+                let mask = b << shift;
+                let br = Rect::from_min_size(pos2(r.left() + key_w + 12.0 + k as f32 * 30.0, r.center().y - 11.0), vec2(26.0, 22.0));
                 crate::ui::note_control(ui, br, names[k]);
-                if boxed(ui, br, Id::new(("perm", shift, bit)), shown(&st.change, mask)) {
+                if bit(ui, br, l, Id::new(("perm", shift, b)), shown(&st.change, mask), what(k)) {
                     toggle(&mut st.change, mask);
                 }
             }
+            if let Some((m, _)) = one {
+                let g = crate::listing::tabular(ui, &((m >> shift) & 7).to_string(), FontId::proportional(12.0), 20.0, pal.text_dim);
+                ui.painter().galley(pos2(r.left() + key_w + 12.0 + 3.0 * 30.0 + 8.0, (r.center().y - g.size().y / 2.0).round()), g, pal.text_dim);
+            }
         }
-        // The special bits, by what they do.
+        // The special bits, by what they do, under a dashed rule: part of the same mode.
         ui.add_space(2.0);
+        let y = ui.cursor().top().round() + 0.5;
+        crate::kit::dashed_rule(ui.painter(), pos2(ui.min_rect().left(), y), pos2(ui.min_rect().left() + ui.available_width(), y), pal);
+        ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.spacing_mut().item_spacing.x = 4.0;
             for (label, tip, mask) in [("Run as owner", "Set user ID: it runs with its owner's rights", 0o4000), ("Run as group", "Set group ID: it runs with its group's rights; inside a folder, new items take its group", 0o2000), ("Sticky", "In a folder, only an item's owner may delete or rename it", 0o1000)] {
-                let (r, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
-                if boxed(ui, r, Id::new(("perm-special", mask)), shown(&st.change, mask)) {
+                let w = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.0), pal.text).size().x + 16.0;
+                let (r, _) = ui.allocate_exact_size(vec2(w, 22.0), Sense::hover());
+                if bit(ui, r, label, Id::new(("perm-special", mask)), shown(&st.change, mask), tip) {
                     toggle(&mut st.change, mask);
                 }
-                ui.add(egui::Label::new(egui::RichText::new(label).size(12.0).color(pal.text_dim)).selectable(false)).on_hover_text(tip);
-                ui.add_space(8.0);
             }
         });
-        // One item: its mode as numbers and letters, as it will be.
-        if let [(mode, _, _, is_dir)] = items {
-            let m = st.change.mode(*mode, false);
-            ui.label(egui::RichText::new(format!("{m:04o}  {}", fsx::fmt_mode(m, *is_dir))).monospace().color(pal.text_dim));
+        // The mode as one number, large, and in letters beside it.
+        if let Some((m, is_dir)) = one {
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                let g = crate::listing::tabular(ui, &format!("{m:04o}"), crate::theme::semibold(18.0), 120.0, pal.text);
+                let (r, _) = ui.allocate_exact_size(g.size(), Sense::hover());
+                ui.painter().galley(r.min, g, pal.text);
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(fsx::fmt_mode(m, is_dir)).monospace().color(pal.text_dim));
+            });
         }
         // Owner and group: who they are now (or "Several"), picked from those on this computer.
         let (users, groups) = st.ids.get_or_insert_with(|| (crate::perms::users(), crate::perms::groups()));

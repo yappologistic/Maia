@@ -110,17 +110,27 @@ pub fn paint(ui: &Ui, body: Rect, rb: &mut Ribbon, n: usize, order: &dyn Fn(usiz
     let track = body.shrink2(vec2(0.0, 4.0));
     let small = FontId::proportional((fs - 3.0).max(8.0));
     let mut last_label = f32::NEG_INFINITY;
+    // While the years show, a gutter along the scrollbar to hold them: the list's last
+    // column fades under it, so no row's text shows round a year's edges.
+    if rb.shown > 0.0 {
+        let widest = p.layout_no_wrap("0000".into(), small.clone(), pal.text_dim).size().x + 10.0;
+        let gut = Rect::from_min_max(pos2(strip.left() - widest - 22.0, body.top()), pos2(strip.left(), body.bottom()));
+        p.rect_filled(gut, CornerRadius::ZERO, pal.panel.gamma_multiply(0.97 * rb.shown));
+        p.line_segment([gut.left_top(), gut.left_bottom()], Stroke::new(1.0, pal.border.gamma_multiply(rb.shown)));
+    }
     for &(f, year) in &rb.marks {
         let y = track.top() + f * track.height();
         // A tick across the scrollbar's track, always.
         p.line_segment([pos2(strip.left() + 3.0, y), pos2(strip.right() - 3.0, y)], Stroke::new(1.0, pal.text_dim.gamma_multiply(0.45)));
         if rb.shown > 0.0 && y - last_label >= small.size * 1.4 + 6.0 && y < track.bottom() - small.size * 0.5 {
             last_label = y;
+            // A cap with an edge and a shadow of its own: it reads as lying over the list,
+            // not as text run into the row's own beside it.
             let g = p.layout_no_wrap(year.to_string(), small.clone(), pal.text_dim);
-            let r = Rect::from_min_size(pos2(strip.left() - g.size().x - 10.0, y - g.size().y / 2.0), g.size() + vec2(6.0, 0.0));
-            // Wide enough that a row's text beside it does not show through at the ends.
-            p.rect_filled(r.expand2(vec2(3.0, 2.0)), CornerRadius::same(4), pal.panel.gamma_multiply(0.96 * rb.shown));
-            p.galley(r.min + vec2(3.0, 0.0), g, pal.text_dim.gamma_multiply(rb.shown));
+            let r = Rect::from_min_size(pos2(strip.left() - g.size().x - 16.0, y - g.size().y / 2.0 - 2.0), g.size() + vec2(10.0, 4.0));
+            let mut cp = p.clone();
+            cp.multiply_opacity(rb.shown);
+            crate::kit::keycap(&cp, r, &year.to_string(), small.clone(), false, pal);
         }
     }
     // Dragging: the month at the middle of the screen, beside the thumb.
@@ -135,9 +145,11 @@ pub fn paint(ui: &Ui, body: Rect, rb: &mut Ribbon, n: usize, order: &dyn Fn(usiz
             let font = crate::theme::semibold(fs - 0.5);
             let g = p.layout_no_wrap(l, font, pal.text);
             let r = Rect::from_min_size(pos2(strip.left() - g.size().x - 30.0, ty - g.size().y / 2.0 - 5.0), g.size() + vec2(18.0, 10.0));
-            p.rect_filled(r.translate(vec2(0.0, 2.0)), CornerRadius::same(7), Color32::from_black_alpha(50));
-            p.rect_filled(r, CornerRadius::same(7), pal.raised);
-            p.rect_stroke(r, CornerRadius::same(7), Stroke::new(1.0, pal.border), egui::StrokeKind::Inside);
+            // The years' cap, larger: lit along its top edge, standing on its shadow.
+            let face = if pal.dark { pal.raised.lerp_to_gamma(pal.text, 0.08) } else { pal.raised.lerp_to_gamma(Color32::WHITE, 0.7) };
+            p.rect_filled(r.translate(vec2(0.0, 2.0)), CornerRadius::same(7), Color32::from_black_alpha(if pal.dark { 110 } else { 40 }));
+            p.rect(r, CornerRadius::same(7), face, Stroke::new(1.0, if pal.dark && !pal.strong { pal.text.gamma_multiply(0.14) } else { pal.border }), egui::StrokeKind::Inside);
+            p.line_segment([pos2(r.left() + 5.0, r.top() + 1.5), pos2(r.right() - 5.0, r.top() + 1.5)], Stroke::new(1.0, if pal.dark { pal.text.gamma_multiply(0.12) } else { Color32::from_white_alpha(200) }));
             p.galley(r.min + vec2(9.0, 5.0), g, pal.text);
             // A short line from the bubble to the thumb.
             p.line_segment([pos2(r.right(), ty), pos2(strip.left() - 2.0, ty)], Stroke::new(1.0, pal.border));

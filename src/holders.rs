@@ -333,16 +333,27 @@ impl State {
 }
 
 /// A small button inside a row: (clicked, its rect).
-fn row_button(ui: &mut egui::Ui, right: f32, cy: f32, label: &str, danger: bool, what: &'static str, pal: &crate::theme::Palette, small: f32) -> (bool, Rect) {
+/// `key`: the chosen row's button shows the key that presses it, as a cap inside.
+#[allow(clippy::too_many_arguments)]
+fn row_button(ui: &mut egui::Ui, right: f32, cy: f32, label: &str, danger: bool, what: &'static str, pal: &crate::theme::Palette, small: f32, key: bool) -> (bool, Rect) {
     let font = FontId::proportional(small);
     let g = ui.painter().layout_no_wrap(label.to_string(), font, pal.text);
-    let r = Rect::from_min_max(pos2(right - g.size().x - 16.0, cy - g.size().y / 2.0 - 3.0), pos2(right, cy + g.size().y / 2.0 + 3.0));
+    let kfont = FontId::proportional(10.0);
+    let kw = if key { crate::kit::caps_layout(ui.painter(), "Enter", 0.0, 0.0, &kfont, pal).1 + 6.0 } else { 0.0 };
+    let r = Rect::from_min_max(pos2(right - g.size().x - 16.0 - kw, cy - g.size().y / 2.0 - 3.0), pos2(right, cy + g.size().y / 2.0 + 3.0));
     let resp = ui.interact(r, egui::Id::new(("holder button", what, r.min.y as i32)), Sense::click());
     crate::ui::note_control(ui, r, what);
     let fill = if resp.hovered() { pal.hover } else { pal.card() };
     ui.painter().rect(r, CornerRadius::same(5), fill, Stroke::new(1.0_f32, if danger { pal.danger } else { pal.card_line() }), StrokeKind::Inside);
     let col = if danger { pal.danger } else { pal.text };
+    let gw = g.size().x;
     ui.painter().galley(pos2(r.left() + 8.0, r.center().y - g.size().y / 2.0), g, col);
+    if key {
+        let (caps, _) = crate::kit::caps_layout(ui.painter(), "Enter", r.left() + 8.0 + gw + 6.0, r.center().y, &kfont, pal);
+        for (cr, c) in caps {
+            crate::kit::keycap(ui.painter(), cr, &c, kfont.clone(), crate::kit::held(ui.ctx(), &c), pal);
+        }
+    }
     (resp.clicked(), r)
 }
 
@@ -469,26 +480,30 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
                     let row = &st.rows[rows[j]];
                     let on = j == st.sel;
                     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
+                    // Chosen quietly, the accent's mark at its edge (`kit::chosen`); a
+                    // high-contrast theme keeps its solid selection.
+                    let hot = resp.hovered() || ui.rect_contains_pointer(r);
                     if on {
-                        ui.painter().rect_filled(r, CornerRadius::same(6), pal.selected);
-                    } else if resp.hovered() {
-                        ui.painter().rect_filled(r, CornerRadius::same(6), pal.hover);
+                        crate::kit::chosen(ui.painter(), r, 6, &pal);
+                    } else if hot {
+                        ui.painter().rect_filled(r, CornerRadius::same(6), crate::kit::touch(&pal));
                     }
                     if resp.clicked() {
                         st.sel = j;
                     }
-                    let (tc, dc) = if on { (pal.on_sel(), pal.on_sel_dim()) } else { (pal.text, pal.text_dim) };
+                    let (tc, dc) = if on && pal.strong { (pal.on_sel(), pal.on_sel_dim()) } else { (pal.text, pal.text_dim) };
                     let cy = r.center().y;
-                    // Right to left: Stop (for the user's own), then whose it is.
+                    // Right to left: Stop (for the user's own, on the row chosen or pointed
+                    // at, the chosen one's with its key), then whose it is.
                     let mut x = r.right() - 8.0;
-                    if let Some(p) = row.proc.as_ref().filter(|p| p.mine()) {
+                    if let Some(p) = row.proc.as_ref().filter(|p| p.mine()).filter(|_| on || hot) {
                         if st.stopping(p.pid) {
                             crate::ui::spinner(ui.painter(), pos2(x - 10.0, cy), 5.5, pal.accent, ui.input(|i| i.time));
                             ui.ctx().request_repaint_after(Duration::from_millis(50));
                             x -= 28.0;
                         } else {
                             let force = st.stubborn.iter().any(|s| s.pid == p.pid);
-                            let (hit, br) = row_button(ui, x, cy, if force { "Force Stop" } else { "Stop" }, force, "holder stop", &pal, small);
+                            let (hit, br) = row_button(ui, x, cy, if force { "Force Stop" } else { "Stop" }, force, "holder stop", &pal, small, on);
                             if hit && st.ask.is_none() {
                                 ask = Some(Ask { proc: p.clone(), force });
                                 st.sel = j;
@@ -496,18 +511,23 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
                             x = br.left() - 12.0;
                         }
                     }
+                    // Whose it is, as a small tag.
                     let whose = match (&row.proc, &row.port) {
                         (Some(p), _) if p.mine() => "Yours".to_string(),
                         (Some(p), _) => crate::inspector::user_name(p.uid),
                         (None, Some(port)) => crate::inspector::user_name(port.uid),
                         _ => String::new(),
                     };
-                    let wg = ui.painter().layout_no_wrap(whose, FontId::proportional(small), dc);
-                    x -= wg.size().x;
-                    ui.painter().galley(pos2(x, cy - wg.size().y / 2.0), wg, dc);
+                    if !whose.is_empty() {
+                        let wg = ui.painter().layout_no_wrap(whose, FontId::proportional(small - 0.5), pal.text_dim);
+                        let tr = Rect::from_min_size(pos2(x - wg.size().x - 12.0, cy - wg.size().y / 2.0 - 2.0), wg.size() + vec2(12.0, 4.0));
+                        ui.painter().rect(tr, CornerRadius::same(4), pal.card(), Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+                        ui.painter().galley(tr.min + vec2(6.0, 2.0), wg, pal.text_dim);
+                        x = tr.left();
+                    }
                     let mut left = r.left() + 12.0;
                     if let Some(port) = &row.port {
-                        let pg = ui.painter().layout_no_wrap(port.port.to_string(), FontId::proportional(fs), tc);
+                        let pg = crate::listing::tabular(ui, &port.port.to_string(), FontId::proportional(fs), 120.0, tc);
                         let col_w = ui.painter().layout_no_wrap("00000".into(), FontId::proportional(fs), tc).size().x;
                         ui.painter().galley(pos2(left, cy - pg.size().y / 2.0), pg, tc);
                         left += col_w + 10.0;
@@ -522,16 +542,27 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
                         left += w + 10.0;
                     }
                     let room = x - 12.0 - left;
-                    let (name, detail) = match &row.proc {
-                        Some(p) => (p.name.clone(), format!("PID {}{}", p.pid, row.hold.as_ref().map(|h| format!(" · {}", hold_text(h, asked))).unwrap_or_default())),
-                        None => ("Another user's program".to_string(), String::new()),
+                    // The name, its PID in a column of its own (even digits, so a list of them
+                    // lines up), then what it is doing with the item.
+                    let name = match &row.proc {
+                        Some(p) => p.name.clone(),
+                        None => "Another user's program".to_string(),
                     };
-                    let ng = crate::listing::elided(ui, &name, FontId::proportional(fs), room.max(20.0) * 0.5, if row.proc.is_some() { tc } else { dc });
+                    let ng = crate::listing::elided(ui, &name, FontId::proportional(fs), room.max(20.0) * 0.4, if row.proc.is_some() { tc } else { dc });
                     let nw = ng.size().x;
                     ui.painter().galley(pos2(left, cy - ng.size().y / 2.0), ng, tc);
-                    if !detail.is_empty() && room - nw - 10.0 > 24.0 {
-                        let dg = crate::listing::elided(ui, &detail, FontId::proportional(small), room - nw - 10.0, dc);
-                        ui.painter().galley(pos2(left + nw + 10.0, cy - dg.size().y / 2.0), dg, dc);
+                    if let Some(p) = &row.proc {
+                        let pid_x = left + nw.max(room * 0.22) + 10.0;
+                        let pid_w = ui.painter().layout_no_wrap("PID 0000000".into(), FontId::proportional(small), dc).size().x;
+                        if pid_x + pid_w < x - 12.0 {
+                            let pg = crate::listing::tabular(ui, &format!("PID {}", p.pid), FontId::proportional(small), pid_w, dc);
+                            ui.painter().galley(pos2(pid_x + pid_w - pg.size().x, cy - pg.size().y / 2.0), pg, dc);
+                            let hx = pid_x + pid_w + 12.0;
+                            if let Some(h) = row.hold.as_ref().filter(|_| x - 12.0 - hx > 24.0) {
+                                let dg = crate::listing::elided(ui, &hold_text(h, asked), FontId::proportional(small), x - 12.0 - hx, dc);
+                                ui.painter().galley(pos2(hx, cy - dg.size().y / 2.0), dg, dc);
+                            }
+                        }
                     }
                 }
             });

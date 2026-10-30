@@ -2048,9 +2048,12 @@ fn side_column(ui: &mut Ui, cr: Rect, col: &mut Tab, child: Option<u32>, env: &m
             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, &e.name));
             let drop = drop_target(ui, r, e, env);
             // The way down is marked quieter than a selection: the picking happens in the
-            // tab's own column.
+            // tab's own column. A step towards the text colour, the trail's own, so the
+            // selection's colour is left to the one folder that has it; a high-contrast
+            // theme keeps the selection's tint, where a grey step would not be seen.
             if on {
-                ui.painter().rect_filled(r.shrink2(vec2(2.0, 0.5)), CornerRadius::same(4), env.pal.panel.lerp_to_gamma(env.pal.selected, 0.6));
+                let trail = if env.pal.strong { env.pal.panel.lerp_to_gamma(env.pal.selected, 0.6) } else { env.pal.panel.lerp_to_gamma(env.pal.text, if env.pal.dark { 0.1 } else { 0.08 }) };
+                ui.painter().rect_filled(r.shrink2(vec2(2.0, 0.5)), CornerRadius::same(4), trail);
             }
             paint_item_bg(ui.painter(), r.shrink2(vec2(2.0, 0.5)), false, false, resp.hovered() && !on, drop, env, 6);
             let ic = Rect::from_min_size(pos2(r.left() + 6.0, r.center().y - 8.0), Vec2::splat(16.0));

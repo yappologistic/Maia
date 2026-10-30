@@ -779,9 +779,9 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
                         crate::ui::note_control(ui, cell, "menu action");
                         let keyed = st.bar_at == Some(k);
                         if keyed {
-                            ui.painter().rect_filled(cell, CornerRadius::same(6), pal.selected);
+                            ui.painter().rect_filled(cell, CornerRadius::same(6), crate::kit::lift(&pal));
                         } else if on && resp.hovered() {
-                            ui.painter().rect_filled(cell, CornerRadius::same(6), pal.hover);
+                            ui.painter().rect_filled(cell, CornerRadius::same(6), crate::kit::touch(&pal));
                         }
                         let icon = match c {
                             Cmd::Cut => "scissors",
@@ -795,7 +795,7 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
                         } else if c == Cmd::Trash {
                             pal.danger
                         } else if keyed {
-                            pal.on_sel()
+                            crate::kit::on_lift(&pal)
                         } else if resp.hovered() {
                             pal.text
                         } else {
@@ -848,12 +848,17 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
                             st.bar_at = None;
                         }
                         let sel = sel && st.bar_at.is_none();
+                        // Chosen quietly, as in the palette: a lighter step with the accent's
+                        // mark at its edge. Only a high-contrast theme keeps the solid fill,
+                        // and with it the colours made for it (`loud`).
                         if sel {
-                            ui.painter().rect_filled(r, CornerRadius::same(4), pal.selected);
+                            crate::kit::chosen(ui.painter(), r, 5, &pal);
                         }
-                        let on = if sel { pal.on_sel() } else { pal.text };
+                        let loud = sel && pal.strong;
+                        let on = if loud { pal.on_sel() } else { pal.text };
                         // Fixed icon column; nested entries indent one step per level.
-                        let ic = Rect::from_center_size(pos2(r.left() + 14.0, r.center().y), Vec2::splat(16.0));
+                        // Clear of the chosen row's accent mark at its edge.
+                        let ic = Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), Vec2::splat(16.0));
                         if let Act::OpenWith(id) = &it.act {
                             if let Some(a) = crate::mime::apps().by_id(id) {
                                 crate::icons::named(ui.painter(), ic, &a.icon);
@@ -867,10 +872,10 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
                                 Some(c) => {
                                     ui.painter().circle_filled(ic.center(), 5.0, c);
                                 }
-                                None => paint_glyph(ui.painter(), ic.shrink(1.5), Glyph::Tag, if sel { pal.on_sel() } else { pal.text_dim }),
+                                None => paint_glyph(ui.painter(), ic.shrink(1.5), Glyph::Tag, if loud { pal.on_sel() } else { pal.text_dim }),
                             }
                         }
-                        let x0 = r.left() + 32.0 + *depth as f32 * 22.0;
+                        let x0 = r.left() + 34.0 + *depth as f32 * 22.0;
                         let enabled = match &it.act {
                             Act::Cmd(c) => !matches!(c, Cmd::Paste) || app.clipboard.is_some() || true,
                             _ => true,
@@ -880,24 +885,30 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
                             let hits: HashSet<usize> = fuzzy::positions(&q, label).map(|(_, p)| p.into_iter().collect()).unwrap_or_default();
                             let mut job = egui::text::LayoutJob::default();
                             for (ci, ch) in label.chars().enumerate() {
-                                let col = if hits.contains(&ci) && !sel { pal.accent } else if enabled { on } else { pal.text_dim };
+                                let col = if hits.contains(&ci) && !loud { pal.accent } else if enabled { on } else { pal.text_dim };
                                 job.append(&ch.to_string(), 0.0, egui::TextFormat { font_id: FontId::proportional(12.5), color: col, ..Default::default() });
                             }
                             job
                         };
                         let g = ui.fonts_mut(|f| f.layout_job(job));
                         ui.painter().galley(pos2(x0, r.center().y - g.size().y / 2.0), g, pal.text);
-                        let dimc = if sel { pal.on_sel_dim() } else { pal.text_dim };
+                        let dimc = if loud { pal.on_sel_dim() } else { pal.text_dim };
                         let mut rx = r.right() - 10.0;
                         if !it.children.is_empty() {
-                            let c = pos2(rx - 4.0, r.center().y);
-                            let g = if st.expanded.contains(&it.id) { Glyph::ChevronDown } else { Glyph::ChevronRight };
-                            paint_glyph(ui.painter(), Rect::from_center_size(c, Vec2::splat(12.0)), g, dimc);
+                            // The chevron turns as the submenu opens, and a dashed rule sets
+                            // what it holds apart from the rows around it.
+                            let open = st.expanded.contains(&it.id);
+                            let turn = crate::kit::slide(ui.ctx(), Id::new(("ctx turn", &it.id)), if open { 1.0 } else { 0.0 });
+                            crate::kit::chevron(ui.painter(), pos2(rx - 4.0, r.center().y), turn, dimc);
+                            if open {
+                                let y = r.bottom().round() + 0.5;
+                                crate::kit::dashed_rule(ui.painter(), pos2(x0 + 22.0, y), pos2(r.right() - 10.0, y), &pal);
+                            }
                         } else {
                             if let Act::Tag(_, true) = &it.act {
                                 // Every selected item has this tag: a check, and a click removes it.
                                 let c = pos2(rx - 6.0, r.center().y);
-                                let col = if sel { pal.on_sel() } else { pal.accent };
+                                let col = if loud { pal.on_sel() } else { pal.accent };
                                 ui.painter().add(egui::Shape::line(vec![c + vec2(-4.5, 0.0), c + vec2(-1.5, 3.0), c + vec2(4.5, -3.5)], Stroke::new(1.6, col)));
                                 rx -= 22.0;
                             }
@@ -906,18 +917,21 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
                                 if let Some(on_now) = radio_of(*c) {
                                     let cc = pos2(rx - 6.0, r.center().y);
                                     if on_now {
-                                        ui.painter().circle_filled(cc, 6.5, if sel { pal.on_sel() } else { pal.accent });
-                                        ui.painter().circle_filled(cc, 2.5, if sel { pal.selected } else { egui::Color32::WHITE });
+                                        ui.painter().circle_filled(cc, 6.5, if loud { pal.on_sel() } else { pal.accent });
+                                        ui.painter().circle_filled(cc, 2.5, if loud { pal.selected } else { egui::Color32::WHITE });
                                     } else {
                                         ui.painter().circle_stroke(cc, 6.0, Stroke::new(1.2, dimc.gamma_multiply(0.7)));
                                     }
                                     rx -= 22.0;
                                 } else {
-                                    // Shortcuts as plain dim text, right-aligned.
+                                    // Shortcuts as keycaps, faint until their row is the one
+                                    // pointed at or chosen.
+                                    let mut kp = ui.painter().clone();
+                                    if !(sel || hovered) {
+                                        kp.multiply_opacity(0.55);
+                                    }
                                     for b in app.keymap.bindings(*c).iter().take(2).rev() {
-                                        let g = ui.painter().layout_no_wrap(crate::commands::binding_to_string(b), FontId::proportional(11.5), dimc);
-                                        ui.painter().galley(pos2(rx - g.size().x, r.center().y - g.size().y / 2.0), g.clone(), dimc);
-                                        rx -= g.size().x + 10.0;
+                                        rx -= crate::kit::hotkey(&kp, pos2(rx, r.center().y), &crate::commands::binding_to_string(b), &pal) + 8.0;
                                     }
                                 }
                             }
@@ -926,7 +940,7 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
                                 let sr = Rect::from_center_size(pos2(rx - 10.0, r.center().y), Vec2::splat(18.0));
                                 let pinned_now = pinned.contains(&it.id);
                                 let sresp = ui.interact(sr, Id::new(("pin", &it.id, i)), Sense::click()).on_hover_text(if pinned_now { "Unpin" } else { "Pin to top" });
-                                crate::ui::star(ui.painter(), sr.center(), 5.5, if pinned_now { if sel { pal.on_sel() } else { pal.accent } } else { dimc }, pinned_now);
+                                crate::ui::star(ui.painter(), sr.center(), 5.5, if pinned_now { if loud { pal.on_sel() } else { pal.accent } } else { dimc }, pinned_now);
                                 if sresp.clicked() {
                                     pin = Some(it.id.clone());
                                     continue;

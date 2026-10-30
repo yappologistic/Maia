@@ -857,13 +857,12 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
             }
         }
         // The two views' tabs, on the title's line before the full-window button.
-        let tab_font = FontId::proportional(12.0);
         let tab_labels = ["Contents", "Map", "Free up"];
-        let tabs_w: f32 = tab_labels.iter().map(|l| (ui.painter().layout_no_wrap(l.to_string(), tab_font.clone(), pal.text).size().x + 14.0).max(26.0)).sum::<f32>() + 4.0;
+        let tabs_w = crate::kit::segmented_width(ui, &tab_labels, 12.0);
         // With an earlier reading, the list sorts by size or by what grew.
         let sort_labels = ["Size", "Change"];
         let grew = st.before.is_some() && !showing_free;
-        let sort_w: f32 = if grew { sort_labels.iter().map(|l| (ui.painter().layout_no_wrap(l.to_string(), tab_font.clone(), pal.text).size().x + 14.0).max(26.0)).sum::<f32>() + 4.0 + 12.0 } else { 0.0 };
+        let sort_w: f32 = if grew { crate::kit::segmented_width(ui, &sort_labels, 12.0) + 12.0 } else { 0.0 };
         let title_h = ui.painter().layout_no_wrap("Space used".into(), FontId::proportional(ui.style().text_styles.get(&egui::TextStyle::Body).map_or(fs, |f| f.size) + 1.5), pal.text).size().y;
         // Counted to the end with an earlier reading: how the whole folder changed since.
         let since = st.before.as_ref().filter(|_| grew && !counting && st.listing.is_none()).map(|b| (total as i64 - b.total() as i64, b.label()));
@@ -900,26 +899,24 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
         let tabs_r = Rect::from_min_size(pos2(br.left() - 8.0 - tabs_w, (br.center().y - 11.0).round()), vec2(tabs_w, 22.0));
         let mut tui = ui.new_child(egui::UiBuilder::new().max_rect(tabs_r).layout(egui::Layout::left_to_right(egui::Align::Center)));
         tui.spacing_mut().item_spacing.x = 4.0;
+        // One choice of three, under a pill that slides to the one shown.
         let map = MAP.load(Relaxed);
-        if crate::devtools::chip(&mut tui, tab_labels[0], !showing_free && !map, "space contents", "The folder's contents (Tab)", &pal, false) {
-            switch_to = Some((false, false));
-        }
-        if crate::devtools::chip(&mut tui, tab_labels[1], !showing_free && map, "space map", "The contents as blocks as big as they are (Tab)", &pal, false) {
-            switch_to = Some((false, true));
-        }
-        if crate::devtools::chip(&mut tui, tab_labels[2], showing_free, "space free up", "What could go to make room (Tab)", &pal, false) {
-            switch_to = Some((true, map));
+        let cur = if showing_free { 2 } else if map { 1 } else { 0 };
+        let tips = ["The folder's contents (Tab)", "The contents as blocks as big as they are (Tab)", "What could go to make room (Tab)"];
+        match crate::kit::segmented(&mut tui, egui::Id::new("space tabs"), &tab_labels, &["space contents", "space map", "space free up"], &tips, cur, 12.0, 22.0, &pal) {
+            Some(0) => switch_to = Some((false, false)),
+            Some(1) => switch_to = Some((false, true)),
+            Some(_) => switch_to = Some((true, map)),
+            None => {}
         }
         if grew {
             let by_change = BY_CHANGE.load(Relaxed);
             let sr = Rect::from_min_size(pos2(tabs_r.left() - sort_w, tabs_r.top()), vec2(sort_w - 12.0, 22.0));
             let mut sui = ui.new_child(egui::UiBuilder::new().max_rect(sr).layout(egui::Layout::left_to_right(egui::Align::Center)));
-            sui.spacing_mut().item_spacing.x = 4.0;
-            if crate::devtools::chip(&mut sui, sort_labels[0], !by_change, "space sort size", "Biggest first (S)", &pal, false) && by_change {
-                flip_sort = true;
-            }
             let since = st.before.as_ref().map(|b| b.label()).unwrap_or_default();
-            if crate::devtools::chip(&mut sui, sort_labels[1], by_change, "space sort change", &format!("What grew most since {since} first (S)"), &pal, false) && !by_change {
+            let tips = ["Biggest first (S)".to_string(), format!("What grew most since {since} first (S)")];
+            let tips = [tips[0].as_str(), tips[1].as_str()];
+            if crate::kit::segmented(&mut sui, egui::Id::new("space sort"), &sort_labels, &["space sort size", "space sort change"], &tips, by_change as usize, 12.0, 22.0, &pal).is_some() {
                 flip_sort = true;
             }
         }
@@ -1456,15 +1453,19 @@ fn draw_map(ui: &mut egui::Ui, area: Rect, st: &mut State, colour: &dyn Fn(u32, 
         } else {
             *now = goal;
         }
-        let r = now.shrink(1.0);
+        // A gap around each block the eye can see past, except where blocks are slivers.
+        let r = if now.width().min(now.height()) > 12.0 { now.shrink(2.0) } else { now.shrink(1.0) };
         if r.width() < 1.0 || r.height() < 1.0 {
             continue;
         }
         let it = st.items.get(k as usize);
         let base = it.map_or(other_color(pal), |it| colour(k, it));
         let over = pointer.is_some_and(|p| r.contains(p)) && top.is_none_or(|t| t == k);
-        let fill = pal.bg.lerp_to_gamma(base, if over { 0.78 } else { 0.62 });
-        let round = CornerRadius::same(if r.width().min(r.height()) > 12.0 { 4 } else { 1 });
+        // Each block keeps its slice's colour, softened towards the window so a big one
+        // doesn't shout; the one pointed at comes up a step.
+        let (calm, lit) = if pal.dark { (0.42, 0.58) } else { (0.36, 0.5) };
+        let fill = pal.bg.lerp_to_gamma(base, if over { lit } else { calm });
+        let round = CornerRadius::same(if r.width().min(r.height()) > 12.0 { 6 } else { 1 });
         ui.painter().rect_filled(r, round, fill);
         if Some(k) == sel_k {
             ui.painter().rect_stroke(r.shrink(1.0), round, egui::Stroke::new(2.0, pal.text), egui::StrokeKind::Inside);
@@ -1483,7 +1484,7 @@ fn draw_map(ui: &mut egui::Ui, area: Rect, st: &mut State, colour: &dyn Fn(u32, 
             ui.painter().galley(pos2(r.left() + 6.0, r.top() + 4.0), g, ink);
             if r.height() >= gh + fs + 10.0 {
                 let share = if total > 0 { format!(" · {}", percent(size as f32 / total as f32)) } else { String::new() };
-                let sg = crate::listing::elided(ui, &format!("{}{share}", crate::fsx::fmt_size(size)), small.clone(), r.width() - 12.0, ink.gamma_multiply(0.75));
+                let sg = crate::listing::tabular(ui, &format!("{}{share}", crate::fsx::fmt_size(size)), small.clone(), r.width() - 12.0, ink.gamma_multiply(0.75));
                 ui.painter().galley(pos2(r.left() + 6.0, r.top() + 5.0 + gh), sg, ink);
             }
         }

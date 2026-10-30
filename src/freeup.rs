@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::SystemTime;
 
-use egui::{Color32, CornerRadius, FontId, Rect, Sense, Stroke, Ui, Vec2, pos2, vec2};
+use egui::{Color32, CornerRadius, FontId, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 
 use crate::theme::Palette;
 
@@ -623,7 +623,7 @@ fn chart_height(fs: f32) -> f32 {
 
 fn bars_height(fs: f32) -> f32 {
     let small = fs - 1.5;
-    ((small * 1.35).max(10.0) * 2.0 + 10.0).round()
+    ((small * 1.35).max(10.0) + 16.0).round()
 }
 
 /// Space between the chart, the list and the bars.
@@ -846,40 +846,50 @@ fn size_at(ui: &Ui, edge: f32, y: f32, size: Option<u64>, font: FontId, col: Col
     }
 }
 
-/// The disk now and once the chosen are gone, as two bars against its size: the second
-/// shows what goes as a faint stretch at its end.
+/// The disk as one bar against its size: what stays solid, what the chosen would free
+/// hatched after it, then the free room. Before and after in one place, so the change is
+/// the hatched stretch itself rather than the difference between two thin lines.
 fn draw_bars(ui: &mut Ui, r: Rect, total: u64, used: u64, chosen: u64, look: &Look) {
     let pal = look.pal;
     let small = look.fs - 1.5;
     let font = FontId::proportional(small);
     let after = used.saturating_sub(chosen);
-    let p = ui.painter();
-    let labels = ["Used now", "After"].map(|l| p.layout_no_wrap(l.into(), font.clone(), pal.text_dim));
-    let values = [format!("{} of {}", crate::fsx::fmt_size(used), crate::fsx::fmt_size(total)), crate::fsx::fmt_size(after)].map(|t| p.layout_no_wrap(t, font.clone(), pal.text));
-    let lw = labels.iter().map(|g| g.size().x).fold(0.0, f32::max);
-    let vw = values.iter().map(|g| g.size().x).fold(0.0, f32::max);
-    let line = r.height() / 2.0;
-    let x0 = r.left() + 12.0 + lw + 16.0;
-    let x1 = r.right() - 12.0 - vw - 16.0;
-    if x1 - x0 < 40.0 {
+    let bar = Rect::from_min_max(pos2(r.left() + 12.0, r.top()), pos2(r.right() - 12.0, r.bottom()));
+    if bar.width() < 80.0 {
         return;
     }
     let frac = |b: u64| (b as f32 / total.max(1) as f32).clamp(0.0, 1.0);
-    let track = pal.raised.lerp_to_gamma(pal.text, 0.07);
-    for (i, (lg, vg)) in labels.into_iter().zip(values).enumerate() {
-        let cy = r.top() + line * (i as f32 + 0.5);
-        p.galley(pos2(r.left() + 12.0, cy - lg.size().y / 2.0), lg, pal.text_dim);
-        p.galley(pos2(r.right() - 12.0 - vg.size().x, cy - vg.size().y / 2.0), vg, pal.text);
-        let bar = Rect::from_min_max(pos2(x0, cy - 4.0), pos2(x1, cy + 4.0));
-        p.rect_filled(bar, CornerRadius::same(4), track);
-        let w = bar.width();
-        if i == 0 {
-            p.rect_filled(Rect::from_min_size(bar.min, vec2(w * frac(used), bar.height())), CornerRadius::same(4), pal.accent);
-        } else {
-            p.rect_filled(Rect::from_min_size(bar.min, vec2(w * frac(used), bar.height())), CornerRadius::same(4), look.after.gamma_multiply(0.28));
-            p.rect_filled(Rect::from_min_size(bar.min, vec2(w * frac(after), bar.height())), CornerRadius::same(4), look.after);
+    let p = ui.painter();
+    p.rect(bar, CornerRadius::same(7), pal.card().lerp_to_gamma(pal.text, if pal.dark { 0.05 } else { 0.045 }), Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+    let inner = bar.shrink(1.0);
+    // The stretch eases as boxes are ticked; a sliver still shows on a disk far bigger
+    // than what goes.
+    let w = inner.width();
+    let x_after = inner.left() + crate::kit::slide(ui.ctx(), egui::Id::new("free up after"), w * frac(after));
+    let x_used = inner.left() + (w * frac(used)).max(x_after - inner.left() + if chosen > 0 { 3.0 } else { 0.0 });
+    let tint = |k: f32| look.after.gamma_multiply(if pal.dark { k } else { k * 0.8 });
+    if x_after > inner.left() {
+        p.rect_filled(Rect::from_min_max(inner.min, pos2(x_after, inner.bottom())), CornerRadius::same(6), tint(0.45));
+    }
+    if x_used > x_after + 0.5 {
+        let freed = Rect::from_min_max(pos2(x_after, inner.top()), pos2(x_used, inner.bottom()));
+        let hp = p.with_clip_rect(freed);
+        hp.rect_filled(freed, CornerRadius::ZERO, tint(0.14));
+        let h = freed.height();
+        let mut x = freed.left() - h;
+        while x < freed.right() {
+            hp.line_segment([pos2(x, freed.bottom()), pos2(x + h, freed.top())], Stroke::new(1.5, tint(0.55)));
+            x += 5.0;
         }
     }
+    // Inside it: what is used now, and what it comes to once the chosen are gone.
+    let (now, of) = (crate::fsx::fmt_size(used), crate::fsx::fmt_size(total));
+    let text = if chosen > 0 { format!("{now} → {} of {of}", crate::fsx::fmt_size(after)) } else { format!("{now} of {of}") };
+    let lg = p.layout_no_wrap("Used now".into(), font.clone(), pal.text_dim);
+    let vg = crate::listing::tabular(ui, &text, font, bar.width() - lg.size().x - 36.0, pal.text);
+    let cy = bar.center().y;
+    ui.painter().galley(pos2(bar.left() + 12.0, (cy - lg.size().y / 2.0).round()), lg, pal.text_dim);
+    ui.painter().galley(pos2(bar.right() - 12.0 - vg.size().x, (cy - vg.size().y / 2.0).round()), vg, pal.text);
 }
 
 /// The last thirty days of the record as a bar a day, scaled between the lowest and highest

@@ -1876,11 +1876,29 @@ impl App {
                         let waiting = if done { None } else { p.waiting.clone() };
                         let failed = done && !p.errors.is_empty() && p.errors.len() >= p.total_items.max(1);
                         let cancelled = j.cancel.load(std::sync::atomic::Ordering::Relaxed);
-                        // The title gets what the buttons leave and ends in "…" past it: a
-                        // file's name in it can be any length.
-                        let h = ui.text_style_height(&egui::TextStyle::Body).max(ui.spacing().interact_size.y);
+                        let frac = match p.within {
+                            // Items done and the share of the one at hand.
+                            Some(w) if p.total_items > 0 => ((p.done_items as f32 + w) / p.total_items as f32).min(1.0),
+                            _ if p.total_bytes > 0 => p.done_bytes as f32 / p.total_bytes as f32,
+                            _ if p.total_items > 0 => p.done_items as f32 / p.total_items as f32,
+                            _ => 0.0,
+                        };
+                        // The job is a row that fills as it goes, as in the transfers list: its
+                        // title inside, its buttons at the end.
+                        let h = (ui.text_style_height(&egui::TextStyle::Body) + 14.0).max(ui.spacing().interact_size.y + 8.0).round();
                         let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
-                        let mut buttons = ui.new_child(egui::UiBuilder::new().max_rect(row).layout(egui::Layout::right_to_left(egui::Align::Center)));
+                        let paused = j.pause.load(std::sync::atomic::Ordering::Relaxed);
+                        ui.painter().rect(row, CornerRadius::same(7), pal.card().lerp_to_gamma(pal.text, if pal.dark { 0.05 } else { 0.045 }), Stroke::new(1.0, pal.card_line()), egui::StrokeKind::Inside);
+                        let shown = crate::kit::slide(ui.ctx(), Id::new(("job fill", j.id)), if done && !cancelled { 1.0 } else { frac.clamp(0.0, 1.0) });
+                        let tone = if !p.errors.is_empty() { pal.danger } else if paused || waiting.is_some() { pal.text_dim } else { pal.accent };
+                        if shown > 0.002 {
+                            let fx = row.left() + 1.0 + shown * (row.width() - 2.0);
+                            ui.painter().rect_filled(Rect::from_min_max(row.min, pos2(fx, row.bottom())).shrink(1.0), CornerRadius::same(6), tone.gamma_multiply(if pal.dark { 0.28 } else { 0.2 }));
+                            if shown < 0.998 {
+                                ui.painter().line_segment([pos2(fx - 1.0, row.top() + 1.0), pos2(fx - 1.0, row.bottom() - 1.0)], Stroke::new(2.0, tone));
+                            }
+                        }
+                        let mut buttons = ui.new_child(egui::UiBuilder::new().max_rect(row.shrink2(vec2(6.0, 0.0))).layout(egui::Layout::right_to_left(egui::Align::Center)));
                         {
                             let ui = &mut buttons;
                             if done {
@@ -1901,26 +1919,23 @@ impl App {
                                     self.queue.poke();
                                 }
                             } else {
+                                // Always there: a copy is stopped without first finding out
+                                // that pointing at its card shows how.
                                 if ui.small_button("Cancel").clicked() {
                                     j.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                                 }
-                                let paused = j.pause.load(std::sync::atomic::Ordering::Relaxed);
                                 if ui.small_button(if paused { "Resume" } else { "Pause" }).clicked() {
                                     j.pause.store(!paused, std::sync::atomic::Ordering::Relaxed);
                                 }
                             }
                         }
-                        let left = Rect::from_min_max(row.min, pos2((buttons.min_rect().left() - 8.0).max(row.left()), row.max.y));
+                        // The title gets what the buttons leave and ends in "…" past it: a
+                        // file's name in it can be any length.
+                        let right = if buttons.min_rect().width() > 1.0 { buttons.min_rect().left() - 8.0 } else { row.right() - 10.0 };
                         let title = if done && cancelled { cancelled_label(&j.label) } else if failed { failed_label(&j.label) } else if done { finished_label(&j.label) } else { j.label.clone() };
-                        ui.new_child(egui::UiBuilder::new().max_rect(left).layout(egui::Layout::left_to_right(egui::Align::Center))).add(egui::Label::new(egui::RichText::new(title).strong()).truncate());
-                        let frac = match p.within {
-                            // Items done and the share of the one at hand.
-                            Some(w) if p.total_items > 0 => ((p.done_items as f32 + w) / p.total_items as f32).min(1.0),
-                            _ if p.total_bytes > 0 => p.done_bytes as f32 / p.total_bytes as f32,
-                            _ if p.total_items > 0 => p.done_items as f32 / p.total_items as f32,
-                            _ => 0.0,
-                        };
-                        ui.add(egui::ProgressBar::new(if done && !cancelled { 1.0 } else { frac }).desired_height(5.0).fill(if p.errors.is_empty() { pal.accent } else { pal.danger }));
+                        let g = crate::listing::elided(ui, &title, crate::theme::semibold(egui::TextStyle::Body.resolve(ui.style()).size), (right - row.left() - JOB_TEXT_X).max(20.0), pal.text);
+                        ui.painter().galley(pos2(row.left() + JOB_TEXT_X, (row.center().y - g.size().y / 2.0).round()), g, pal.text);
+                        ui.add_space(2.0);
                         let el = p.since.unwrap_or(j.started).elapsed().saturating_sub(p.held).as_secs_f64().max(0.001);
                         let mut line = format!("{} / {} item{}", p.done_items, p.total_items, if p.total_items == 1 { "" } else { "s" });
                         if let Some(w) = &waiting {
@@ -1935,11 +1950,14 @@ impl App {
                                 line.push_str(&format!(" · {} left", time_left(eta)));
                             }
                         }
-                        if waiting.is_some() {
-                            // The other job's title can be any length: one line, cut with "…".
-                            ui.add(egui::Label::new(egui::RichText::new(line).small().color(pal.text_dim)).truncate());
-                        } else {
-                            ui.label(egui::RichText::new(line).small().color(pal.text_dim));
+                        // Under the row, on the title's line; the other job's title can be any
+                        // length: one line, cut with "…".
+                        {
+                            let font = egui::TextStyle::Small.resolve(ui.style());
+                            let w = ui.available_width() - JOB_TEXT_X;
+                            let g = if waiting.is_some() { crate::listing::elided(ui, &line, font, w, pal.text_dim) } else { crate::listing::tabular(ui, &line, font, w, pal.text_dim) };
+                            let (lr, _) = ui.allocate_exact_size(vec2(ui.available_width(), g.size().y), Sense::hover());
+                            ui.painter().galley(pos2(lr.left() + JOB_TEXT_X, lr.top()), g, pal.text_dim);
                         }
                         // Bytes copied: the speed over time, under the figures.
                         if p.total_bytes > 0 && p.within.is_none() && waiting.is_none() {
@@ -1956,7 +1974,10 @@ impl App {
                         if !done && !p.current.is_empty() && p.clash.is_none() {
                             // One line, cut with "…": a long name wrapped and the card grew and
                             // shrank from file to file.
-                            ui.add(egui::Label::new(egui::RichText::new(&p.current).small().color(pal.text_dim)).truncate());
+                            ui.horizontal(|ui| {
+                                ui.add_space(JOB_TEXT_X - ui.spacing().item_spacing.x);
+                                ui.add(egui::Label::new(egui::RichText::new(&p.current).small().color(pal.text_dim)).truncate());
+                            });
                         }
                         // A name already taken, answered here or in the transfers list.
                         if let Some(c) = p.clash.clone().filter(|_| !done) {
@@ -2019,6 +2040,8 @@ impl App {
                     let el = at.elapsed().as_secs_f32();
                     if el < life {
                         let a = if el > life - 0.4 { (life - el) / 0.4 } else { 1.0 };
+                        // It comes in over a fifth of a second, as it goes.
+                        let a = if crate::kit::moving(ctx) { a * (el / 0.2).min(1.0) } else { a };
                         let tool = self.toast_tool;
                         let r = egui::Frame::popup(ui.style()).fill(pal.raised.gamma_multiply(a)).corner_radius(CornerRadius::same(8)).inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
                             // Only a toast with its action lays out in a row: a long one
@@ -2027,13 +2050,12 @@ impl App {
                                 (_, Some(key)) => {
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new(msg).color(pal.text.gamma_multiply(a)));
-                                        ui.add_space(6.0);
-                                        let b = crate::popups::quiet_button(ui, "Undo", &pal);
+                                        ui.add_space(8.0);
+                                        // Undo is a button with its keys in it, not a word
+                                        // beside a shortcut.
+                                        let b = crate::kit::key_button(ui, "Undo", key, &pal);
                                         note_control(ui, b.rect, "toast undo");
                                         undo_now = b.on_hover_text("Take it back").clicked();
-                                        if !key.is_empty() {
-                                            ui.label(egui::RichText::new(key).color(pal.text_dim.gamma_multiply(a)));
-                                        }
                                     });
                                 }
                                 (Some(t), None) => {
@@ -2053,6 +2075,12 @@ impl App {
                             }
                         });
                         hold = (tool.is_some() || undo.is_some()) && r.response.contains_pointer();
+                        // A toast that offers something says how long it stays: a line
+                        // that runs down, full again while it is pointed at.
+                        if tool.is_some() || undo.is_some() {
+                            let left = if hold { life } else { life - el };
+                            crate::kit::time_left_line(ui.painter(), r.response.rect, left, life, &pal);
+                        }
                         ctx.request_repaint();
                     }
                 }
@@ -2102,6 +2130,9 @@ impl App {
         }
     }
 }
+
+/// Where a job card's text begins, inside its row and under it.
+const JOB_TEXT_X: f32 = 12.0;
 
 fn p_filter_active(t: &tab::Tab) -> bool {
     !t.filter.is_empty() || t.flatten || t.git_only.is_some()

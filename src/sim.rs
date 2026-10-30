@@ -12899,7 +12899,7 @@ mod journeys {
         s.idle(3);
         assert!(some_text(&s, "Moved to the trash · 1 item") && some_text(&s, "Renamed · 1 item"));
         assert!(some_text(&s, "Move budget 2026.csv to the trash") && some_text(&s, "Rename report.md to b.md") && some_text(&s, "Rename notes.txt to a.txt"), "each named by what it did");
-        assert!(some_text(&s, "today"), "when");
+        assert!(s.texts.iter().any(|(_, t)| t.len() == 5 && t.as_bytes()[2] == b':' && t.chars().filter(char::is_ascii_digit).count() == 4), "when, as the time of day");
         look(&mut s, "undo history");
         s.idle(10);
         s.shot("undo-history");
@@ -13415,7 +13415,7 @@ mod journeys {
         let rows: Vec<(u32, String, Option<crate::holders::Hold>)> = st(&s).rows.iter().map(|r| (r.proc.as_ref().map_or(0, |p| p.pid), r.proc.as_ref().map(|p| p.name.clone()).unwrap_or_default(), r.hold.clone())).collect();
         assert_eq!(rows, [(a, "sleep".to_string(), Some(crate::holders::Hold::Inside(d.join("Photos"))))]);
         assert!(some_text(&s, "What's using “Photos”") && some_text(&s, "Yours") && some_text(&s, "sleep"));
-        assert!(some_text(&s, &format!("PID {a} · working in it")), "the PID, and how, from the folder asked about");
+        assert!(some_text(&s, &format!("PID {a}")) && some_text(&s, "working in it"), "the PID, and how, from the folder asked about");
         look(&mut s, "what's using a folder");
         s.idle(12);
         s.shot("whats-using");
@@ -13437,7 +13437,7 @@ mod journeys {
         palette_run(&mut s, "What's Using This");
         wait_until(&mut s, "the holder of the notes", 10, |s| st(s).scanned && st(s).rows.iter().any(|r| r.proc.as_ref().is_some_and(|p| p.pid == b)));
         assert_eq!(st(&s).rows[0].hold, Some(crate::holders::Hold::Open(d.join("notes.txt"))));
-        assert!(some_text(&s, &format!("PID {b} · has it open")));
+        assert!(some_text(&s, &format!("PID {b}")) && some_text(&s, "has it open"));
         s.act("key Enter");
         assert!(some_text(&s, &format!("Stop sleep ({b})? It may lose what it hasn't saved.")));
         s.act("key Enter");
@@ -14156,7 +14156,7 @@ mod journeys {
         wait_until(&mut s, "everything found and counted", 20, |s| space(s).free_up.as_ref().is_some_and(|f| f.done && f.counting() == 0));
         assert_eq!(space(&s).root, top, "the whole disk");
         s.idle(3);
-        for t in ["Build output", "Contents", "Free up", "Used now", "After", "Used, last 30 days"] {
+        for t in ["Build output", "Contents", "Free up", "Used now", "Used, last 30 days"] {
             assert!(some_text(&s, t), "{t} on screen");
         }
         use crate::freeup::Group;
