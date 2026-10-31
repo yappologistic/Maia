@@ -18,14 +18,24 @@ pub fn path_to_uri(p: &std::path::Path) -> String {
     s
 }
 
+/// The local path a `file://` URI names. One naming another host (`file://server/x`), or
+/// no absolute path at all (`file://--uninstall`), names nothing here.
 pub fn uri_to_path(u: &str) -> Option<PathBuf> {
     let rest = u.trim().strip_prefix("file://")?;
     let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+    if !rest.starts_with('/') {
+        return None;
+    }
+    Some(percent_decoded(rest))
+}
+
+/// `%XX` escapes turned back into the bytes they stand for; anything else as it is.
+pub fn percent_decoded(rest: &str) -> PathBuf {
     let bytes = rest.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() && bytes[i + 1].is_ascii_hexdigit() && bytes[i + 2].is_ascii_hexdigit() {
             let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("");
             if let Ok(v) = u8::from_str_radix(hex, 16) {
                 out.push(v);
@@ -36,7 +46,7 @@ pub fn uri_to_path(u: &str) -> Option<PathBuf> {
         out.push(bytes[i]);
         i += 1;
     }
-    Some(PathBuf::from(unsafe { std::ffi::OsString::from_encoded_bytes_unchecked(out) }))
+    PathBuf::from(unsafe { std::ffi::OsString::from_encoded_bytes_unchecked(out) })
 }
 
 /// A text/uri-list body (CRLF-terminated lines).

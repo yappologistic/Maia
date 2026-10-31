@@ -161,6 +161,27 @@ fn uri_roundtrip() {
     assert_eq!(crate::clipboard::quote_if_needed("/a b/it's"), "'/a b/it'\\''s'");
 }
 
+/// A `file://` URI names a local path only when it carries an absolute one: what a
+/// caller on the bus or a drop from another app hands over is never read as an option
+/// or as a path relative to wherever Maia was started.
+#[test]
+fn uris_name_only_local_absolute_paths() {
+    use crate::clipboard::{percent_decoded, uri_to_path};
+    use std::os::unix::ffi::OsStrExt;
+    assert_eq!(uri_to_path("file://--uninstall"), None);
+    assert_eq!(uri_to_path("file://server/share/x"), None);
+    assert_eq!(uri_to_path("file://"), None);
+    assert_eq!(uri_to_path("file://localhost/a%20b"), Some(PathBuf::from("/a b")));
+    assert_eq!(uri_to_path("file:///caf%E9").unwrap().as_os_str().as_bytes(), b"/caf\xE9", "any byte, UTF-8 or not");
+    // Only two hex digits are an escape; a sign is not one.
+    assert_eq!(uri_to_path("file:///a%+1b"), Some(PathBuf::from("/a%+1b")));
+    assert_eq!(uri_to_path("file:///100%"), Some(PathBuf::from("/100%")));
+    // A trash entry's place is relative to its drive: decoded all the same.
+    assert_eq!(percent_decoded("Photos/a%20b.jpg"), PathBuf::from("Photos/a b.jpg"));
+    let p = crate::fm1::paths(&["file://--uninstall".into(), "-V".into(), "/plain/path".into(), "file:///x%20y".into(), "smb://host/x".into()]);
+    assert_eq!(p, [PathBuf::from("/plain/path"), PathBuf::from("/x y")]);
+}
+
 #[test]
 fn unique_names() {
     let d = tmpdir("unique");
@@ -8811,6 +8832,11 @@ fn file_manager1_answers_show_in_folder() {
     assert!(matches!(rx.recv_timeout(Duration::from_secs(5)), Ok(Request::Open(p)) if p == [d.clone()]));
     assert!(call("ShowItemProperties", &uri).status.success());
     assert!(matches!(rx.recv_timeout(Duration::from_secs(5)), Ok(Request::Properties(p)) if p == [file.clone()]));
+    // What names no local path is dropped: the window started for it must not take
+    // `--uninstall` for an option.
+    let mixed = format!("['file://--uninstall', 'file://server/share/x', '-V', 'file://{}']", file.display().to_string().replace(' ', "%20"));
+    assert!(call("ShowItems", &mixed).status.success());
+    assert!(matches!(rx.recv_timeout(Duration::from_secs(5)), Ok(Request::Show(p)) if p == [file.clone()]), "only the local file");
     let intro = std::process::Command::new("gdbus").args(["introspect", "--address", &addr, "--dest", NAME, "--object-path", "/org/freedesktop/FileManager1"]).output().unwrap();
     assert!(String::from_utf8_lossy(&intro.stdout).contains("ShowItems"));
     let bad = call("Explode", "['file:///']");

@@ -75,7 +75,7 @@ fn encode(p: &Path) -> String {
 }
 
 fn decode(s: &str) -> PathBuf {
-    crate::clipboard::uri_to_path(&format!("file://{s}")).unwrap_or_else(|| PathBuf::from(s))
+    crate::clipboard::percent_decoded(s)
 }
 
 /// Move `p` into the trash.

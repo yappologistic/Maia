@@ -353,9 +353,10 @@ impl Bus {
     }
 }
 
-/// `file://` URIs (and plain paths) as paths; others (`smb://`…) are not on this disk.
+/// `file://` URIs (and plain absolute paths) as paths; others (`smb://`…) are not on this
+/// disk, and anything else could be read as an option by the window started for it.
 pub fn paths(uris: &[String]) -> Vec<PathBuf> {
-    uris.iter().filter_map(|u| if u.starts_with('/') { Some(PathBuf::from(u)) } else { crate::clipboard::uri_to_path(u) }).collect()
+    uris.iter().filter_map(|u| if u.starts_with('/') { Some(PathBuf::from(u)) } else { crate::clipboard::uri_to_path(u) }).filter(|p| p.is_absolute()).collect()
 }
 
 /// What a call asks of the window, if it is one of ours.
@@ -461,7 +462,7 @@ pub fn open_window(r: &Request, sock: &Path) {
         Request::Focus => &[],
     };
     let Ok(exe) = std::env::current_exe() else { return };
-    let started = std::process::Command::new(exe).args(paths).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).process_group(0).spawn();
+    let started = std::process::Command::new(exe).arg("--").args(paths).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).process_group(0).spawn();
     if started.is_ok() && matches!(r, Request::Properties(_)) {
         let at = std::time::Instant::now();
         while at.elapsed() < std::time::Duration::from_secs(10) && !crate::single::forward(sock, r) {
