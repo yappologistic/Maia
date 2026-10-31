@@ -328,20 +328,23 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
 
     egui::ScrollArea::vertical().auto_shrink([false, false]).scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded).show(ui, |ui| {
         let width = ui.available_width();
-        let section = |ui: &mut Ui, app: &mut App, key: &str, title: &str, _glyph: Glyph| -> bool {
+        let section = |ui: &mut Ui, app: &mut App, key: &str, title: &str, count: Option<usize>| -> bool {
             let collapsed = app.ud.sidebar_collapsed.iter().any(|s| s == key) && fq.is_empty();
             // A small dim label over its places, a step of air above it: a header, not
-            // another row. Its left edge is the places' icons'.
+            // another row. Its left edge is the places' icons'. Every section says the same
+            // three things: that it folds (the chevron before it), what it is, and how many
+            // it holds when that varies.
             let fs = (app.cfg.font_size * 0.8).round().max(10.0);
             let (r, resp) = ui.allocate_exact_size(vec2(width, (fs + 16.0).round()), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::DisclosureTriangle, true, title));
             let col = if resp.hovered() { pal.text } else { pal.text_dim };
             let text_y = r.bottom() - 6.0 - fs * 0.6;
+            let open = crate::kit::slide(ui.ctx(), Id::new(("side fold", key)), if collapsed { 0.0 } else { 1.0 });
+            crate::kit::chevron(ui.painter(), pos2(r.left() + 17.0, text_y), open, col.gamma_multiply(if resp.hovered() { 1.0 } else { 0.8 }));
             ui.painter().text(pos2(r.left() + 28.0, text_y), Align2::LEFT_CENTER, title, crate::theme::semibold(fs), col);
-            // The chevron shows the section can fold: always when folded, else when pointed at.
-            if collapsed || resp.hovered() {
-                let c = Rect::from_center_size(pos2(r.right() - 16.0, text_y), Vec2::splat(11.0));
-                paint_glyph(ui.painter(), c, if collapsed { Glyph::ChevronRight } else { Glyph::ChevronDown }, col);
+            if let Some(n) = count {
+                let g = crate::listing::tabular(ui, &n.to_string(), FontId::proportional(fs), 60.0, crate::kit::words_of(pal.text_dim));
+                ui.painter().galley(pos2(r.right() - 14.0 - g.size().x, text_y - g.size().y / 2.0), g, pal.text_dim);
             }
             if resp.clicked() {
                 if app.ud.sidebar_collapsed.iter().any(|s| s == key) {
@@ -366,16 +369,16 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
             // at a glance without competing with the list's selection.
             let here = path == current.as_path();
             let r2 = r.shrink2(vec2(6.0, 1.0));
-            if ctx_target.as_deref() == Some(path) {
-                ui.painter().rect_filled(r2, CornerRadius::same(6), pal.selected);
+            if here {
+                crate::kit::picked(ui.painter(), r2, 6, true, false, &pal);
+            } else if ctx_target.as_deref() == Some(path) {
+                ui.painter().rect_filled(r2, CornerRadius::same(6), crate::kit::lift(&pal));
             } else if resp.hovered() {
-                ui.painter().rect_filled(r2, CornerRadius::same(6), pal.row_hover);
-            } else if here {
-                ui.painter().rect_filled(r2, CornerRadius::same(6), pal.sidebar.lerp_to_gamma(pal.text, if pal.dark { 0.08 } else { 0.06 }));
+                ui.painter().rect_filled(r2, CornerRadius::same(6), crate::kit::touch(&pal));
             }
             let ic = Rect::from_center_size(pos2(r.left() + 36.0, r.center().y), Vec2::splat(15.0));
             match glyph {
-                Some(g) => paint_glyph(ui.painter(), ic, g, if here { pal.text } else { pal.text_dim }),
+                Some(g) => paint_glyph(ui.painter(), ic, g, if here { crate::kit::on_lift(&pal) } else { pal.text_dim }),
                 None => {
                     // A folder with a colour label is drawn in it, as in the listing.
                     let label = crate::tags::get(path, |t| t.iter().find_map(|x| crate::tags::color_of(x))).flatten();
@@ -386,7 +389,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                     }
                 }
             }
-            let g = crate::listing::elided(ui, label, font.clone(), r.width() - 62.0, if dim { pal.text_dim.gamma_multiply(0.6) } else { pal.text });
+            let g = crate::listing::elided(ui, label, font.clone(), r.width() - 62.0, if dim { pal.text_dim.gamma_multiply(0.6) } else if here { crate::kit::on_lift(&pal) } else { pal.text });
             ui.painter().galley(pos2(r.left() + 52.0, r.center().y - g.size().y / 2.0), g, pal.text);
             let what = if tab::is_computer(path) {
                 "Computer".into()
@@ -452,7 +455,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
 
         // ---------------- recents
         let recents: Vec<PathBuf> = CACHE.with(|c| c.borrow().recents.iter().take(10).cloned().collect());
-        if section(ui, app, "recents", "Recents", Glyph::Clock) {
+        if section(ui, app, "recents", "Recents", Some(recents.len())) {
             for p in recents.iter() {
                 let name = name_of(p);
                 if !matches(&name) {
@@ -467,7 +470,8 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
         ui.add_space(6.0);
         // ---------------- bookmarks
         let hdr_top = ui.cursor().top();
-        let open = section(ui, app, "bookmarks", "Bookmarks", Glyph::Bookmark);
+        let nbm = app.ud.bookmarks.len();
+        let open = section(ui, app, "bookmarks", "Bookmarks", Some(nbm));
         let hdr = Rect::from_min_size(pos2(ui.min_rect().left(), hdr_top), vec2(width, 26.0));
         // Dropping folders on the header bookmarks them.
         if let Some(Drag::Files { paths, .. }) = &app.drag {
@@ -516,7 +520,8 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
         }
         ui.add_space(6.0);
         // ---------------- smart folders, once there are any
-        if !app.ud.smart.is_empty() && section(ui, app, "smart", "Smart Folders", Glyph::Search) {
+        let nsmart = app.ud.smart.len();
+        if !app.ud.smart.is_empty() && section(ui, app, "smart", "Smart Folders", Some(nsmart)) {
             let list: Vec<(u64, String)> = app.ud.smart.iter().map(|s| (s.id, s.name.clone())).collect();
             for (id, name) in list {
                 if !matches(&name) {
@@ -527,9 +532,9 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
                 let r2 = r.shrink2(vec2(6.0, 1.0));
                 if ctx_target.as_deref() == Some(key.as_path()) {
-                    ui.painter().rect_filled(r2, CornerRadius::same(5), pal.selected);
+                    ui.painter().rect_filled(r2, CornerRadius::same(6), crate::kit::lift(&pal));
                 } else if resp.hovered() {
-                    ui.painter().rect_filled(r2, CornerRadius::same(5), pal.row_hover);
+                    ui.painter().rect_filled(r2, CornerRadius::same(6), crate::kit::touch(&pal));
                 }
                 let ic = Rect::from_center_size(pos2(r.left() + 36.0, r.center().y), Vec2::splat(15.0));
                 crate::theme::paint_symbol(ui.painter(), ic, "file-search", pal.text_dim);
@@ -557,7 +562,8 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
             ui.add_space(6.0);
         }
         // ---------------- tags, once some file has one
-        if !app.ud.tags.is_empty() && section(ui, app, "tags", "Tags", Glyph::Tag) {
+        let ntags = crate::tags::ordered(&app.ud.tags).len();
+        if !app.ud.tags.is_empty() && section(ui, app, "tags", "Tags", Some(ntags)) {
             for tag in crate::tags::ordered(&app.ud.tags) {
                 if !matches(&tag) {
                     continue;
@@ -568,9 +574,9 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &tag));
                 let r2 = r.shrink2(vec2(6.0, 1.0));
                 if ctx_target.as_deref() == Some(key.as_path()) {
-                    ui.painter().rect_filled(r2, CornerRadius::same(5), pal.selected);
+                    ui.painter().rect_filled(r2, CornerRadius::same(6), crate::kit::lift(&pal));
                 } else if resp.hovered() {
-                    ui.painter().rect_filled(r2, CornerRadius::same(5), pal.row_hover);
+                    ui.painter().rect_filled(r2, CornerRadius::same(6), crate::kit::touch(&pal));
                 }
                 let ic = Rect::from_center_size(pos2(r.left() + 36.0, r.center().y), Vec2::splat(15.0));
                 match crate::tags::color_of(&tag) {
@@ -598,11 +604,11 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
             ui.add_space(6.0);
         }
         // ---------------- storage
-        if section(ui, app, "storage", "Storage", Glyph::Drive) {
-            let mounts = CACHE.with(|c| c.borrow().mounts.clone());
-            // Mounted volumes, then removable media that isn't mounted yet (dimmed; a click
-            // mounts and opens it).
-            let unmounted: Vec<(PathBuf, String, u64, u64)> = drives.iter().filter(|d| d.removable && d.offer_mount()).map(|d| (PathBuf::from(format!("{}{}", tab::DRIVE, d.dev)), d.title(), d.size, d.size)).collect();
+        let mounts = CACHE.with(|c| c.borrow().mounts.clone());
+        // Mounted volumes, then removable media that isn't mounted yet (dimmed; a click
+        // mounts and opens it).
+        let unmounted: Vec<(PathBuf, String, u64, u64)> = drives.iter().filter(|d| d.removable && d.offer_mount()).map(|d| (PathBuf::from(format!("{}{}", tab::DRIVE, d.dev)), d.title(), d.size, d.size)).collect();
+        if section(ui, app, "storage", "Storage", Some(mounts.len() + unmounted.len())) {
             for (p, label, total, free) in mounts.iter().chain(unmounted.iter()) {
                 if !matches(label) {
                     continue;
@@ -615,45 +621,71 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                 let busy = drive.is_some_and(|d| crate::drives::busy(&d.dev));
                 // Removable media ejects; other user mounts (a second internal disk) unmount.
                 let eject = drive.filter(|d| mounted && (d.removable || crate::drives::can_unmount(d))).map(|d| if d.removable { crate::drives::Op::Eject } else { crate::drives::Op::Unmount });
-                // A drive that is not mounted has a second line: its size and state.
-                let (r, resp) = ui.allocate_exact_size(vec2(width, if mounted { row_h } else { row_h + 8.0 }), Sense::click_and_drag());
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+                // Two lines for every drive: the name with what is free, then how full it is
+                // as a thin meter; a drive not mounted says its size and state instead.
+                let measured = mounted && *total > 0;
+                let two = measured || !mounted;
+                // The second line is as tall as its small text needs at this font size.
+                let small = FontId::proportional(app.cfg.font_size - 2.5);
+                let line2 = ((app.cfg.font_size - 2.5) * 0.9).round().max(8.0);
+                let (r, resp) = ui.allocate_exact_size(vec2(width, if two { row_h + line2 } else { row_h }), Sense::click_and_drag());
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
                 let sel = *p == current;
                 let r2 = r.shrink2(vec2(6.0, 1.0));
                 // Hover covers the eject button too (it sits on top of the row).
                 let row_hover = ui.rect_contains_pointer(r) && app.drag.is_none();
-                if row_hover || ctx_target.as_deref() == Some(p.as_path()) {
-                    ui.painter().rect_filled(r2, CornerRadius::same(6), pal.row_hover);
-                } else if sel {
-                    ui.painter().rect_filled(r2, CornerRadius::same(6), pal.sidebar.lerp_to_gamma(pal.text, if pal.dark { 0.08 } else { 0.06 }));
+                let ctx_on = ctx_target.as_deref() == Some(p.as_path());
+                let face = if sel || ctx_on { crate::kit::lift(&pal) } else if row_hover { crate::kit::touch(&pal) } else { pal.sidebar };
+                if sel {
+                    crate::kit::picked(ui.painter(), r2, 6, true, false, &pal);
+                } else if face != pal.sidebar {
+                    ui.painter().rect_filled(r2, CornerRadius::same(6), face);
                 }
-                // Unmounted, the name moves up a little so the two lines don't touch.
-                let ic = Rect::from_center_size(pos2(r.left() + 36.0, if mounted { r.center().y } else { r.top() + row_h / 2.0 - 1.0 }), Vec2::splat(15.0));
+                // On two lines, the name moves up so they don't touch.
+                let ic = Rect::from_center_size(pos2(r.left() + 36.0, if two { r.top() + row_h / 2.0 - 1.0 } else { r.center().y }), Vec2::splat(15.0));
                 let crypt = drive.map_or(&crate::drives::Crypt::Plain, |d| &d.crypt);
-                let icol = if sel { pal.text } else if mounted { pal.text_dim } else { pal.text_dim.gamma_multiply(0.6) };
-                let ring = if row_hover || ctx_target.as_deref() == Some(p.as_path()) { pal.row_hover } else if sel { pal.sidebar.lerp_to_gamma(pal.text, if pal.dark { 0.08 } else { 0.06 }) } else { pal.sidebar };
-                crate::ui::paint_drive(ui.painter(), ic, drive.is_some_and(|d| d.removable), crypt, icol, ring);
+                let icol = if sel { crate::kit::on_lift(&pal) } else if mounted { pal.text_dim } else { pal.text_dim.gamma_multiply(0.6) };
+                crate::ui::paint_drive(ui.painter(), ic, drive.is_some_and(|d| d.removable), crypt, icol, face);
                 // Room on the right for the eject button (or the spinner while busy).
                 let btn = Rect::from_center_size(pos2(r.right() - 20.0, ic.center().y), Vec2::splat(20.0));
-                // Only a drive close to full says so, with a short meter at the row's end:
-                // amber from 80%, red from 95%. The others say nothing until asked.
-                let frac = if mounted && *total > 0 { (total - free) as f32 / *total as f32 } else { 0.0 };
+                let frac = if measured { (total - free) as f32 / *total as f32 } else { 0.0 };
                 let shows_eject = row_hover && eject.is_some();
-                let meter = fullness(frac).is_some() && !busy && !shows_eject;
-                let reserve = if eject.is_some() || busy { 26.0 } else if meter { 40.0 } else { 0.0 };
-                let tcol = if mounted { pal.text } else { pal.text_dim.gamma_multiply(0.75) };
-                let lg = crate::listing::elided(ui, label, font.clone(), r.width() - 60.0 - reserve, tcol);
+                // What is free, as a figure at the name's end, where the eject button is not.
+                // What is free, as a figure at the end of the second line, after the meter.
+                // "203 GB free", or "203 GB" where the sidebar is narrow (the tooltip says the rest).
+                let room2 = r.width() - 66.0 - 8.0 - 16.0;
+                let free_g = measured.then(|| {
+                    let fig = |t: String| crate::listing::figures(ui, &t, small.clone(), 160.0, pal.text_dim, crate::kit::words_of(pal.text_dim));
+                    let long = fig(format!("{} free", fsx::fmt_size(*free)));
+                    // The long form only while the meter keeps a useful length beside it.
+                    if long.size().x <= room2 - 20.0 { long } else { fig(fsx::fmt_size(*free)) }
+                });
+                let reserve = if shows_eject || busy { 26.0 } else { 0.0 };
+                let tcol = if !mounted { pal.text_dim.gamma_multiply(0.75) } else if sel { crate::kit::on_lift(&pal) } else { pal.text };
+                let lg = crate::listing::elided(ui, label, font.clone(), r.width() - 66.0 - reserve, tcol);
                 ui.painter().galley(pos2(r.left() + 52.0, ic.center().y - lg.size().y / 2.0), lg, tcol);
+                let cy2 = r.bottom() - 2.0 - line2 / 2.0;
                 if !mounted {
                     let state = if *crypt == crate::drives::Crypt::Locked { "Locked" } else { "Not mounted" };
-                    let sub = crate::listing::elided(ui, &format!("{} · {state}", fsx::fmt_size(*total)), FontId::proportional(app.cfg.font_size - 3.0), r.width() - 60.0 - reserve, pal.text_dim);
-                    ui.painter().galley(pos2(r.left() + 52.0, r.bottom() - 3.0 - sub.size().y), sub, pal.text_dim);
-                } else if meter {
-                    let bar = Rect::from_min_size(pos2(r.right() - 14.0 - 28.0, ic.center().y - 2.0), vec2(28.0, 4.0));
-                    let track = pal.sidebar.lerp_to_gamma(pal.text, if pal.dark { 0.14 } else { 0.12 });
+                    let sub = crate::listing::figures(ui, &format!("{} · {state}", fsx::fmt_size(*total)), small.clone(), r.width() - 66.0, pal.text_dim, crate::kit::words_of(pal.text_dim));
+                    ui.painter().galley(pos2(r.left() + 52.0, cy2 - sub.size().y / 2.0), sub, pal.text_dim);
+                } else if let Some(g) = free_g {
+                    // Quiet while there is room; amber from 80% full, red from 95%. The
+                    // figure gives way to a narrow sidebar before the meter does.
+                    let fits = g.size().x <= room2;
+                    let right = if fits { r.right() - 14.0 - g.size().x - 8.0 } else { r.right() - 14.0 };
+                    if fits {
+                        ui.painter().galley(pos2(r.right() - 14.0 - g.size().x, cy2 - g.size().y / 2.0), g, pal.text_dim);
+                    }
+                    let bar = Rect::from_min_max(pos2(r.left() + 52.0, cy2 - 1.5), pos2(right, cy2 + 1.5));
+                    let track = face.lerp_to_gamma(pal.text, if pal.dark { 0.1 } else { 0.09 });
                     ui.painter().rect_filled(bar, CornerRadius::same(2), track);
-                    let col = if fullness(frac) == Some(true) { pal.danger } else { pal.warn };
-                    ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac.min(1.0), bar.height())), CornerRadius::same(2), col);
+                    let col = match fullness(frac) {
+                        Some(true) => pal.danger,
+                        Some(false) => pal.warn,
+                        None => pal.text_dim.gamma_multiply(if sel { 0.8 } else { 0.6 }),
+                    };
+                    ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2((bar.width() * frac.min(1.0)).max(3.0), bar.height())), CornerRadius::same(2), col);
                 }
                 if busy {
                     crate::ui::spinner(ui.painter(), btn.center(), 5.5, pal.accent, ui.input(|i| i.time));
@@ -663,7 +695,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                     let b = ui.interact(btn, Id::new(("eject", &d.dev)), Sense::click());
                     if row_hover {
                         if b.hovered() {
-                            ui.painter().rect_filled(btn, CornerRadius::same(4), pal.row_hover);
+                            ui.painter().rect_filled(btn, CornerRadius::same(10), crate::kit::lift(&pal));
                         }
                         paint_glyph(ui.painter(), btn.shrink(4.0), Glyph::Eject, if b.hovered() { pal.text } else { pal.text_dim });
                         crate::ui::note_control(ui, btn, if op == crate::drives::Op::Eject { "eject button" } else { "unmount button" });
@@ -684,7 +716,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
         }
         ui.add_space(6.0);
         // ---------------- network: mounted shares and attached phones
-        if !net.is_empty() && section(ui, app, "network", "Network", Glyph::Globe) {
+        if !net.is_empty() && section(ui, app, "network", "Network", Some(net.len())) {
             for place in net.iter() {
                 let name = if place.device { place.name.clone() } else { crate::network::label(&place.uri) };
                 if !matches(&name) {
@@ -693,8 +725,10 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                 let (r, resp) = ui.allocate_exact_size(vec2(width, row_h), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
                 let row_hover = ui.rect_contains_pointer(r) && app.drag.is_none();
-                if row_hover || (ctx_target.is_some() && ctx_target == place.path) {
-                    ui.painter().rect_filled(r.shrink2(vec2(6.0, 1.0)), CornerRadius::same(5), pal.row_hover);
+                if ctx_target.is_some() && ctx_target == place.path {
+                    ui.painter().rect_filled(r.shrink2(vec2(6.0, 1.0)), CornerRadius::same(6), crate::kit::lift(&pal));
+                } else if row_hover {
+                    ui.painter().rect_filled(r.shrink2(vec2(6.0, 1.0)), CornerRadius::same(6), crate::kit::touch(&pal));
                 }
                 let ic = Rect::from_center_size(pos2(r.left() + 36.0, r.center().y), Vec2::splat(15.0));
                 let busy = app.connecting(&place.uri);
@@ -712,7 +746,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                     let b = ui.interact(btn, Id::new(("disconnect", &place.uri)), Sense::click());
                     if row_hover {
                         if b.hovered() {
-                            ui.painter().rect_filled(btn, CornerRadius::same(4), pal.row_hover);
+                            ui.painter().rect_filled(btn, CornerRadius::same(10), crate::kit::lift(&pal));
                         }
                         paint_glyph(ui.painter(), btn.shrink(4.0), Glyph::Eject, if b.hovered() { pal.text } else { pal.text_dim });
                         crate::ui::note_control(ui, btn, "disconnect button");
@@ -739,7 +773,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
             ui.add_space(6.0);
         }
         // ---------------- places
-        if section(ui, app, "places", "Places", Glyph::Folder) {
+        if section(ui, app, "places", "Places", None) {
             let places = CACHE.with(|c| c.borrow().places.clone());
             for (name, p, g) in places.iter() {
                 if !matches(name) {

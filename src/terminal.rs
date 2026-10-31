@@ -1096,12 +1096,7 @@ pub fn pane(app: &mut App, ui: &mut Ui, full: Rect, above: f32) {
     }
     // As the preview's find marks them.
     for (r, now) in marks {
-        if now {
-            p.rect_filled(r.expand(1.0), CornerRadius::same(3), pal.accent.gamma_multiply(0.55));
-            p.rect_stroke(r.expand(1.0), CornerRadius::same(3), Stroke::new(1.0_f32, pal.accent), StrokeKind::Outside);
-        } else {
-            p.rect_filled(r, CornerRadius::same(2), pal.accent.gamma_multiply(0.25));
-        }
+        crate::findbar::paint_match(&p, r, now, &pal);
     }
     for (pos, g) in galleys {
         p.galley(pos, g, pal.text);

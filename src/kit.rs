@@ -128,7 +128,8 @@ fn segmented_in(ui: &mut Ui, id: Id, r: Rect, labels: &[&str], notes: &[&'static
         x += w;
     }
     let mut out = None;
-    if let Some(c) = cells.get(cur.min(cells.len().saturating_sub(1))) {
+    // An index past the end is no choice at all: no pill.
+    if let Some(c) = cells.get(cur) {
         let l = slide(ui.ctx(), id.with("l"), c.left() - r.left()) + r.left();
         let w = slide(ui.ctx(), id.with("w"), c.width());
         let pill = Rect::from_min_size(pos2(l, inner.top()), vec2(w, inner.height()));
@@ -371,7 +372,7 @@ pub fn key_button(ui: &mut Ui, label: &str, keys: &str, pal: &Palette) -> egui::
     let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + kw + 20.0, h), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     let hot = resp.hovered() || resp.has_focus();
-    ui.painter().rect(r, CornerRadius::same(7), if hot { lift(pal) } else { touch(pal) }, Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+    ui.painter().rect(r, radius(r.height(), round()), if hot { lift(pal) } else { pal.card() }, Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
     let tc = if hot { pal.text } else { pal.text.gamma_multiply(0.9) };
     ui.painter().galley(pos2(r.left() + 10.0, (r.center().y - g.size().y / 2.0).round()), g.clone(), tc);
     // The caps are part of the button, not controls of their own.
@@ -397,23 +398,49 @@ pub fn time_left_line(p: &egui::Painter, r: Rect, left: f32, life: f32, pal: &Pa
     p.line_segment([pos2(x0, y), pos2(x1, y)], Stroke::new(2.0, pal.text_dim.gamma_multiply(0.55)));
 }
 
-/// A switch drawn as a small word ("Aa", ".*"): bare while off, lit in the accent's tint
-/// with a hairline while on. Returns whether it was clicked.
+/// A switch drawn as a small word ("Aa", ".*"): bare while off, lifted while on, as
+/// everything that is on is. Returns whether it was clicked.
 pub fn toggle(ui: &mut Ui, label: &str, on: bool, mono: bool, note: &'static str, tip: &str, pal: &Palette) -> bool {
     let font = if mono { FontId::monospace(12.0) } else { FontId::proportional(12.0) };
     let g = ui.painter().layout_no_wrap(label.to_string(), font.clone(), pal.text);
     let (r, resp) = ui.allocate_exact_size(vec2((g.size().x + 14.0).max(26.0), 22.0), Sense::click());
     crate::ui::note_control(ui, r, note);
     let t = slide(ui.ctx(), Id::new(("toggle", note)), if on { 1.0 } else { 0.0 });
-    if t > 0.01 {
-        ui.painter().rect(r, CornerRadius::same(5), pal.accent.gamma_multiply((if pal.dark { 0.24 } else { 0.16 }) * t), Stroke::new(1.0, pal.accent.gamma_multiply(0.45 * t)), StrokeKind::Inside);
-    } else {
-        // Off, it keeps a field's faint edge: a control, not a stray word.
-        ui.painter().rect(r, CornerRadius::same(5), if resp.hovered() { touch(pal) } else { Color32::TRANSPARENT }, Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
-    }
-    let c = if on || resp.hovered() { pal.text } else { pal.text_dim };
+    // Off, it keeps a field's faint edge: a control, not a stray word.
+    let rest = if resp.hovered() { touch(pal) } else { Color32::TRANSPARENT };
+    ui.painter().rect(r, CornerRadius::same(5), rest.lerp_to_gamma(lift(pal), t), Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+    let c = if on { on_lift(pal) } else if resp.hovered() { pal.text } else { pal.text_dim };
     ui.painter().text(r.center(), Align2::CENTER_CENTER, label, font, c);
     resp.on_hover_text(tip).clicked()
+}
+
+/// A check mark centred at `c`: what is on, in a menu or a list, without a box.
+pub fn check_mark(p: &egui::Painter, c: Pos2, col: Color32) {
+    p.add(Shape::line(vec![c + vec2(-4.0, 0.2), c + vec2(-1.2, 3.0), c + vec2(4.2, -3.2)], Stroke::new(1.6, col)));
+}
+
+/// One item standing alone in a 30 point row or a menu, ROW_ITEM sized, lifted: a
+/// switch whose state is its glyph (a sort's direction).
+pub fn bar_item_row(ui: &mut Ui, what: &'static str, tip: &str, enabled: bool, pal: &Palette, paint: impl FnOnce(&egui::Painter, Rect, Color32)) -> egui::Response {
+    let (r, _) = ui.allocate_exact_size(vec2(CHIP_H, CHIP_H), Sense::hover());
+    bar_item_at(ui, r, Id::new((what, r.min.x as i32, r.min.y as i32)), what, tip, enabled, true, round(), pal, paint)
+}
+
+/// A choice that is on or off, as a word in a pill at a popup's own size: the card at
+/// rest, lifted while on. `note` names it for the simulated user. Returns its response.
+pub fn chip(ui: &mut Ui, label: &str, on: bool, note: &'static str, pal: &Palette) -> egui::Response {
+    let font = FontId::proportional(12.5);
+    let g = ui.painter().layout_no_wrap(label.to_string(), font, pal.text);
+    let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 22.0, CHIP_H), Sense::click());
+    crate::ui::note_control(ui, r, note);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, label));
+    let hot = resp.hovered();
+    let rad = radius(r.height(), round());
+    let face = if on { lift(pal) } else if hot { touch(pal) } else { pal.card() };
+    ui.painter().rect(r, rad, face, Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+    let c = if on { on_lift(pal) } else if hot { pal.text } else { pal.text_dim };
+    ui.painter().galley_with_override_text_color(pos2(r.center().x - g.size().x / 2.0, (r.center().y - g.size().y / 2.0).round()), g, c);
+    resp
 }
 
 /// A quiet button at a popup's own size (12.5), whatever the window's font: the card's
@@ -422,6 +449,21 @@ pub fn small_button(ui: &mut Ui, label: &str, pal: &Palette) -> egui::Response {
     let font = FontId::proportional(12.5);
     let h = (ui.painter().layout_no_wrap("A".into(), font, pal.text).size().y + 10.0).max(24.0);
     button_in(ui, label, h, false, pal)
+}
+
+/// `small_button` for the one main answer among them: filled in the text's own colour,
+/// as a dialog's main button is.
+pub fn small_main_button(ui: &mut Ui, label: &str, pal: &Palette) -> egui::Response {
+    let font = FontId::proportional(12.5);
+    let g = ui.painter().layout_no_wrap(label.to_string(), font, pal.text);
+    let h = (g.size().y + 10.0).max(24.0);
+    let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 20.0, h), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
+    let hot = resp.hovered() || resp.has_focus();
+    let (fill, ink) = if pal.strong { (pal.accent, pal.on_accent()) } else { (if hot { pal.text } else { pal.text.gamma_multiply(0.9) }, if pal.dark { pal.bg } else { pal.panel }) };
+    ui.painter().rect_filled(r, radius(h, round()), fill);
+    ui.painter().galley_with_override_text_color(pos2(r.center().x - g.size().x / 2.0, (r.center().y - g.size().y / 2.0).round()), g, ink);
+    resp
 }
 
 /// A quiet button `h` tall; `news` puts an accent dot before its label (something new to
@@ -433,11 +475,216 @@ pub fn button_in(ui: &mut Ui, label: &str, h: f32, news: bool, pal: &Palette) ->
     let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 18.0 + dot, h), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     let hot = ui.is_enabled() && (resp.hovered() || resp.has_focus());
-    ui.painter().rect(r, CornerRadius::same(6), if hot { lift(pal) } else { pal.card() }, Stroke::new(1.0, if resp.has_focus() { pal.accent.gamma_multiply(0.7) } else { pal.card_line() }), StrokeKind::Inside);
+    ui.painter().rect(r, radius(r.height(), round()), if hot { lift(pal) } else { pal.card() }, Stroke::new(1.0, if resp.has_focus() { pal.accent.gamma_multiply(0.7) } else { pal.card_line() }), StrokeKind::Inside);
     if news {
         ui.painter().circle_filled(pos2(r.left() + 12.0, r.center().y), 3.0, pal.accent);
     }
     let c = if !ui.is_enabled() { pal.text_dim.gamma_multiply(0.6) } else if hot { pal.text } else { pal.text.gamma_multiply(0.9) };
     ui.painter().galley(pos2(r.left() + 9.0 + dot, (r.center().y - g.size().y / 2.0).round()), g, c);
     resp
+}
+
+// ---------------------------------------------------------------- the bars
+//
+// The path bar, the panels' toolbars and the status bar are built of the same parts, at
+// the same sizes whatever the font: a capsule holds a group three points inside its bar,
+// its items inset by two points all round. The path bar's are CAP_H with ITEM inside;
+// the rows that are 30 tall (a panel's toolbar beside the list's header, the status bar)
+// have ROW_CAP_H with ROW_ITEM, and CHIP_H chips. Text in a bar is the window's body
+// size; figures beside it are the small size, their words a step quieter.
+
+static ROUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Round corners (Options): what every capsule, item and chip reads, set each frame.
+pub fn round() -> bool {
+    ROUND.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn set_round(on: bool) {
+    ROUND.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A group of controls in a bar.
+pub const CAP_H: f32 = 28.0;
+/// One control inside a group, or alone in a bar.
+pub const ITEM: egui::Vec2 = egui::vec2(26.0, 24.0);
+/// The glyph on an item.
+pub const GLYPH: f32 = 15.0;
+/// Between a capsule's edge and its items.
+pub const INSET: f32 = 2.0;
+/// A group in a 30 point row, and an item inside it; their glyph.
+pub const ROW_CAP_H: f32 = 24.0;
+pub const ROW_ITEM: egui::Vec2 = egui::vec2(24.0, 20.0);
+pub const ROW_GLYPH: f32 = 14.0;
+/// A chip in the status bar (the branch, the transfers): a capsule of its own.
+pub const CHIP_H: f32 = ROW_CAP_H;
+
+/// A status bar chip's face: a capsule at rest, `touch` under the pointer, lifted while
+/// what it opens is open; `fill` (0..1) fills it from the left in the accent's tint, as a
+/// job's progress.
+pub fn chip_face(p: &egui::Painter, r: Rect, hot: bool, open: bool, fill: Option<f32>, round: bool, pal: &Palette) {
+    let rad = radius(r.height(), round);
+    let face = if open { lift(pal) } else if hot { pal.card().lerp_to_gamma(pal.text, if pal.dark { 0.07 } else { 0.05 }) } else { pal.card() };
+    p.rect_filled(r, rad, face);
+    if let Some(f) = fill {
+        let f = f.clamp(0.0, 1.0);
+        if f > 0.0 {
+            let w = (r.width() * f).max(r.height().min(r.width()));
+            p.rect_filled(Rect::from_min_size(r.min, vec2(w, r.height())), rad, pal.accent.gamma_multiply(if pal.dark { 0.22 } else { 0.16 }));
+        }
+    }
+    p.rect_stroke(r, rad, Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+}
+
+/// The corners of something `h` tall: a capsule's round ends with Round corners on,
+/// square without.
+pub fn radius(h: f32, round: bool) -> CornerRadius {
+    if round { CornerRadius::same((h / 2.0).round().min(255.0) as u8) } else { CornerRadius::ZERO }
+}
+
+/// A capsule's face: the card a step off what it sits on, and its hairline.
+pub fn capsule(p: &egui::Painter, r: Rect, round: bool, pal: &Palette) {
+    p.rect(r, radius(r.height(), round), pal.card(), Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+}
+
+/// An item's face: `lift` while on, `touch` under the pointer, nothing at rest.
+pub fn item_face(p: &egui::Painter, r: Rect, hot: bool, on: bool, round: bool, pal: &Palette) {
+    if on {
+        p.rect(r, radius(r.height(), round), lift(pal), Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+    } else if hot {
+        p.rect_filled(r, radius(r.height(), round), touch(pal));
+    }
+}
+
+/// What an item's glyph or word is drawn in.
+pub fn item_ink(enabled: bool, hot: bool, on: bool, pal: &Palette) -> Color32 {
+    if !enabled {
+        pal.text_dim.gamma_multiply(0.4)
+    } else if on {
+        on_lift(pal)
+    } else if hot {
+        pal.text
+    } else {
+        pal.text_dim
+    }
+}
+
+/// One item of a bar, ITEM sized; `paint` draws its glyph in the colour given. Disabled it
+/// is faint and takes no clicks; with no room left in the row it is left out (a response
+/// of no size).
+#[allow(clippy::too_many_arguments)]
+pub fn bar_item(ui: &mut Ui, what: &'static str, tip: &str, enabled: bool, on: bool, round: bool, pal: &Palette, paint: impl FnOnce(&egui::Painter, Rect, Color32)) -> egui::Response {
+    if crate::ui::no_room(ui, ITEM.x) {
+        return ui.allocate_exact_size(egui::Vec2::ZERO, Sense::hover()).1;
+    }
+    let (r, _) = ui.allocate_exact_size(ITEM, Sense::hover());
+    bar_item_at(ui, r, Id::new((what, r.min.x as i32, r.min.y as i32)), what, tip, enabled, on, round, pal, paint)
+}
+
+/// `bar_item` at a place of the caller's choosing, `id` its own.
+#[allow(clippy::too_many_arguments)]
+pub fn bar_item_at(ui: &Ui, r: Rect, id: Id, what: &'static str, tip: &str, enabled: bool, on: bool, round: bool, pal: &Palette, paint: impl FnOnce(&egui::Painter, Rect, Color32)) -> egui::Response {
+    let resp = ui.interact(r, id, if enabled { Sense::click() } else { Sense::hover() });
+    crate::ui::note_control(ui, r, what);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, on, if tip.is_empty() { what } else { tip }));
+    let hot = enabled && resp.hovered();
+    item_face(ui.painter(), r, hot, on, round, pal);
+    paint(ui.painter(), Rect::from_center_size(r.center(), egui::Vec2::splat(GLYPH)), item_ink(enabled, hot, on, pal));
+    if tip.is_empty() { resp } else { resp.on_hover_text(tip) }
+}
+
+/// The items `add` lays out side by side, in one capsule painted under them once their
+/// extent is known, CAP_H tall about the row's middle. A group none of whose items found
+/// room leaves no empty capsule behind. Works in either direction of a row.
+pub fn capsule_group<R>(ui: &mut Ui, round: bool, pal: &Palette, add: impl FnOnce(&mut Ui) -> R) -> R {
+    capsule_group_h(ui, CAP_H, round, pal, add)
+}
+
+/// `capsule_group`, `h` tall.
+pub fn capsule_group_h<R>(ui: &mut Ui, h: f32, round: bool, pal: &Palette, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let bg = ui.painter().add(Shape::Noop);
+    let rtl = ui.layout().main_dir() == egui::Direction::RightToLeft;
+    let edge = |ui: &Ui| if rtl { ui.cursor().max.x } else { ui.cursor().min.x };
+    let gap = ui.spacing().item_spacing.x;
+    ui.spacing_mut().item_spacing.x = 0.0;
+    let x0 = edge(ui);
+    ui.add_space(INSET);
+    let out = add(ui);
+    ui.add_space(INSET);
+    let x1 = edge(ui);
+    ui.spacing_mut().item_spacing.x = gap;
+    let (l, r) = (x0.min(x1), x0.max(x1));
+    // A capsule groups: round one button alone it would only be a ring, so a lone
+    // button stands bare, as the close button beside it does.
+    if r - l > 1.6 * h {
+        let cy = ui.max_rect().center().y;
+        let cap = Rect::from_min_max(pos2(l, cy - h / 2.0), pos2(r, cy + h / 2.0));
+        ui.painter().set(bg, Shape::rect_filled(cap, radius(h, round), pal.card()));
+        ui.painter().rect_stroke(cap, radius(h, round), Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+    }
+    ui.add_space(gap);
+    out
+}
+
+/// A choice of one among glyphs in a 30 point row, in a capsule, its lifted pill sliding
+/// to the one picked. `items` are (glyph, tip, name for the simulated user). Returns the
+/// one clicked.
+pub fn glyph_choice(ui: &mut Ui, id: Id, items: &[(crate::theme::Glyph, &str, &'static str)], cur: usize, round: bool, pal: &Palette) -> Option<usize> {
+    let w = ROW_ITEM.x * items.len() as f32 + 2.0 * INSET;
+    if crate::ui::no_room(ui, w) {
+        return None;
+    }
+    let (r, _) = ui.allocate_exact_size(vec2(w, ROW_CAP_H), Sense::hover());
+    capsule(ui.painter(), r, round, pal);
+    let inner = r.shrink(INSET);
+    let cell = |k: usize| Rect::from_min_size(pos2(inner.left() + ROW_ITEM.x * k as f32, inner.top()), ROW_ITEM);
+    let at = slide(ui.ctx(), id, cur as f32);
+    let pill = cell(0).translate(vec2(ROW_ITEM.x * at, 0.0));
+    ui.painter().rect(pill, radius(ROW_ITEM.y, round), lift(pal), Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+    let mut out = None;
+    for (k, (g, tip, what)) in items.iter().enumerate() {
+        let c = cell(k);
+        let resp = ui.interact(c, id.with(k), Sense::click());
+        crate::ui::note_control(ui, c, what);
+        let on = k == cur;
+        if !on && resp.hovered() {
+            ui.painter().rect_filled(c, radius(ROW_ITEM.y, round), touch(pal));
+        }
+        crate::theme::paint_glyph(ui.painter(), Rect::from_center_size(c.center(), egui::Vec2::splat(ROW_GLYPH)), *g, item_ink(true, resp.hovered(), on, pal));
+        if resp.on_hover_text(*tip).clicked() && !on {
+            out = Some(k);
+        }
+    }
+    ui.add_space(ui.spacing().item_spacing.x);
+    out
+}
+
+/// A picked row in a list: `lift`, and while `mark` the accent's short bar at its left end
+/// (the panel with the keyboard; another panel's selection, or the way down to a folder,
+/// is lifted alone). `more` lifts it a step further: the keyboard's own row among several.
+pub fn picked(p: &egui::Painter, r: Rect, radius: u8, mark: bool, more: bool, pal: &Palette) {
+    let fill = if more && !pal.strong { lift(pal).lerp_to_gamma(pal.text, if pal.dark { 0.05 } else { 0.04 }) } else { lift(pal) };
+    p.rect_filled(r, CornerRadius::same(radius), fill);
+    if mark && !pal.strong {
+        let h = (r.height() - 14.0).clamp(8.0, 18.0);
+        let bar = if r.width() >= r.height() * 1.6 {
+            Rect::from_center_size(pos2(r.left() + 4.0, r.center().y), vec2(3.0, h))
+        } else {
+            // A tile: the bar lies along its foot.
+            Rect::from_center_size(pos2(r.center().x, r.bottom() - 4.0), vec2(h, 3.0))
+        };
+        p.rect_filled(bar, CornerRadius::same(2), pal.accent);
+    }
+}
+
+/// The keyboard's row when nothing is picked: a hairline round it, in the text's colour,
+/// faint (the accent is kept for what is picked).
+pub fn cursor_ring(p: &egui::Painter, r: Rect, radius: u8, pal: &Palette) {
+    p.rect_stroke(r.shrink(0.5), CornerRadius::same(radius), Stroke::new(1.0, pal.text.gamma_multiply(if pal.dark { 0.32 } else { 0.4 })), StrokeKind::Inside);
+}
+
+/// The quieter colour of the words among figures ("KB", "files", "free", "Today"): a step
+/// back from `c`.
+pub fn words_of(c: Color32) -> Color32 {
+    c.gamma_multiply(0.62)
 }

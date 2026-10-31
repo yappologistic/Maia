@@ -813,14 +813,18 @@ pub(crate) fn footer(ui: &mut Ui, items: &[(&str, &str)], pal: &Palette, add: im
 /// `footer` with its buttons' labels (main one first) measured this frame: for buttons that
 /// come and go, which the frame before would lay out a frame late, the keys under them.
 pub(crate) fn footer_with(ui: &mut Ui, items: &[(&str, &str)], labels: &[&str], pal: &Palette, add: impl FnOnce(&mut Ui)) {
-    let font = egui::TextStyle::Button.resolve(ui.style());
-    let pad = ui.spacing().button_padding.x;
-    let w = labels.iter().map(|l| (ui.painter().layout_no_wrap(l.to_string(), font.clone(), pal.text).size().x + 2.0 * pad).max(80.0)).sum::<f32>() + 8.0 * labels.len().saturating_sub(1) as f32;
+    let w = labels.iter().map(|l| button_width(ui, l, pal)).sum::<f32>() + 8.0 * labels.len().saturating_sub(1) as f32;
     footer_at(ui, items, pal, Some(w), add);
 }
 
 fn footer_at(ui: &mut Ui, items: &[(&str, &str)], pal: &Palette, measured: Option<f32>, add: impl FnOnce(&mut Ui)) {
+    // Esc is written inside the way-out button when there is one (as the frame before
+    // found): not a second time among the keys.
     let id = ui.id().with("footer");
+    let keyed_id = id.with("keyed");
+    let keyed = ui.ctx().data(|d| d.get_temp::<bool>(keyed_id)).unwrap_or(false);
+    let items: Vec<(&str, &str)> = items.iter().copied().filter(|(k, _)| !(keyed && *k == "Esc")).collect();
+    let items = items.as_slice();
     let known = measured.or_else(|| ui.ctx().data(|d| d.get_temp::<f32>(id)));
     let bw = known.unwrap_or(0.0);
     ui.add_space(14.0);
@@ -842,7 +846,13 @@ fn footer_at(ui: &mut Ui, items: &[(&str, &str)], pal: &Palette, measured: Optio
     let (bt, band) = if side || items.is_empty() { (top, kh.max(bh)) } else { (top + kh + 12.0, bh) };
     let mut b = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(pos2(left, bt), vec2(avail, band))).layout(egui::Layout::right_to_left(egui::Align::Center)));
     b.spacing_mut().item_spacing.x = 8.0;
+    KEYED.with(|f| f.set(false));
     add(&mut b);
+    let now_keyed = KEYED.with(|f| f.get());
+    if now_keyed != keyed {
+        ui.ctx().data_mut(|d| d.insert_temp(keyed_id, now_keyed));
+        ui.ctx().request_discard("dialog footer keys");
+    }
     let w = b.min_rect().width();
     ui.allocate_exact_size(vec2(avail, bt + band - top), Sense::hover());
     if measured.is_none() && known.is_none_or(|k| (k - w).abs() > 0.5) {
@@ -864,43 +874,101 @@ pub(crate) fn dialog_buttons(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     });
 }
 
-/// The main button of a dialog, in the accent; in the danger red when what it does can't
-/// be taken back (deleting for good, discarding, writing over).
-pub(crate) fn primary_button(ui: &mut Ui, label: &str, enabled: bool, pal: &Palette) -> egui::Response {
-    let destroys = ["Delete", "Discard", "Overwrite", "Erase", "Format", "Empty Trash"].iter().any(|w| label.starts_with(w));
-    let (fill, text) = if destroys { (pal.danger, Color32::WHITE) } else { (pal.accent, pal.on_accent()) };
-    ui.add_enabled(enabled, egui::Button::new(egui::RichText::new(label).color(text)).fill(fill).min_size(vec2(80.0, 0.0)))
+/// A dialog button's part: the one main action, an ordinary one, or one that can't be
+/// taken back.
+#[derive(Clone, Copy, PartialEq)]
+enum Role {
+    Main,
+    Other,
+    Danger,
 }
 
-/// A dialog's other buttons: a quiet fill and outline, so they read as buttons and not
-/// as text beside the accent one. The way out (Cancel, Close) is plainer still.
-pub(crate) fn plain_button(ui: &mut Ui, label: &str, pal: &Palette) -> egui::Response {
-    if matches!(label, "Cancel" | "Close") {
-        return quiet_button(ui, label, pal);
-    }
-    ui.add(egui::Button::new(label).fill(pal.card()).stroke(Stroke::new(1.0, pal.card_line())).min_size(vec2(80.0, 0.0)))
+/// The way out of a dialog says its key inside it, as a keycap.
+fn button_keys(label: &str) -> Option<&'static str> {
+    matches!(label, "Cancel" | "Close").then_some("Esc")
 }
 
-/// The way out of a dialog: its words alone, tinted while pointed at or focused, so the
-/// eye goes to the main button beside it. Keys reach it as any button.
-pub(crate) fn quiet_button(ui: &mut Ui, label: &str, pal: &Palette) -> egui::Response {
+thread_local! {
+    /// A button with its key inside it was drawn: the footer around it leaves that key
+    /// out of the keys it lists.
+    static KEYED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A dialog button, a pill: the main one filled in the text's own colour (light on a
+/// dark theme, dark on a light one), the others the card's quiet capsule, one that
+/// destroys filled in the danger red. Disabled it is the capsule with faint words, never
+/// a fill: what does nothing must not look like the thing to press. Its key, when it has
+/// one, stands inside it as a keycap.
+fn pill_button(ui: &mut Ui, label: &str, role: Role, enabled: bool, pal: &Palette) -> egui::Response {
+    let enabled = enabled && ui.is_enabled();
     let font = egui::TextStyle::Button.resolve(ui.style());
-    let g = ui.painter().layout_no_wrap(label.to_string(), font, pal.text_dim);
+    let kfont = FontId::proportional(10.5);
+    let keys = button_keys(label);
+    let g = ui.painter().layout_no_wrap(label.to_string(), font, pal.text);
+    let kw = keys.map_or(0.0, |k| crate::kit::caps_layout(ui.painter(), k, 0.0, 0.0, &kfont, pal).1 + 8.0);
     let s = ui.spacing();
-    let size = vec2(g.size().x + 2.0 * s.button_padding.x + 8.0, (g.size().y + 2.0 * s.button_padding.y).max(s.interact_size.y));
-    let (r, resp) = ui.allocate_exact_size(size, Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
-    let hot = resp.hovered() || resp.has_focus();
+    let h = (g.size().y + 2.0 * s.button_padding.y).max(s.interact_size.y);
+    let pad = s.button_padding.x + 6.0;
+    let w = (g.size().x + kw + 2.0 * pad).max(if role == Role::Other && keys.is_some() { 0.0 } else { 80.0 });
+    let (r, resp) = ui.allocate_exact_size(vec2(w, h), if enabled { Sense::click() } else { Sense::hover() });
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     if ui.is_rect_visible(r) {
-        if hot {
-            ui.painter().rect_filled(r, CornerRadius::same(6), pal.hover);
-        }
+        let hot = enabled && (resp.hovered() || resp.has_focus());
+        let rad = crate::kit::radius(h, crate::kit::round());
+        let (fill, line, ink) = match (role, enabled) {
+            (_, false) => (pal.card(), pal.card_line(), pal.text_dim.gamma_multiply(0.55)),
+            (Role::Main, _) => (if hot { pal.text } else { pal.text.gamma_multiply(0.9) }, Color32::TRANSPARENT, if pal.dark { pal.bg } else { pal.panel }),
+            (Role::Danger, _) => (if hot { pal.danger } else { pal.danger.gamma_multiply(0.9) }, Color32::TRANSPARENT, Color32::WHITE),
+            (Role::Other, _) => (if hot { crate::kit::lift(pal) } else { pal.card() }, pal.card_line(), pal.text),
+        };
+        // A high-contrast theme's main button keeps its own pair of colours.
+        let (fill, ink) = if pal.strong && role == Role::Main && enabled { (pal.accent, pal.on_accent()) } else { (fill, ink) };
+        ui.painter().rect(r, rad, fill, Stroke::new(1.0, line), StrokeKind::Inside);
         if resp.has_focus() {
-            ui.painter().rect_stroke(r, CornerRadius::same(6), Stroke::new(1.0, pal.accent.gamma_multiply(0.7)), StrokeKind::Inside);
+            ui.painter().rect_stroke(r.expand(2.0), crate::kit::radius(h + 4.0, crate::kit::round()), Stroke::new(1.5, pal.accent.gamma_multiply(0.8)), StrokeKind::Inside);
         }
-        ui.painter().galley(r.center() - g.size() / 2.0, g, if hot { pal.text } else { pal.text_dim });
+        let tx = r.center().x - (g.size().x + kw) / 2.0;
+        ui.painter().galley_with_override_text_color(pos2(tx, (r.center().y - g.size().y / 2.0).round()), g.clone(), ink);
+        if let Some(k) = keys {
+            KEYED.with(|f| f.set(true));
+            let (rects, _) = crate::kit::caps_layout(ui.painter(), k, tx + g.size().x + 8.0, r.center().y - 0.5, &kfont, pal);
+            for (cr, c) in rects {
+                crate::kit::keycap(ui.painter(), cr, &c, kfont.clone(), enabled && crate::kit::held(ui.ctx(), &c), pal);
+            }
+        }
     }
     resp
+}
+
+/// How wide `pill_button` draws a button labelled `label`, for a footer laid out before
+/// its buttons are.
+pub(crate) fn button_width(ui: &Ui, label: &str, pal: &Palette) -> f32 {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let kw = button_keys(label).map_or(0.0, |k| crate::kit::caps_layout(ui.painter(), k, 0.0, 0.0, &FontId::proportional(10.5), pal).1 + 8.0);
+    let pad = ui.spacing().button_padding.x + 6.0;
+    (ui.painter().layout_no_wrap(label.to_string(), font, pal.text).size().x + kw + 2.0 * pad).max(if kw > 0.0 { 0.0 } else { 80.0 })
+}
+
+/// The main button of a dialog (see `pill_button`); in the danger red when what it does
+/// can't be taken back (deleting for good, discarding, writing over).
+pub(crate) fn primary_button(ui: &mut Ui, label: &str, enabled: bool, pal: &Palette) -> egui::Response {
+    let destroys = ["Delete", "Discard", "Overwrite", "Erase", "Format", "Empty Trash"].iter().any(|w| label.starts_with(w));
+    pill_button(ui, label, if destroys { Role::Danger } else { Role::Main }, enabled, pal)
+}
+
+/// A button whose action can't be taken back, whatever its words: the danger red.
+pub(crate) fn danger_button(ui: &mut Ui, label: &str, pal: &Palette) -> egui::Response {
+    pill_button(ui, label, Role::Danger, true, pal)
+}
+
+/// A dialog's other buttons, the way out (Cancel, Close) among them: the quiet capsule.
+pub(crate) fn plain_button(ui: &mut Ui, label: &str, pal: &Palette) -> egui::Response {
+    pill_button(ui, label, Role::Other, true, pal)
+}
+
+/// The way out of a dialog: the quiet capsule, its key inside it.
+pub(crate) fn quiet_button(ui: &mut Ui, label: &str, pal: &Palette) -> egui::Response {
+    pill_button(ui, label, Role::Other, true, pal)
 }
 
 /// Top-centered popup. Returns (inner, rect).
@@ -919,6 +987,46 @@ pub(crate) fn fit_list(ctx: &egui::Context, max: f32, chrome: f32) -> f32 {
 
 pub(crate) fn centered<R>(ctx: &egui::Context, id: &str, width: f32, pal: &Palette, add: impl FnOnce(&mut Ui) -> R) -> (R, Rect) {
     centered_top(ctx, id, width, popup_top(ctx.content_rect()), pal, add)
+}
+
+/// `centered` with a footer that stays: the body scrolls when the dialog is taller than
+/// the window, the footer (its buttons) is drawn under it, always in reach. Returns what
+/// the body and the footer return, and the dialog's rect.
+pub(crate) fn centered_footer<R, F>(ctx: &egui::Context, id: &str, width: f32, pal: &Palette, body: impl FnOnce(&mut Ui) -> R, footer: impl FnOnce(&mut Ui) -> F) -> (R, F, Rect) {
+    let screen = ctx.content_rect();
+    let top = popup_top(screen);
+    let w = width.min(screen.width() - 24.0);
+    let inner = w - 2.0 * DIALOG_PAD;
+    let fid = Id::new((id, "footer height"));
+    // The footer's height as the frame before measured it: what the body leaves it.
+    let foot_h = ctx.data(|d| d.get_temp::<f32>(fid)).unwrap_or(48.0);
+    let room = (screen.height() - top - 12.0 - 2.0 * DIALOG_PAD - foot_h).max(60.0);
+    note_layer(Id::new(id));
+    let r = egui::Area::new(Id::new(id))
+        .order(egui::Order::Foreground)
+        .fixed_pos(pos2((screen.center().x - w / 2.0).round(), screen.top() + top))
+        .show(ctx, |ui| {
+            crate::frost::behind(ui, DIALOG_RADIUS);
+            dialog_frame(pal)
+                .show(ui, |ui| {
+                    ui.set_width(inner);
+                    let b = egui::ScrollArea::vertical().id_salt("dialog").max_height(room).auto_shrink([false, true]).show(ui, |ui| {
+                        ui.set_width(inner);
+                        body(ui)
+                    }).inner;
+                    let y0 = ui.cursor().top();
+                    let f = footer(ui);
+                    let h = ui.cursor().top() - y0;
+                    if (h - foot_h).abs() > 0.5 {
+                        ui.ctx().data_mut(|d| d.insert_temp(fid, h));
+                        ui.ctx().request_discard("dialog footer height");
+                    }
+                    (b, f)
+                })
+                .inner
+        });
+    crate::ui::note_popup(r.response.rect);
+    (r.inner.0, r.inner.1, r.response.rect)
 }
 
 /// `centered`, `top` below the window's top: a dialog that grows to fill the window.
@@ -981,14 +1089,14 @@ pub(crate) fn clicked_outside(ctx: &egui::Context, rect: Rect) -> bool {
 }
 
 pub(crate) fn search_field(ui: &mut Ui, text: &mut String, hint: &str, focus: &mut bool, pal: &Palette, glyph: Glyph) -> egui::Response {
-    let resp = crate::ui::search_row(ui, text, hint, FontId::proportional(15.0), glyph, 14.0, false, pal).0;
+    // The filter's pill, as every search field has it: it stands apart from the list
+    // below it without a rule.
+    let resp = crate::ui::search_row_in(ui, text, hint, FontId::proportional(15.0), glyph, 14.0, false, true, pal).0;
     if *focus {
         resp.request_focus();
         *focus = false;
     }
-    ui.add_space(2.0);
-    ui.painter().line_segment([pos2(ui.min_rect().left(), ui.cursor().top()), pos2(ui.min_rect().right(), ui.cursor().top())], Stroke::new(1.0, pal.border));
-    ui.add_space(4.0);
+    ui.add_space(6.0);
     resp
 }
 
@@ -1032,17 +1140,27 @@ pub(crate) fn hint_chips(ui: &mut Ui, items: &[(&str, &str)], pal: &Palette) {
     });
 }
 
-/// Full-width selectable row; returns its response. `paint` draws inside the rect.
+/// Full-width selectable row; returns its response. `paint` draws inside the rect. The
+/// keyboard's row is chosen as in every list (`kit::chosen`: lifted, the accent's mark at
+/// its edge); a row under the pointer lifts half as far.
 pub(crate) fn row(ui: &mut Ui, h: f32, selected: bool, pal: &Palette, paint: impl FnOnce(&Ui, Rect)) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click());
     if selected {
-        ui.painter().rect_filled(r, CornerRadius::same(6), pal.selected);
+        crate::kit::chosen(ui.painter(), r, 6, pal);
     } else if resp.hovered() {
-        ui.painter().rect_filled(r, CornerRadius::same(6), pal.hover);
+        ui.painter().rect_filled(r, CornerRadius::same(6), crate::kit::touch(pal));
     }
     paint(ui, r);
     resp
 }
+
+/// A menu's text: a popup's own size, whatever the window's font, as the context menu's.
+pub(crate) const MENU_FONT: f32 = 12.5;
+/// A menu's row, as the context menu's.
+pub(crate) const MENU_ROW: f32 = 26.0;
+/// Where a menu row's words start: after a column for a check (or the context menu's
+/// icons), so every row of every menu lines up.
+pub(crate) const MENU_TEXT_X: f32 = 34.0;
 
 /// A row of a dialog's left column, 30 high: the chosen one's highlight is drawn under
 /// the column, sliding (`kit::chosen`), so it takes no fill of its own.
@@ -1070,19 +1188,56 @@ fn highlight_into(job: &mut egui::text::LayoutJob, text: &str, q: &fuzzy::Query,
     }
 }
 
-fn menu_item(ui: &mut Ui, label: &str, chip: Option<String>, pal: &Palette) -> bool {
-    let resp = row(ui, 26.0, false, pal, |ui, r| {
+pub(crate) fn menu_item(ui: &mut Ui, label: &str, chip: Option<String>, pal: &Palette) -> bool {
+    let resp = row(ui, MENU_ROW, false, pal, |ui, r| {
         // Fit the row (leaving room for the shortcut chip); paths keep their tail.
         let chip_w = chip.as_ref().map(|c| crate::kit::caps_layout(ui.painter(), c, 0.0, 0.0, &FontId::proportional(10.5), pal).1 + 16.0).unwrap_or(0.0);
-        let room = (r.width() - 20.0 - chip_w).max(24.0);
-        let font = FontId::proportional(13.0);
+        let room = (r.width() - MENU_TEXT_X - 10.0 - chip_w).max(24.0);
+        let font = FontId::proportional(MENU_FONT);
         let g = if label.contains('/') { crate::listing::elided_tail(ui, label, font, room, pal.text) } else { crate::listing::elided(ui, label, font, room, pal.text) };
-        ui.painter().galley(pos2(r.left() + 10.0, r.center().y - g.size().y / 2.0), g, pal.text);
+        ui.painter().galley(pos2(r.left() + MENU_TEXT_X, r.center().y - g.size().y / 2.0), g, pal.text);
         if let Some(c) = &chip {
             crate::kit::hotkey(ui.painter(), pos2(r.right() - 6.0, r.center().y), c, pal);
         }
     });
     resp.clicked()
+}
+
+/// A menu row for a choice that is on or off: a check before its label while on, the
+/// label dimmer while off (no box: the row is the control).
+pub(crate) fn menu_check(ui: &mut Ui, label: &str, on: bool, keys: Option<&str>, pal: &Palette) -> bool {
+    let resp = row(ui, MENU_ROW, false, pal, |ui, r| {
+        if on {
+            crate::kit::check_mark(ui.painter(), pos2(r.left() + 16.0, r.center().y), pal.text);
+        }
+        // Several shortcuts, separated by tabs, stand side by side as the command rows' do.
+        let mut x = r.right() - 6.0;
+        for k in keys.unwrap_or("").split('\t').filter(|k| !k.is_empty()).collect::<Vec<_>>().into_iter().rev() {
+            x -= crate::kit::hotkey(ui.painter(), pos2(x, r.center().y), k, pal) + 5.0;
+        }
+        let kw = r.right() - 6.0 - x + 5.0;
+        let font = FontId::proportional(MENU_FONT);
+        let g = crate::listing::elided(ui, label, font, (r.width() - MENU_TEXT_X - 10.0 - kw).max(24.0), if on { pal.text } else { pal.text_dim });
+        ui.painter().galley(pos2(r.left() + MENU_TEXT_X, r.center().y - g.size().y / 2.0), g, pal.text);
+    });
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, label));
+    resp.clicked()
+}
+
+/// A menu row for an action that may not apply now: faint then, and it takes no click.
+pub(crate) fn menu_action(ui: &mut Ui, label: &str, keys: Option<&str>, enabled: bool, pal: &Palette) -> bool {
+    if enabled {
+        return menu_item(ui, label, keys.map(str::to_string), pal);
+    }
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), MENU_ROW), Sense::hover());
+    ui.painter().text(pos2(r.left() + MENU_TEXT_X, r.center().y), Align2::LEFT_CENTER, label, FontId::proportional(MENU_FONT), pal.text_dim.gamma_multiply(0.6));
+    false
+}
+
+/// A note in a menu, not a control: small and dim, in line with the rows' text.
+pub(crate) fn menu_note(ui: &mut Ui, text: &str, pal: &Palette) {
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
+    ui.painter().text(pos2(r.left() + MENU_TEXT_X, r.center().y), Align2::LEFT_CENTER, text, FontId::proportional(11.5), pal.text_dim);
 }
 
 /// A group's name inside a menu: small and dim, in line with the items' text below it,
@@ -1092,11 +1247,39 @@ pub(crate) fn menu_heading(ui: &mut Ui, text: &str, pal: &Palette) {
     ui.painter().text(pos2(r.left() + 10.0, r.bottom() - 4.0), Align2::LEFT_BOTTOM, text, FontId::proportional(11.5), pal.text_dim);
 }
 
-fn menu_sep(ui: &mut Ui, pal: &Palette) {
+/// Between a menu's groups: a dashed rule, a division inside one thing.
+pub(crate) fn menu_sep(ui: &mut Ui, pal: &Palette) {
     ui.add_space(3.0);
-    let y = ui.cursor().top();
-    ui.painter().line_segment([pos2(ui.min_rect().left() + 6.0, y), pos2(ui.min_rect().right() - 6.0, y)], Stroke::new(1.0, pal.border));
+    let y = ui.cursor().top().round() + 0.5;
+    crate::kit::dashed_rule(ui.painter(), pos2(ui.min_rect().left() + 8.0, y), pos2(ui.min_rect().right() - 8.0, y), pal);
     ui.add_space(4.0);
+}
+
+/// Whether what `c` switches is on now, for the commands that switch something.
+fn cmd_state(app: &App, c: Cmd) -> Option<bool> {
+    let t = app.panels.get(&app.active).map(|p| p.tab());
+    let sorted = |k: crate::config::SortKey, desc: bool| t.map(|t| t.settings.sort == k && t.settings.desc == desc);
+    Some(match c {
+        Cmd::ToggleHidden => app.cfg.show_hidden,
+        Cmd::ToggleSystem => app.cfg.show_system,
+        Cmd::ToggleExtensions => app.cfg.show_ext,
+        Cmd::ToggleRecents => app.cfg.highlight_recents,
+        Cmd::ToggleFoldersFirst => app.cfg.folders_first,
+        Cmd::ToggleSidebar => app.sidebar,
+        Cmd::ToggleFlatten => t.is_some_and(|t| t.flatten || t.expand_all_on),
+        Cmd::ToggleInspector => app.panels.get(&app.active).is_some_and(|p| p.inspector.is_some()),
+        Cmd::SortNameAsc => sorted(crate::config::SortKey::Name, false)?,
+        Cmd::SortNameDesc => sorted(crate::config::SortKey::Name, true)?,
+        Cmd::SortSizeAsc => sorted(crate::config::SortKey::Size, false)?,
+        Cmd::SortSizeDesc => sorted(crate::config::SortKey::Size, true)?,
+        _ => return None,
+    })
+}
+
+/// Such a command's name as a menu shows it beside its check.
+fn cmd_state_label(c: Cmd) -> &'static str {
+    let t = c.info().title;
+    t.strip_prefix("Toggle ").unwrap_or(t)
 }
 
 fn cmd_item(ui: &mut Ui, app: &App, c: Cmd) -> bool {
@@ -1529,17 +1712,33 @@ fn goto(app: &mut App, ctx: &egui::Context, st: &mut GoToState) -> bool {
             dialog_title(ui, &d.title(), None, &pal);
             ui.add_space(4.0);
         }
+        // The field is the filter's pill, how many it lists as a figure at its end; back,
+        // forward and up in one capsule beside it, as the path bar has them; the way out
+        // bare at the end.
+        let listed = st.items.iter().filter(|i| !i.header).count();
+        let round = crate::kit::round();
         ui.horizontal(|ui| {
-            let (r, _) = ui.allocate_exact_size(vec2(20.0, 22.0), Sense::hover());
+            use crate::kit::{CAP_H, INSET, ITEM};
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let nav_w = 3.0 * ITEM.x + 2.0 * INSET;
+            let fw = (ui.available_width() - nav_w - ITEM.x - 12.0).max(120.0);
+            let (fr, _) = ui.allocate_exact_size(vec2(fw, CAP_H + 4.0), Sense::hover());
+            let fr = Rect::from_center_size(fr.center(), vec2(fw, CAP_H + 4.0));
+            crate::kit::capsule(ui.painter(), fr, round, &pal);
             let g = if !is_pathlike(&st.input) { Glyph::Search } else if fsx::mounts().iter().any(|m| m.path == fsx::expand_path(st.input.trim_end_matches('/'))) || st.input == "/" { Glyph::Drive } else { Glyph::Folder };
-            paint_glyph(ui.painter(), Rect::from_center_size(r.center(), Vec2::splat(14.0)), g, pal.text_dim);
-            let w = ui.available_width() - 4.0 * 28.0;
+            paint_glyph(ui.painter(), Rect::from_center_size(pos2(fr.left() + 18.0, fr.center().y), Vec2::splat(14.0)), g, pal.text_dim);
+            let small = FontId::proportional(11.5);
+            let count = crate::listing::tabular(ui, &crate::ui::fmt_count(listed), small, 80.0, crate::kit::words_of(pal.text_dim));
+            let er = Rect::from_min_max(pos2(fr.left() + 32.0, fr.top() + 2.0), pos2(fr.right() - 14.0 - count.size().x - 8.0, fr.bottom() - 2.0));
+            ui.painter().galley(pos2(fr.right() - 14.0 - count.size().x, fr.center().y - count.size().y / 2.0), count, pal.text_dim);
             let hint = match &st.dest {
                 Some(d) if d.mv => "Folder to move into…",
                 Some(_) => "Folder to copy into…",
                 None => "Open or expand a folder…",
             };
-            let resp = ui.add(egui::TextEdit::singleline(&mut st.input).hint_text(egui::RichText::new(hint).color(pal.text_dim)).frame(crate::ui::bare_edit()).desired_width(w).font(FontId::proportional(15.0)));
+            let mut eu = ui.new_child(egui::UiBuilder::new().max_rect(er).layout(egui::Layout::left_to_right(egui::Align::Center)));
+            eu.spacing_mut().interact_size.y = er.height();
+            let resp = eu.add(egui::TextEdit::singleline(&mut st.input).hint_text(egui::RichText::new(hint).color(pal.text_dim)).frame(crate::ui::bare_edit()).desired_width(er.width()).font(FontId::proportional(15.0)));
             if st.focus {
                 resp.request_focus();
                 if let Some(mut s) = egui::TextEdit::load_state(ui.ctx(), resp.id) {
@@ -1549,33 +1748,36 @@ fn goto(app: &mut App, ctx: &egui::Context, st: &mut GoToState) -> bool {
                 }
                 st.focus = false;
             }
-            if crate::ui::glyph_button(ui, Glyph::Back, "Back", !st.back.is_empty(), &pal).clicked() {
-                if let Some(b) = st.back.pop() {
-                    let was = std::mem::replace(&mut st.input, b);
-                    st.highlight = Some(fsx::expand_path(was.trim_end_matches('/')));
-                    st.fwd.push(was);
-                    st.focus = true;
+            crate::kit::capsule_group(ui, round, &pal, |ui| {
+                if crate::kit::bar_item(ui, "toolbar button", "Back", !st.back.is_empty(), false, round, &pal, |p, r, c| paint_glyph(p, r, Glyph::Back, c)).clicked() {
+                    if let Some(b) = st.back.pop() {
+                        let was = std::mem::replace(&mut st.input, b);
+                        st.highlight = Some(fsx::expand_path(was.trim_end_matches('/')));
+                        st.fwd.push(was);
+                        st.focus = true;
+                    }
                 }
-            }
-            if crate::ui::glyph_button(ui, Glyph::Forward, "Forward", !st.fwd.is_empty(), &pal).clicked() {
-                if let Some(f) = st.fwd.pop() {
-                    st.back.push(std::mem::replace(&mut st.input, f));
-                    st.focus = true;
+                if crate::kit::bar_item(ui, "toolbar button", "Forward", !st.fwd.is_empty(), false, round, &pal, |p, r, c| paint_glyph(p, r, Glyph::Forward, c)).clicked() {
+                    if let Some(f) = st.fwd.pop() {
+                        st.back.push(std::mem::replace(&mut st.input, f));
+                        st.focus = true;
+                    }
                 }
-            }
-            if crate::ui::glyph_button(ui, Glyph::Up, "Up", is_pathlike(&st.input), &pal).clicked() {
-                let p = fsx::expand_path(st.input.trim_end_matches('/'));
-                if let Some(parent) = p.parent() {
-                    st.back.push(st.input.clone());
-                    st.highlight = Some(p.clone());
-                    st.input = format!("{}/", parent.display()).replace("//", "/");
-                    st.focus = true;
+                if crate::kit::bar_item(ui, "toolbar button", "Up", is_pathlike(&st.input), false, round, &pal, |p, r, c| paint_glyph(p, r, Glyph::Up, c)).clicked() {
+                    let p = fsx::expand_path(st.input.trim_end_matches('/'));
+                    if let Some(parent) = p.parent() {
+                        st.back.push(st.input.clone());
+                        st.highlight = Some(p.clone());
+                        st.input = format!("{}/", parent.display()).replace("//", "/");
+                        st.focus = true;
+                    }
                 }
-            }
+            });
             if crate::ui::glyph_button(ui, Glyph::Close, "Close (Esc)", true, &pal).clicked() {
                 close = true;
             }
         });
+        ui.add_space(4.0);
         ui.add_space(2.0);
         let q = if is_pathlike(&st.input) {
             let s = st.input.rsplit('/').next().unwrap_or("").to_string();
@@ -1591,21 +1793,16 @@ fn goto(app: &mut App, ctx: &egui::Context, st: &mut GoToState) -> bool {
                     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
                     let key = format!("goto:{}", it.label);
                     let collapsed = app.ud.collapsed_groups.contains(&key);
+                    // As the sidebar heads its sections: the chevron before the name, how
+                    // many it holds at the end.
                     let hc = if resp.hovered() { pal.text } else { pal.text_dim };
-                    let g = match it.label.as_str() {
-                        "Recents" => Glyph::Clock,
-                        "Recent destinations" => Glyph::Forward,
-                        "Bookmarks" => Glyph::Bookmark,
-                        "Storage" => Glyph::Drive,
-                        _ => Glyph::Folder,
-                    };
-                    paint_glyph(ui.painter(), Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), Vec2::splat(14.0)), g, hc);
-                    ui.painter().text(pos2(r.left() + 32.0, r.center().y), Align2::LEFT_CENTER, &it.label, FontId::proportional(13.0), hc);
-                    let c = pos2(r.right() - 14.0, r.center().y + 2.0);
-                    if collapsed {
-                        paint_glyph(ui.painter(), Rect::from_center_size(c, Vec2::splat(9.0)), Glyph::ChevronRight, pal.text_dim);
-                    } else {
-                        ui.painter().add(egui::Shape::line(vec![c + vec2(-3.5, -1.5), c + vec2(0.0, 2.0), c + vec2(3.5, -1.5)], Stroke::new(1.3, pal.text_dim)));
+                    let open = crate::kit::slide(ui.ctx(), Id::new(("goto fold", &key)), if collapsed { 0.0 } else { 1.0 });
+                    crate::kit::chevron(ui.painter(), pos2(r.left() + 16.0, r.center().y), open, hc.gamma_multiply(0.85));
+                    ui.painter().text(pos2(r.left() + 30.0, r.center().y), Align2::LEFT_CENTER, &it.label, crate::theme::semibold(11.5), hc);
+                    let n = st.items[i + 1..].iter().take_while(|x| !x.header).count();
+                    if n > 0 {
+                        let g = crate::listing::tabular(ui, &n.to_string(), FontId::proportional(11.5), 60.0, crate::kit::words_of(pal.text_dim));
+                        ui.painter().galley(pos2(r.right() - 12.0 - g.size().x, r.center().y - g.size().y / 2.0), g, pal.text_dim);
                     }
                     if resp.clicked() {
                         if collapsed {
@@ -1643,17 +1840,32 @@ fn goto(app: &mut App, ctx: &egui::Context, st: &mut GoToState) -> bool {
                     let tc = if loud { pal.on_sel() } else { pal.text };
                     let tx = x0 + 26.0;
                     let mut job = highlight_job(&it.label, &q, FontId::proportional(13.0), tc, if loud { tc } else { pal.accent });
+                    // A drive's free space at the row's end, as a figure (as the sidebar has it).
+                    let free = it.usage.and_then(|_| crate::sidebar::free_at(&it.path)).map(|f| crate::listing::figures(ui, &format!("{} free", fsx::fmt_size(f)), FontId::proportional(11.5), 120.0, if loud { pal.on_sel_dim() } else { pal.text_dim }, if loud { pal.on_sel_dim() } else { crate::kit::words_of(pal.text_dim) }));
+                    let free_w = free.as_ref().map_or(0.0, |g| g.size().x + 12.0);
                     // One line ending in "…" inside the row; with a location hint, keep room for it.
-                    let room = r.right() - tx - if it.sub.is_empty() { 8.0 } else { 90.0 };
+                    let room = r.right() - tx - free_w - if it.sub.is_empty() { 8.0 } else { 90.0 };
                     job.wrap = egui::text::TextWrapping { max_width: room.max(40.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
                     let g = ui.fonts_mut(|f| f.layout_job(job));
                     let gw = g.size().x;
                     let ty = if it.usage.is_some() { r.center().y - g.size().y / 2.0 - 4.0 } else { r.center().y - g.size().y / 2.0 };
                     ui.painter().galley(pos2(tx, ty), g, tc);
                     if let Some(u) = it.usage {
-                        let bar = Rect::from_min_size(pos2(tx, r.center().y + 6.0), vec2(90.0, 4.0));
-                        ui.painter().rect_filled(bar, CornerRadius::same(1), pal.border);
-                        ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * u.clamp(0.0, 1.0), bar.height())), CornerRadius::same(1), if loud { pal.on_sel() } else { pal.accent });
+                        // How full, as the sidebar's thin meter across the row: quiet while
+                        // there is room, amber from 80%, red from 95%.
+                        let bar = Rect::from_min_max(pos2(tx, r.center().y + 6.0), pos2(r.right() - 12.0, r.center().y + 9.0));
+                        let face = if sel { crate::kit::lift(&pal) } else { pal.raised };
+                        ui.painter().rect_filled(bar, CornerRadius::same(2), face.lerp_to_gamma(pal.text, if pal.dark { 0.1 } else { 0.09 }));
+                        let col = match crate::sidebar::fullness(u) {
+                            Some(true) => pal.danger,
+                            Some(false) => pal.warn,
+                            None if loud => pal.on_sel_dim(),
+                            None => pal.text_dim.gamma_multiply(0.6),
+                        };
+                        ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2((bar.width() * u.clamp(0.0, 1.0)).max(3.0), bar.height())), CornerRadius::same(2), col);
+                        if let Some(g) = free {
+                            ui.painter().galley(pos2(r.right() - 12.0 - g.size().x, ty), g, pal.text_dim);
+                        }
                     }
                     if !it.sub.is_empty() {
                         let chev = Rect::from_center_size(pos2(tx + gw + 10.0, r.center().y), Vec2::splat(9.0));
@@ -1796,8 +2008,8 @@ fn cmd_row_as(ui: &mut Ui, app: &App, c: Cmd, title: &str) -> bool {
     let pal = app.pal;
     let enabled = applicable(app, c);
     let chips: Vec<String> = app.keymap.bindings(c).iter().take(3).map(commands::binding_to_string).collect();
-    let resp = row(ui, 26.0, false, &pal, |ui, r| {
-        ui.painter().text(pos2(r.left() + 10.0, r.center().y), Align2::LEFT_CENTER, title, FontId::proportional(13.0), if enabled { pal.text } else { pal.text_dim.gamma_multiply(0.6) });
+    let resp = row(ui, MENU_ROW, false, &pal, |ui, r| {
+        ui.painter().text(pos2(r.left() + MENU_TEXT_X, r.center().y), Align2::LEFT_CENTER, title, FontId::proportional(MENU_FONT), if enabled { pal.text } else { pal.text_dim.gamma_multiply(0.6) });
         let mut x = r.right() - 6.0;
         for ch in chips.iter().rev() {
             x -= crate::kit::hotkey(ui.painter(), pos2(x, r.center().y), ch, &pal) + 5.0;
@@ -1876,12 +2088,12 @@ fn palette(app: &mut App, ctx: &egui::Context, st: &mut PaletteState) -> bool {
             ui.label(format!("{} is already bound to “{}”.", commands::binding_to_string(&binding), other.info().title));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("Replace").clicked() {
+                if plain_button(ui, "Replace", &pal).clicked() {
                     remove_binding(app, other, &binding);
                     add_binding(app, cmd, binding.clone());
                     st.conflict = None;
                 }
-                if ui.button("Add anyway").clicked() {
+                if plain_button(ui, "Add anyway", &pal).clicked() {
                     add_binding(app, cmd, binding.clone());
                     st.conflict = None;
                 }
@@ -3619,7 +3831,7 @@ fn types(app: &mut App, ctx: &egui::Context, panel: u64, query: &mut String) -> 
                     if !crate::icons::entry(ui.painter(), ic, sample) {
                         theme::paint_icon(ui.painter(), ic, theme::categorize(sample.ext(), sample.is_dir, sample.is_executable()), "", false);
                     }
-                    let tc = if on { pal.on_sel() } else { pal.text };
+                    let tc = if on { crate::kit::on_lift(&pal) } else { pal.text };
                     let job = highlight_job(k, &q, FontId::proportional(12.5), tc, if on { tc } else { pal.accent });
                     let g = ui.fonts_mut(|f| f.layout_job(job));
                     ui.painter().galley(pos2(r.left() + 30.0, r.center().y - g.size().y / 2.0), g, tc);
@@ -3631,7 +3843,7 @@ fn types(app: &mut App, ctx: &egui::Context, panel: u64, query: &mut String) -> 
                     } else {
                         ui.painter().rect_stroke(cb, CornerRadius::same(3), Stroke::new(1.2, pal.text_dim.gamma_multiply(0.6)), StrokeKind::Inside);
                     }
-                    ui.painter().text(pos2(cb.left() - 10.0, r.center().y), Align2::RIGHT_CENTER, crate::ui::fmt_count(*n), FontId::proportional(11.0), if on { pal.on_sel_dim() } else { pal.text_dim.gamma_multiply(0.8) });
+                    ui.painter().text(pos2(cb.left() - 10.0, r.center().y), Align2::RIGHT_CENTER, crate::ui::fmt_count(*n), FontId::proportional(11.0), if on { if pal.strong { pal.on_sel_dim() } else { pal.text_dim } } else { pal.text_dim.gamma_multiply(0.8) });
                 });
                 if resp.clicked() {
                     if on {
@@ -4474,11 +4686,11 @@ fn meaning(app: &mut App, ctx: &egui::Context, st: &mut MeaningState) -> bool {
             Some(Phase::Checking) => dim(ui, "Looking for Ollama…"),
             Some(Phase::NotRunning) => {
                 dim(ui, "Ollama isn't running, so this finds names only. Install it (on Arch: pacman -S ollama) and start it, then try again.");
-                retry = ui.button("Try again").clicked();
+                retry = plain_button(ui, "Try again", &pal).clicked();
             }
             Some(Phase::NoModel) => {
                 dim(ui, "The model (EmbeddingGemma 2, for text and pictures) isn't downloaded yet.");
-                download = ui.add(egui::Button::new(egui::RichText::new("Download, about 860 MB").color(Color32::WHITE)).fill(pal.accent)).clicked();
+                download = primary_button(ui, "Download, about 860 MB", true, &pal).clicked();
             }
             Some(Phase::Downloading(done, all)) => {
                 let f = if all > 0 { done as f32 / all as f32 } else { 0.0 };
@@ -4496,7 +4708,7 @@ fn meaning(app: &mut App, ctx: &egui::Context, st: &mut MeaningState) -> bool {
             Some(Phase::Ready) => {}
             Some(Phase::Failed(e)) => {
                 ui.label(egui::RichText::new(e).color(pal.danger));
-                retry = ui.button("Try again").clicked();
+                retry = plain_button(ui, "Try again", &pal).clicked();
             }
         }
         if let Some(e) = &st.error {
@@ -4529,9 +4741,9 @@ fn meaning(app: &mut App, ctx: &egui::Context, st: &mut MeaningState) -> bool {
                 let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click());
                 ui.add_space(2.0);
                 if i == st.sel {
-                    ui.painter().rect_filled(r, CornerRadius::same(6), pal.selected);
+                    crate::kit::chosen(ui.painter(), r, 6, &pal);
                 } else if resp.hovered() {
-                    ui.painter().rect_filled(r, CornerRadius::same(6), pal.hover);
+                    ui.painter().rect_filled(r, CornerRadius::same(6), crate::kit::touch(&pal));
                 }
                 let fmt = |size: f32, color: Color32| egui::TextFormat { font_id: FontId::proportional(size), color, ..Default::default() };
                 // A picture shows itself, small; anything else its icon.
@@ -4566,7 +4778,7 @@ fn meaning(app: &mut App, ctx: &egui::Context, st: &mut MeaningState) -> bool {
                 let marked: &[String] = if row.passage.is_some() { &words } else { &marks };
                 // On the selected row the dim grey and the accent sink into the selection.
                 let sel = i == st.sel;
-                let (text, dim, mark) = if sel { (pal.on_sel(), pal.on_sel_dim(), pal.on_sel()) } else { (pal.text, pal.text_dim, pal.accent) };
+                let (text, dim, mark) = if sel && pal.strong { (pal.on_sel(), pal.on_sel_dim(), pal.on_sel()) } else { (pal.text, pal.text_dim, pal.accent) };
                 append_marked(&mut job, &name, marked, fmt(fs, text), fmt(fs, mark));
                 if row.passage.is_some() {
                     job.append(&format!("   {folder}"), 0.0, fmt(small, dim));
@@ -4994,7 +5206,7 @@ fn confirm(app: &mut App, ctx: &egui::Context, msg: &str, ok_label: &str, on_ok:
         ui.add_space(4.0);
         dialog_title(ui, msg, None, &pal);
         dialog_buttons(ui, |ui| {
-            if ui.add(egui::Button::new(egui::RichText::new(ok_label).color(Color32::WHITE)).fill(pal.danger).min_size(vec2(72.0, 0.0))).clicked() {
+            if danger_button(ui, &ok_label, &pal).clicked() {
                 ok = true;
             }
             if plain_button(ui, "Cancel", &pal).clicked() {
@@ -5024,7 +5236,7 @@ fn choose(app: &mut App, ctx: &egui::Context, msg: &str, sub: &str, choices: &mu
             // Right to left: the first answer at the right edge.
             for (i, (label, risky, _)) in choices.iter().enumerate() {
                 let b = if *risky {
-                    ui.add(egui::Button::new(egui::RichText::new(label.as_str()).color(Color32::WHITE)).fill(pal.danger).min_size(vec2(72.0, 0.0)))
+                    danger_button(ui, label.as_str(), &pal)
                 } else if i == 0 {
                     primary_button(ui, label, true, &pal)
                 } else {
@@ -5397,7 +5609,7 @@ fn actions(app: &mut App, ctx: &egui::Context, sel: &mut usize) -> bool {
                 for (i, a) in list.iter().enumerate() {
                     let name = if a.name.trim().is_empty() { "Untitled".to_string() } else { a.name.clone() };
                     let r = row(ui, 28.0, i == *sel, &pal, |ui, r| {
-                        let col = if i == *sel { pal.on_sel() } else { pal.text };
+                        let col = if i == *sel { crate::kit::on_lift(&pal) } else { pal.text };
                         let g = crate::listing::elided(ui, &name, FontId::proportional(13.0), r.width() - 20.0, col);
                         ui.painter().galley(pos2(r.left() + 10.0, r.center().y - g.size().y / 2.0), g, col);
                     });
@@ -5475,14 +5687,23 @@ fn properties(app: &mut App, ctx: &egui::Context, st: &mut PropState) -> bool {
     let mut close = false;
     st.refresh();
     let snap = st.snap.take();
-    let (_, rect) = centered(ctx, "props", 500.0, &pal, |ui| {
+    // What the footer offers, from the change as it stood when the frame began.
+    let gone = st.paths.len() == 1 && snap.as_ref().is_some_and(|s| s.single.is_none());
+    let changed = !st.change.is_empty();
+    #[derive(PartialEq)]
+    enum Foot {
+        Stay,
+        Apply,
+        Close,
+    }
+    let date = |t: Option<std::time::SystemTime>| crate::listing::fmt_date(t, &app.cfg);
+    let (_, foot, rect) = centered_footer(ctx, "props", 500.0, &pal, |ui| {
         ui.spacing_mut().item_spacing.y = 6.0;
         let Some(snap) = &snap else { return };
         if st.paths.len() == 1 {
             let p = st.paths[0].clone();
             let Some((m, e)) = snap.single.clone() else {
                 dialog_title(ui, "Item no longer exists", Some(&p.display().to_string()), &pal);
-                dialog_buttons(ui, |ui| close = primary_button(ui, "Close", true, &pal).clicked());
                 return;
             };
             // The item: its icon, name and kind.
@@ -5508,20 +5729,64 @@ fn properties(app: &mut App, ctx: &egui::Context, st: &mut PropState) -> bool {
                 let kv = |ui: &mut Ui, k: &str, v: String| field_row(ui, key_w, k, &pal, |ui| {
                     ui.add(egui::Label::new(v).wrap());
                 });
-                kv(ui, "Location", p.parent().map(|x| x.display().to_string()).unwrap_or_default());
+                // Figures, their words a step back, a line each.
+                let kv_fig = |ui: &mut Ui, k: &str, v: String| field_row(ui, key_w, k, &pal, |ui| {
+                    let body = egui::TextStyle::Body.resolve(ui.style());
+                    for line in v.lines() {
+                        let g = crate::listing::figures(ui, line, body.clone(), ui.available_width(), pal.text, crate::kit::words_of(pal.text_dim));
+                        let (r, _) = ui.allocate_exact_size(g.size(), Sense::hover());
+                        ui.painter().galley(r.min, g, pal.text);
+                    }
+                });
+                // Where it is, as the path bar writes it: the folders one after another.
+                field_row(ui, key_w, "Location", &pal, |ui| {
+                    let body = egui::TextStyle::Body.resolve(ui.style());
+                    let at = p.parent().map(home_short).unwrap_or_default();
+                    let mut job = egui::text::LayoutJob::default();
+                    let parts: Vec<&str> = at.split('/').filter(|x| !x.is_empty()).collect();
+                    if at.starts_with('/') {
+                        job.append("/", 0.0, egui::TextFormat { font_id: body.clone(), color: pal.text, ..Default::default() });
+                    }
+                    for (i, part) in parts.iter().enumerate() {
+                        if i > 0 || at.starts_with('/') {
+                            job.append(" › ", 0.0, egui::TextFormat { font_id: body.clone(), color: crate::kit::words_of(pal.text_dim), ..Default::default() });
+                        }
+                        job.append(part, 0.0, egui::TextFormat { font_id: body.clone(), color: pal.text, ..Default::default() });
+                    }
+                    job.wrap.max_width = ui.available_width();
+                    ui.add(egui::Label::new(job).wrap());
+                });
                 if e.is_dir {
                     match app.stats.map.get(&p) {
-                        Some(s) => kv(ui, "Size", format!("{} ({} bytes)\n{} file{}, {} folder{}", fsx::fmt_size(s.size), s.size, s.files, if s.files == 1 { "" } else { "s" }, s.folders, if s.folders == 1 { "" } else { "s" })),
+                        Some(s) => kv_fig(ui, "Size", format!("{} ({} bytes)\n{} file{}, {} folder{}", fsx::fmt_size(s.size), s.size, s.files, if s.files == 1 { "" } else { "s" }, s.folders, if s.folders == 1 { "" } else { "s" })),
                         None => {
                             app.stats.request(&p);
                             kv(ui, "Size", "Calculating…".into())
                         }
                     }
                 } else {
-                    kv(ui, "Size", format!("{} ({} bytes)", fsx::fmt_size(e.size), e.size));
+                    kv_fig(ui, "Size", format!("{} ({} bytes)", fsx::fmt_size(e.size), e.size));
                 }
                 if let Some((total, free)) = snap.vol {
-                    kv(ui, "Volume", format!("{} free of {}", fsx::fmt_size(free), fsx::fmt_size(total)));
+                    // How full, as the sidebar's meter, then what is free.
+                    field_row(ui, key_w, "Volume", &pal, |ui| {
+                        ui.horizontal(|ui| {
+                            let body = egui::TextStyle::Body.resolve(ui.style());
+                            let (mr, _) = ui.allocate_exact_size(vec2(48.0, body.size), Sense::hover());
+                            let bar = Rect::from_center_size(mr.center(), vec2(48.0, 3.0));
+                            ui.painter().rect_filled(bar, CornerRadius::same(2), pal.card().lerp_to_gamma(pal.text, if pal.dark { 0.1 } else { 0.09 }));
+                            let used = if total > 0 { (total - free) as f32 / total as f32 } else { 0.0 };
+                            let col = match crate::sidebar::fullness(used) {
+                                Some(true) => pal.danger,
+                                Some(false) => pal.warn,
+                                None => pal.text_dim.gamma_multiply(0.6),
+                            };
+                            ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2((bar.width() * used.min(1.0)).max(3.0), bar.height())), CornerRadius::same(2), col);
+                            let g = crate::listing::figures(ui, &format!("{} free of {}", fsx::fmt_size(free), fsx::fmt_size(total)), body, ui.available_width(), pal.text, crate::kit::words_of(pal.text_dim));
+                            let (r, _) = ui.allocate_exact_size(g.size(), Sense::hover());
+                            ui.painter().galley(r.min, g, pal.text);
+                        });
+                    });
                 }
                 if let Some(t) = &snap.link {
                     kv(ui, "Link target", t.clone());
@@ -5535,18 +5800,23 @@ fn properties(app: &mut App, ctx: &egui::Context, st: &mut PropState) -> bool {
                 let kv = |ui: &mut Ui, k: &str, v: String| field_row(ui, key_w, k, &pal, |ui| {
                     ui.add(egui::Label::new(v).wrap());
                 });
-                kv(ui, "Created", fsx::fmt_time(e.created));
-                kv(ui, "Modified", fsx::fmt_time(e.modified));
-                kv(ui, "Accessed", fsx::fmt_time(m.accessed().ok()));
+                let kv_fig = |ui: &mut Ui, k: &str, v: String| field_row(ui, key_w, k, &pal, |ui| {
+                    let g = crate::listing::figures(ui, &v, egui::TextStyle::Body.resolve(ui.style()), ui.available_width(), pal.text, crate::kit::words_of(pal.text_dim));
+                    let (r, _) = ui.allocate_exact_size(g.size(), Sense::hover());
+                    ui.painter().galley(r.min, g, pal.text);
+                });
+                let _ = kv;
+                // Dates as the list writes them.
+                kv_fig(ui, "Created", date(e.created));
+                kv_fig(ui, "Modified", date(e.modified));
+                kv_fig(ui, "Accessed", date(m.accessed().ok()));
             });
             if m.is_file() {
                 group_label(ui, "Checksum", &pal);
                 card(ui, &pal, |ui| checksum_row(ui, ctx, &p, st, &pal));
             }
             group_label(ui, "Permissions", &pal);
-            if perms_card(ui, st, &snap.perms, key_w, &pal) {
-                close = true;
-            }
+            perms_card(ui, st, &snap.perms, key_w, &pal);
         } else {
             let mut total = 0u64;
             let mut pending = false;
@@ -5583,11 +5853,30 @@ fn properties(app: &mut App, ctx: &egui::Context, st: &mut PropState) -> bool {
                 }
             });
             group_label(ui, "Permissions", &pal);
-            if perms_card(ui, st, &snap.perms, key_w, &pal) {
-                close = true;
-            }
+            perms_card(ui, st, &snap.perms, key_w, &pal);
         }
+    }, |ui| {
+        // Apply while there is a change, beside the way out; else the way out alone.
+        let mut act = Foot::Stay;
+        footer(ui, &[], &pal, |ui| {
+            if changed && !gone {
+                if primary_button(ui, "Apply", true, &pal).clicked() {
+                    act = Foot::Apply;
+                }
+                if plain_button(ui, "Close", &pal).clicked() {
+                    act = Foot::Close;
+                }
+            } else if plain_button(ui, "Close", &pal).clicked() {
+                act = Foot::Close;
+            }
+        });
+        act
     });
+    match foot {
+        Foot::Apply => st.apply = Some(OpKind::Perms { paths: st.paths.clone(), change: std::mem::take(&mut st.change), deep: st.deep }),
+        Foot::Close => close = true,
+        Foot::Stay => {}
+    }
     ctx.request_repaint_after(std::time::Duration::from_millis(300));
     if let Some(kind) = st.apply.take() {
         app.actions.push(Action::StartJob(kind));
@@ -5601,8 +5890,8 @@ fn properties(app: &mut App, ctx: &egui::Context, st: &mut PropState) -> bool {
 
 /// Who may read, write and run the items, in columns under their names, with the special
 /// bits and the owner and group below; Apply starts the change. A box where the items
-/// differ shows a dash until clicked. True when Close was clicked.
-fn perms_card(ui: &mut Ui, st: &mut PropState, items: &[(u32, u32, u32, bool)], key_w: f32, pal: &Palette) -> bool {
+/// differ shows a dash until clicked. Apply and Close are the dialog's footer's.
+fn perms_card(ui: &mut Ui, st: &mut PropState, items: &[(u32, u32, u32, bool)], key_w: f32, pal: &Palette) {
     let body = egui::TextStyle::Body.resolve(ui.style());
     // A bit as the items have it: all on, all off, or some of each (None).
     let base = |mask: u32| -> Option<bool> {
@@ -5620,22 +5909,21 @@ fn perms_card(ui: &mut Ui, st: &mut PropState, items: &[(u32, u32, u32, bool)], 
     };
     let row_h = 22.0;
     let dirs = items.iter().any(|i| i.3);
-    // A bit as a small word that is lit in the accent's tint while set: bare while clear,
-    // a hairline alone while the items differ.
-    let bit = |ui: &mut Ui, r: Rect, label: &str, id: Id, state: Option<bool>, tip: &str| -> bool {
+    // A bit lifts while set, as everything that is on does; while the items differ it
+    // has the accent's hairline alone. `inside` a role's capsule it has no edge of its own;
+    // alone (the special bits) it is a chip.
+    let round = crate::kit::round();
+    let bit = |ui: &mut Ui, r: Rect, label: &str, id: Id, state: Option<bool>, tip: &str, inside: bool| -> bool {
         let resp = ui.interact(r, id, Sense::click());
         let t = crate::kit::slide(ui.ctx(), id.with("lit"), if state == Some(true) { 1.0 } else { 0.0 });
-        let (fill, line) = (pal.accent.gamma_multiply((if pal.dark { 0.24 } else { 0.16 }) * t), pal.accent.gamma_multiply(if state.is_none() { 0.45 } else { 0.45 * t }));
-        if t > 0.01 || state.is_none() {
-            ui.painter().rect(r, CornerRadius::same(5), fill, Stroke::new(1.0, line), StrokeKind::Inside);
-        } else {
-            // Clear, it keeps a field's faint edge: a control, not a stray letter.
-            ui.painter().rect(r, CornerRadius::same(5), if resp.hovered() { crate::kit::touch(pal) } else { Color32::TRANSPARENT }, Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
-        }
+        let rad = crate::kit::radius(r.height(), round);
+        let rest = if resp.hovered() { crate::kit::touch(pal) } else if inside { Color32::TRANSPARENT } else { pal.card() };
+        let line = if state.is_none() { pal.accent.gamma_multiply(0.55) } else if inside && t < 0.01 { Color32::TRANSPARENT } else { pal.card_line() };
+        ui.painter().rect(r, rad, rest.lerp_to_gamma(crate::kit::lift(pal), t), Stroke::new(1.0, line), StrokeKind::Inside);
         if resp.has_focus() {
-            ui.painter().rect_stroke(r.expand(2.0), CornerRadius::same(6), Stroke::new(1.5, pal.accent), StrokeKind::Inside);
+            ui.painter().rect_stroke(r.expand(2.0), crate::kit::radius(r.height() + 4.0, round), Stroke::new(1.5, pal.accent), StrokeKind::Inside);
         }
-        let c = if state != Some(false) || resp.hovered() { pal.text } else { pal.text_dim };
+        let c = if state == Some(true) { crate::kit::on_lift(pal) } else if state.is_none() || resp.hovered() { pal.text } else { pal.text_dim };
         ui.painter().text(r.center(), Align2::CENTER_CENTER, label, FontId::proportional(12.0), c);
         resp.on_hover_text(tip).clicked()
     };
@@ -5648,20 +5936,26 @@ fn perms_card(ui: &mut Ui, st: &mut PropState, items: &[(u32, u32, u32, bool)], 
             1 => if dirs { "Write: add, rename and remove what is inside" } else { "Write" },
             _ => if dirs { "Execute: open the folder" } else { "Execute: run it" },
         };
+        // Each role's read, write and run as one capsule of three, as the panels group
+        // their switches; its digit after it.
+        use crate::kit::{INSET, ROW_CAP_H, ROW_ITEM};
+        let cap_w = 3.0 * ROW_ITEM.x + 2.0 * INSET;
         for (who, shift, names) in [("Owner", 6, ["owner read", "owner write", "owner execute"]), ("Group", 3, ["group read", "group write", "group execute"]), ("Others", 0, ["others read", "others write", "others execute"])] {
-            let (r, _) = ui.allocate_exact_size(vec2(key_w + 12.0 + 3.0 * 30.0 + 24.0, row_h), Sense::hover());
+            let (r, _) = ui.allocate_exact_size(vec2(key_w + 12.0 + cap_w + 24.0, ROW_CAP_H.max(row_h)), Sense::hover());
             ui.painter().text(pos2(r.left(), r.center().y), Align2::LEFT_CENTER, who, body.clone(), pal.text);
+            let cap = Rect::from_min_size(pos2(r.left() + key_w + 12.0, r.center().y - ROW_CAP_H / 2.0), vec2(cap_w, ROW_CAP_H));
+            crate::kit::capsule(ui.painter(), cap, round, pal);
             for (k, (b, l)) in [(4u32, "r"), (2, "w"), (1, "x")].into_iter().enumerate() {
                 let mask = b << shift;
-                let br = Rect::from_min_size(pos2(r.left() + key_w + 12.0 + k as f32 * 30.0, r.center().y - 11.0), vec2(26.0, 22.0));
+                let br = Rect::from_min_size(pos2(cap.left() + INSET + k as f32 * ROW_ITEM.x, cap.top() + INSET), ROW_ITEM);
                 crate::ui::note_control(ui, br, names[k]);
-                if bit(ui, br, l, Id::new(("perm", shift, b)), shown(&st.change, mask), what(k)) {
+                if bit(ui, br, l, Id::new(("perm", shift, b)), shown(&st.change, mask), what(k), true) {
                     toggle(&mut st.change, mask);
                 }
             }
             if let Some((m, _)) = one {
                 let g = crate::listing::tabular(ui, &((m >> shift) & 7).to_string(), FontId::proportional(12.0), 20.0, pal.text_dim);
-                ui.painter().galley(pos2(r.left() + key_w + 12.0 + 3.0 * 30.0 + 8.0, (r.center().y - g.size().y / 2.0).round()), g, pal.text_dim);
+                ui.painter().galley(pos2(cap.right() + 10.0, (r.center().y - g.size().y / 2.0).round()), g, pal.text_dim);
             }
         }
         // The special bits, by what they do, under a dashed rule: part of the same mode.
@@ -5672,9 +5966,9 @@ fn perms_card(ui: &mut Ui, st: &mut PropState, items: &[(u32, u32, u32, bool)], 
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             for (label, tip, mask) in [("Run as owner", "Set user ID: it runs with its owner's rights", 0o4000), ("Run as group", "Set group ID: it runs with its group's rights; inside a folder, new items take its group", 0o2000), ("Sticky", "In a folder, only an item's owner may delete or rename it", 0o1000)] {
-                let w = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.0), pal.text).size().x + 16.0;
-                let (r, _) = ui.allocate_exact_size(vec2(w, 22.0), Sense::hover());
-                if bit(ui, r, label, Id::new(("perm-special", mask)), shown(&st.change, mask), tip) {
+                let w = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(12.0), pal.text).size().x + 22.0;
+                let (r, _) = ui.allocate_exact_size(vec2(w, crate::kit::CHIP_H), Sense::hover());
+                if bit(ui, r, label, Id::new(("perm-special", mask)), shown(&st.change, mask), tip, false) {
                     toggle(&mut st.change, mask);
                 }
             }
@@ -5683,7 +5977,7 @@ fn perms_card(ui: &mut Ui, st: &mut PropState, items: &[(u32, u32, u32, bool)], 
         if let Some((m, is_dir)) = one {
             ui.add_space(2.0);
             ui.horizontal(|ui| {
-                let g = crate::listing::tabular(ui, &format!("{m:04o}"), crate::theme::semibold(18.0), 120.0, pal.text);
+                let g = crate::listing::tabular(ui, &format!("{m:04o}"), body.clone(), 120.0, pal.text);
                 let (r, _) = ui.allocate_exact_size(g.size(), Sense::hover());
                 ui.painter().galley(r.min, g, pal.text);
                 ui.add_space(6.0);
@@ -5698,17 +5992,31 @@ fn perms_card(ui: &mut Ui, st: &mut PropState, items: &[(u32, u32, u32, bool)], 
         ui.horizontal(|ui| {
             let (r, _) = ui.allocate_exact_size(vec2(key_w + 6.0, row_h), Sense::hover());
             ui.painter().text(pos2(r.left(), r.center().y), Align2::LEFT_CENTER, "Owner", body.clone(), pal.text);
-            for (id, now, list, field, current) in [("owner", now_u, &*users, 0, same(|i| i.1)), ("group", now_g, &*groups, 1, same(|i| i.2))] {
+            for (_id, now, list, field, current) in [("owner", now_u, &*users, 0, same(|i| i.1)), ("group", now_g, &*groups, 1, same(|i| i.2))] {
                 let text = now.map_or("Several".to_string(), |n| list.iter().find(|x| x.0 == n).map_or_else(|| n.to_string(), |x| x.1.clone()));
-                let r = egui::ComboBox::from_id_salt(("prop", id)).selected_text(text).width(132.0).height(260.0).show_ui(ui, |ui| {
-                    for (uid, name) in list {
-                        if ui.selectable_label(now == Some(*uid), name).clicked() {
-                            let v = (current != Some(*uid)).then_some(*uid);
-                            if field == 0 { st.change.owner = v } else { st.change.group = v }
+                // A capsule naming who it is, its menu below it: the same rows as every
+                // menu's, a check by the one chosen.
+                let g = crate::listing::elided(ui, &text, FontId::proportional(12.5), 120.0, pal.text);
+                let (r, resp) = ui.allocate_exact_size(vec2((g.size().x + 40.0).max(110.0), crate::kit::CHIP_H), Sense::click());
+                crate::ui::note_control(ui, r, if field == 0 { "owner" } else { "group" });
+                let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+                let face = if open { crate::kit::lift(pal) } else if resp.hovered() { crate::kit::touch(pal) } else { pal.card() };
+                ui.painter().rect(r, crate::kit::radius(r.height(), round), face, Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+                ui.painter().galley(pos2(r.left() + 12.0, r.center().y - g.size().y / 2.0), g, pal.text);
+                crate::kit::chevron(ui.painter(), pos2(r.right() - 14.0, r.center().y), 1.0, pal.text_dim);
+                let w = r.width().max(170.0);
+                egui::Popup::menu(&resp).show(|ui| {
+                    ui.set_min_width(w);
+                    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                        for (uid, name) in list.iter() {
+                            if menu_check(ui, name, now == Some(*uid), None, pal) {
+                                let v = (current != Some(*uid)).then_some(*uid);
+                                if field == 0 { st.change.owner = v } else { st.change.group = v }
+                                ui.close();
+                            }
                         }
-                    }
+                    });
                 });
-                crate::ui::note_control(ui, r.response.rect, if field == 0 { "owner" } else { "group" });
                 if field == 0 {
                     ui.label(egui::RichText::new(":").color(pal.text_dim));
                 }
@@ -5724,21 +6032,6 @@ fn perms_card(ui: &mut Ui, st: &mut PropState, items: &[(u32, u32, u32, bool)], 
             }
         }
     });
-    let mut close = false;
-    let changed = !st.change.is_empty();
-    dialog_buttons(ui, |ui| {
-        if changed {
-            if primary_button(ui, "Apply", true, pal).clicked() {
-                st.apply = Some(OpKind::Perms { paths: st.paths.clone(), change: std::mem::take(&mut st.change), deep: st.deep });
-            }
-            if plain_button(ui, "Close", pal).clicked() {
-                close = true;
-            }
-        } else if primary_button(ui, "Close", true, pal).clicked() {
-            close = true;
-        }
-    });
-    close
 }
 
 /// Paste a checksum to compare (its length picks the algorithm), or work out SHA-256.
@@ -5763,7 +6056,7 @@ fn checksum_row(ui: &mut Ui, ctx: &egui::Context, p: &Path, st: &mut PropState, 
             }
         }
         if !busy && st.sum.is_none() {
-            let b = ui.button("SHA-256");
+            let b = crate::kit::small_button(ui, "SHA-256", pal);
             crate::ui::note_control(ui, b.rect, "checksum button");
             if b.clicked() {
                 start = Some(Algo::Sha256);
@@ -5787,7 +6080,7 @@ fn checksum_row(ui: &mut Ui, ctx: &egui::Context, p: &Path, st: &mut PropState, 
         Some((a, Ok(hex))) => {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(a.label()).small().color(pal.text_dim));
-                let b = ui.small_button("Copy");
+                let b = crate::kit::small_button(ui, "Copy", pal);
                 crate::ui::note_control(ui, b.rect, "copy checksum");
                 if b.clicked() {
                     ctx.copy_text(hex.clone());
@@ -5841,7 +6134,7 @@ fn open_with(app: &mut App, ctx: &egui::Context, paths: &mut Vec<PathBuf>, query
                         launch = Some((*a).clone());
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("Set default").clicked() {
+                        if crate::kit::small_button(ui, "Set default", &pal).clicked() {
                             set_def = Some(a.id.clone());
                         }
                     });
@@ -5858,7 +6151,7 @@ fn open_with(app: &mut App, ctx: &egui::Context, paths: &mut Vec<PathBuf>, query
             let r = ui.add(egui::TextEdit::singleline(command).id(cmd_id).hint_text(egui::RichText::new("Or a command, like gimp %F").color(pal.text_dim)).font(egui::TextStyle::Monospace).desired_width(ui.available_width() - 64.0));
             crate::ui::note_control(ui, r.rect, "open with command");
             let go = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-            if (ui.add_enabled(!command.trim().is_empty(), egui::Button::new("Run")).clicked() || go) && !command.trim().is_empty() {
+            if (primary_button(ui, "Run", !command.trim().is_empty(), &pal).clicked() || go) && !command.trim().is_empty() {
                 run = Some(command.trim().to_string());
             }
         });
@@ -5895,24 +6188,24 @@ fn run_exec(app: &mut App, ctx: &egui::Context, path: &mut PathBuf) -> bool {
         ui.label(egui::RichText::new("Do you want to run it?").color(pal.text_dim));
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.button("Run").clicked() {
+            if plain_button(ui, "Run", &pal).clicked() {
                 if let Err(e) = crate::mime::run_with(path, &[]) {
                     app.toast(format!("Couldn't run: {e}"));
                 }
                 done = true;
             }
-            if ui.button("Run in terminal").clicked() {
+            if plain_button(ui, "Run in terminal", &pal).clicked() {
                 let a = crate::mime::App { id: "run".into(), name: name.clone(), exec: format!("\"{}\"", path.display()), mimes: vec![], terminal: true, hidden: false, icon: String::new() };
                 if let Err(e) = crate::mime::launch(&a, &[], path.parent()) {
                     app.toast(format!("Couldn't run: {e}"));
                 }
                 done = true;
             }
-            if ui.button("Open").on_hover_text("Open with the default application").clicked() {
+            if plain_button(ui, "Open", &pal).on_hover_text("Open with the default application").clicked() {
                 app.actions.push(Action::OpenFile(path.clone()));
                 done = true;
             }
-            if ui.button("Open with…").clicked() {
+            if plain_button(ui, "Open with…", &pal).clicked() {
                 app.actions.push(Action::Open(Popup::open_with(vec![path.clone()])));
                 done = true;
             }
@@ -5982,19 +6275,53 @@ fn quick_menu(app: &mut App, ctx: &egui::Context, panel: Option<(u64, Pos2)>) ->
     let mut shown: Option<(bool, bool)> = None;
     let (_, rect) = anchored(ctx, "quickmenu", anchor, 280.0, &pal, |ui| {
         menu_heading(ui, "Quick", &pal);
+        // A command that switches something says whether it is on: a check, and its name
+        // without the "Toggle" the palette needs to find it.
         for c in &quick {
-            if cmd_item(ui, app, *c) {
+            let clicked = match cmd_state(app, *c) {
+                Some(on) => {
+                    let keys: Vec<String> = app.keymap.bindings(*c).iter().take(3).map(commands::binding_to_string).collect();
+                    let keys = (!keys.is_empty()).then(|| keys.join("\t"));
+                    menu_check(ui, cmd_state_label(*c), on, keys.as_deref(), &pal)
+                }
+                None => cmd_item(ui, app, *c),
+            };
+            if clicked {
                 run = Some(*c);
             }
         }
         if panel.is_some() {
+            let (sort, desc, flat, contents, folders, files) = app.panels.get(&app.active).map(|p| {
+                let t = p.tab();
+                (t.settings.sort, t.settings.desc, t.flatten || t.expand_all_on, t.content.on, t.settings.show_folders, t.settings.show_files)
+            }).unwrap_or((crate::config::SortKey::Name, false, false, false, true, true));
             menu_sep(ui, &pal);
             menu_heading(ui, "Sort", &pal);
-            for c in [Cmd::SortName, Cmd::SortSize, Cmd::SortModified, Cmd::SortType, Cmd::ToggleFoldersFirst] {
-                if cmd_item(ui, app, c) {
-                    run = Some(c);
+            // What it is sorted by, as a sliding choice; the direction as one pill beside it
+            // (choosing the key again reverses it, as its command does); then folders first.
+            let keys = [(Cmd::SortName, crate::config::SortKey::Name, "Name"), (Cmd::SortSize, crate::config::SortKey::Size, "Size"), (Cmd::SortModified, crate::config::SortKey::Modified, "Modified"), (Cmd::SortType, crate::config::SortKey::Type, "Type")];
+            let cur = keys.iter().position(|k| k.1 == sort).unwrap_or(keys.len());
+            ui.horizontal(|ui| {
+                ui.add_space(6.0);
+                let labels: Vec<&str> = keys.iter().map(|k| k.2).collect();
+                if let Some(k) = crate::kit::segmented(ui, Id::new("panel menu sort"), &labels, &["sort name", "sort size", "sort modified", "sort type"], &[], cur, MENU_FONT, crate::kit::CHIP_H, &pal) {
+                    run = Some(keys[k].0);
                 }
-            }
+                if let Some(k) = keys.get(cur) {
+                    let tip = if desc { "Descending: click for ascending" } else { "Ascending: click for descending" };
+                    let r = crate::kit::bar_item_row(ui, "sort direction", tip, true, &pal, |p, r, c| paint_glyph(p, r, if desc { Glyph::Down } else { Glyph::Up }, c));
+                    if r.clicked() {
+                        run = Some(k.0);
+                    }
+                }
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.add_space(6.0);
+                if crate::kit::chip(ui, "Folders first", app.cfg.folders_first, "folders first", &pal).clicked() {
+                    run = Some(Cmd::ToggleFoldersFirst);
+                }
+            });
             menu_sep(ui, &pal);
             menu_heading(ui, "Group", &pal);
             for c in crate::commands::GROUP_CMDS {
@@ -6002,13 +6329,13 @@ fn quick_menu(app: &mut App, ctx: &egui::Context, panel: Option<(u64, Pos2)>) ->
                     continue;
                 }
                 let g = c.group_key().unwrap_or_default();
-                let label = format!("{}{}", if g == group { "● " } else { "" }, c.info().title.trim_start_matches("Group By "));
-                if menu_item(ui, &label, None, &pal) {
+                let label = if c == Cmd::GroupNone { "None" } else { c.info().title.trim_start_matches("Group By ") };
+                if menu_check(ui, label, g == group, None, &pal) {
                     run = Some(c);
                 }
             }
             // What the status bar used to switch: the view and its size, and whether
-            // folders and files are listed at all.
+            // folders and files are listed at all, each showing whether it is on.
             menu_sep(ui, &pal);
             menu_heading(ui, "View", &pal);
             if menu_item(ui, "View and size…", Some("Ctrl+wheel".into()), &pal) {
@@ -6016,18 +6343,24 @@ fn quick_menu(app: &mut App, ctx: &egui::Context, panel: Option<(u64, Pos2)>) ->
                     view_at = Some((p, a));
                 }
             }
-            for c in [Cmd::ToggleFlatten, Cmd::ContentSearch] {
-                if cmd_item(ui, app, c) {
-                    run = Some(c);
+            ui.add_space(2.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.add_space(6.0);
+                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+                if crate::kit::chip(ui, "Folders", folders, "show folders", &pal).on_hover_text(if folders { "Hide folders" } else { "Show folders" }).clicked() {
+                    shown = Some((true, false));
                 }
-            }
-            let (folders, files) = app.panels.get(&app.active).map(|p| (p.tab().settings.show_folders, p.tab().settings.show_files)).unwrap_or((true, true));
-            if menu_item(ui, if folders { "Hide folders" } else { "Show folders" }, None, &pal) {
-                shown = Some((true, false));
-            }
-            if menu_item(ui, if files { "Hide files" } else { "Show files" }, None, &pal) {
-                shown = Some((false, true));
-            }
+                if crate::kit::chip(ui, "Files", files, "show files", &pal).on_hover_text(if files { "Hide files" } else { "Show files" }).clicked() {
+                    shown = Some((false, true));
+                }
+                if crate::kit::chip(ui, "Flatten", flat, "flatten", &pal).on_hover_text(Cmd::ToggleFlatten.info().title).clicked() {
+                    run = Some(Cmd::ToggleFlatten);
+                }
+                if crate::kit::chip(ui, "Search contents", contents, "search contents", &pal).on_hover_text(Cmd::ContentSearch.info().title).clicked() {
+                    run = Some(Cmd::ContentSearch);
+                }
+            });
+            ui.add_space(4.0);
             menu_sep(ui, &pal);
             for c in [Cmd::SavedView, Cmd::ToggleInspector, Cmd::ClosePanel] {
                 if cmd_item(ui, app, c) {
@@ -6088,14 +6421,12 @@ fn path_menu(app: &mut App, ctx: &egui::Context, panel: u64, path: &Path, anchor
             }
             menu_sep(ui, &pal);
         }
-        let mut c = app.cfg.compact_paths;
-        if ui.checkbox(&mut c, "Show compact paths").changed() {
-            app.cfg.compact_paths = c;
+        if menu_check(ui, "Show compact paths", app.cfg.compact_paths, None, &pal) {
+            app.cfg.compact_paths = !app.cfg.compact_paths;
             app.cfg_dirty = true;
         }
-        let mut b = app.cfg.breadcrumbs;
-        if ui.checkbox(&mut b, "Path breadcrumbs").changed() {
-            app.cfg.breadcrumbs = b;
+        if menu_check(ui, "Path breadcrumbs", app.cfg.breadcrumbs, None, &pal) {
+            app.cfg.breadcrumbs = !app.cfg.breadcrumbs;
             app.cfg_dirty = true;
         }
     });
@@ -6173,7 +6504,7 @@ fn path_dropdown(app: &mut App, ctx: &egui::Context, st: &mut PathDropState) -> 
                         }
                     }
                     // The folder the path continues into is marked like the current crumb.
-                    let col = if sel { pal.on_sel() } else if highlighted { pal.accent } else { pal.text };
+                    let col = if sel { crate::kit::on_lift(&pal) } else if highlighted { pal.accent } else { pal.text };
                     // Long names end in "…" inside the row instead of running past the popup.
                     let g = crate::listing::elided(ui, &name, FontId::proportional(12.5), (r.width() - 38.0).max(20.0), col);
                     ui.painter().galley(pos2(r.left() + 30.0, r.center().y - g.size().y / 2.0), g, col);
@@ -6314,7 +6645,7 @@ fn rename_menu(app: &mut App, ctx: &egui::Context, panel: u64, pos: Pos2) -> boo
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Case:").small().color(pal.text_dim));
             for (l, c) in [("lower", Case::Lower), ("UPPER", Case::Upper), ("Title", Case::Title), ("Sentence", Case::Sentence)] {
-                if ui.small_button(l).clicked() {
+                if crate::kit::small_button(ui, l, &pal).clicked() {
                     r.change_case(c);
                     done = true;
                 }
@@ -6353,7 +6684,7 @@ fn find_replace(app: &mut App, ctx: &egui::Context, panel: u64) -> bool {
             ui.end_row();
         });
         ui.horizontal(|ui| {
-            if ui.button("Replace all").clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
+            if plain_button(ui, "Replace all", &pal).clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
                 r.find_replace();
                 done = true;
             }
@@ -6459,7 +6790,7 @@ fn git_file_menu(app: &mut App, ctx: &egui::Context, panel: u64, file: usize, po
     let rel = f.path.clone();
     let item = |ui: &mut Ui, text: &str, enabled: bool| -> bool {
         let r = row(ui, 26.0, false, &pal, |ui, r| {
-            ui.painter().text(pos2(r.left() + 10.0, r.center().y), Align2::LEFT_CENTER, text, FontId::proportional(13.0), if enabled { pal.text } else { pal.text_dim.gamma_multiply(0.6) });
+            ui.painter().text(pos2(r.left() + MENU_TEXT_X, r.center().y), Align2::LEFT_CENTER, text, FontId::proportional(MENU_FONT), if enabled { pal.text } else { pal.text_dim.gamma_multiply(0.6) });
         });
         enabled && r.clicked()
     };
@@ -6645,8 +6976,8 @@ fn branch_menu(app: &mut App, ctx: &egui::Context, st: &mut BranchState) -> bool
             let sel = st.keyed && i == st.sel;
             let resp = row(ui, 26.0, sel, &pal, |ui, r| {
                 let p = ui.painter();
-                let text = if sel { pal.on_sel() } else { pal.text };
-                let dim = if sel { pal.on_sel().gamma_multiply(0.75) } else { pal.text_dim };
+                let text = if sel { crate::kit::on_lift(&pal) } else { pal.text };
+                let dim = if sel && pal.strong { pal.on_sel().gamma_multiply(0.75) } else { pal.text_dim };
                 let x = r.left() + 10.0;
                 let (label, right): (String, Option<String>) = match (*it, &refs) {
                     (BranchItem::History, _) => ((if history { "Close history" } else { "History" }).into(), None),
@@ -6676,7 +7007,7 @@ fn branch_menu(app: &mut App, ctx: &egui::Context, st: &mut BranchState) -> bool
                     end = paint_counts(p, end, r.center().y, b.ahead, b.behind, &small, dim) - 4.0;
                     // The branch HEAD is on carries a dot in the accent.
                     if b.current {
-                        p.circle_filled(pos2(x + 3.0, r.center().y), 3.0, if sel { pal.on_sel() } else { pal.accent });
+                        p.circle_filled(pos2(x + 3.0, r.center().y), 3.0, if sel && pal.strong { pal.on_sel() } else { pal.accent });
                     }
                 }
                 if let Some(t) = &right {
@@ -6789,7 +7120,7 @@ fn stash_menu(app: &mut App, ctx: &egui::Context, panel: u64, root: &Path, stash
         for (i, label) in ITEMS.iter().enumerate() {
             let on = i == *sel;
             let resp = row(ui, 26.0, on, &pal, |ui, r| {
-                ui.painter().text(pos2(r.left() + 10.0, r.center().y), Align2::LEFT_CENTER, *label, FontId::proportional(13.0), if on { pal.on_sel() } else { pal.text });
+                ui.painter().text(pos2(r.left() + MENU_TEXT_X, r.center().y), Align2::LEFT_CENTER, *label, FontId::proportional(MENU_FONT), if on { crate::kit::on_lift(&pal) } else { pal.text });
             });
             crate::ui::note_control(ui, resp.rect, "stash menu item");
             if resp.clicked() {
@@ -6824,9 +7155,9 @@ fn menu_title(ui: &mut Ui, name: &str, sub: &str, pal: &Palette) {
 /// it, dimmed when it can't be used.
 fn key_item(ui: &mut Ui, label: &str, on: bool, enabled: bool, pal: &Palette) -> egui::Response {
     let resp = row(ui, 26.0, on, pal, |ui, r| {
-        let col = if !enabled { pal.text_dim.gamma_multiply(0.6) } else if on { pal.on_sel() } else { pal.text };
-        let g = crate::listing::elided(ui, label, FontId::proportional(13.0), r.width() - 20.0, col);
-        ui.painter().galley(pos2(r.left() + 10.0, r.center().y - g.size().y / 2.0), g, col);
+        let col = if !enabled { pal.text_dim.gamma_multiply(0.6) } else if on { crate::kit::on_lift(pal) } else { pal.text };
+        let g = crate::listing::elided(ui, label, FontId::proportional(MENU_FONT), r.width() - MENU_TEXT_X - 10.0, col);
+        ui.painter().galley(pos2(r.left() + MENU_TEXT_X, r.center().y - g.size().y / 2.0), g, col);
     });
     crate::ui::note_control(ui, resp.rect, "menu item");
     resp
@@ -7179,7 +7510,7 @@ fn group_menu(app: &mut App, ctx: &egui::Context, panel: u64, label: &str, pos: 
     let mut done = false;
     let item = |ui: &mut Ui, text: &str, enabled: bool| -> bool {
         let r = row(ui, 26.0, false, &pal, |ui, r| {
-            ui.painter().text(pos2(r.left() + 10.0, r.center().y), Align2::LEFT_CENTER, text, FontId::proportional(13.0), if enabled { pal.text } else { pal.text_dim.gamma_multiply(0.6) });
+            ui.painter().text(pos2(r.left() + MENU_TEXT_X, r.center().y), Align2::LEFT_CENTER, text, FontId::proportional(MENU_FONT), if enabled { pal.text } else { pal.text_dim.gamma_multiply(0.6) });
         });
         enabled && r.clicked()
     };

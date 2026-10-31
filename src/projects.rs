@@ -426,15 +426,11 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
             crate::inspector::seg_frame(&mut sui, &pal, |ui| {
                 for (k, label) in labels.iter().enumerate() {
                     let g = ui.painter().layout_no_wrap(label.to_string(), seg_font.clone(), pal.text);
-                    let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 18.0, 20.0), Sense::click());
+                    let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 18.0, crate::kit::ROW_ITEM.y), Sense::click());
                     crate::ui::note_control(ui, r, if k == 0 { "all projects" } else { "unsaved projects" });
                     let on = st.unsaved == (k == 1);
-                    if on {
-                        ui.painter().rect_filled(r, CornerRadius::same(4), pal.accent.gamma_multiply(0.85));
-                    } else if resp.hovered() {
-                        ui.painter().rect_filled(r, CornerRadius::same(4), pal.hover);
-                    }
-                    let c = if on { egui::Color32::WHITE } else { pal.text_dim };
+                    crate::kit::item_face(ui.painter(), r, resp.hovered(), on, crate::kit::round(), &pal);
+                    let c = crate::kit::item_ink(true, resp.hovered(), on, &pal);
                     ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, *label, seg_font.clone(), c);
                     let resp = resp.on_hover_text(if k == 0 { "Every project (Tab)" } else { "Projects with changes, unpushed commits or stashes (Tab)" });
                     if resp.clicked() && !on {

@@ -1412,6 +1412,8 @@ impl App {
 
     pub fn frame(&mut self, ctx: &egui::Context) {
         let ctx = ctx.clone();
+        crate::kit::set_round(self.cfg.round_corners);
+        crate::findbar::DRAWN.with(|d| d.borrow_mut().clear());
         // egui may run a frame twice (a discarded layout pass): test registries start fresh.
         #[cfg(test)]
         {

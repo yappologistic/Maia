@@ -1160,9 +1160,7 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
             }
             v
         };
-        let bfont = egui::TextStyle::Button.resolve(ui.style());
-        let pad_x = ui.spacing().button_padding.x;
-        let bw: f32 = labels.iter().map(|l| (ui.painter().layout_no_wrap(l.clone(), bfont.clone(), pal.text).size().x + 2.0 * pad_x).max(72.0)).sum::<f32>() + 8.0 * (labels.len() as f32 - 1.0);
+        let bw: f32 = labels.iter().map(|l| pp::button_width(ui, l, &pal)).sum::<f32>() + 8.0 * (labels.len() as f32 - 1.0);
         st.buttons.x = bw;
         let side = avail - st.buttons.x - 32.0 >= 320.0;
         let left_w = if side { avail - st.buttons.x - 32.0 } else { avail };
@@ -1170,14 +1168,15 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
         left.label(egui::RichText::new(status).size(small).color(col_status));
         left.add_space(6.0);
         if showing_free {
-            pp::hint_chips(&mut left, &[("Space", "check"), ("→", "open"), ("Delete", "free"), ("Tab", "contents"), ("F", "full window"), ("Esc", "close")], &pal);
+            // Esc is in the Close or Cancel button.
+            pp::hint_chips(&mut left, &[("Space", "check"), ("→", "open"), ("Delete", "free"), ("Tab", "contents"), ("F", "full window")], &pal);
         } else {
             let next = if MAP.load(std::sync::atomic::Ordering::Relaxed) { "free up" } else { "map" };
             let mut keys = vec![("Enter", "open folder"), ("Backspace", "up"), ("Space", "check"), ("Delete", "trash"), ("Tab", next)];
             if st.before.is_some() {
                 keys.push(("S", "size or change"));
             }
-            keys.extend([("F", "full window"), ("Esc", "close")]);
+            keys.push(("F", "full window"));
             pp::hint_chips(&mut left, &keys, &pal);
         }
         let lh = left.min_rect().height();

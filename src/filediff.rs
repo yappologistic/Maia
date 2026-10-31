@@ -140,8 +140,8 @@ pub fn view(ui: &mut Ui, rect: Rect, c: &mut Compare, wrap: &mut bool, env: &mut
             return;
         }
         let g = crate::listing::elided(ui, &title, FontId::proportional(12.0), room.min(320.0), pal.text);
-        let (r, _) = ui.allocate_exact_size(vec2(g.size().x + 36.0, 22.0), Sense::hover());
-        ui.painter().rect_filled(r, CornerRadius::same(11), pal.accent.gamma_multiply(0.22));
+        let (r, _) = ui.allocate_exact_size(vec2(g.size().x + 36.0, crate::kit::CHIP_H), Sense::hover());
+        crate::kit::chip_face(ui.painter(), r, false, false, None, crate::kit::round(), &pal);
         crate::theme::paint_symbol(ui.painter(), Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), Vec2::splat(12.0)), "git-compare", pal.text);
         ui.painter().galley(pos2(r.left() + 26.0, r.center().y - g.size().y / 2.0), g, pal.text);
         if let Some((add, del)) = counts.filter(|_| ui.available_width() > 90.0) {

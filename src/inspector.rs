@@ -1028,46 +1028,31 @@ pub(crate) fn text_lines(buf: &[u8]) -> Option<Vec<String>> {
     Some(s.lines().map(|l| if l.len() > 2000 { format!("{}…", &l[..l.floor_char_boundary(2000)]) } else { l.replace('\t', "    ") }).collect())
 }
 
-/// One icon button of a toolbar segment; `paint` draws the icon in the given color.
+/// One icon button of a toolbar segment; `paint` draws the icon in the given color. On,
+/// it lifts as a dialog's chosen row does; under the pointer, it lifts half as far.
 pub(crate) fn seg_button(ui: &mut Ui, on: bool, tip: &'static str, pal: &theme::Palette, paint: impl FnOnce(&egui::Painter, Rect, Color32)) -> bool {
+    use crate::kit::{ROW_GLYPH, ROW_ITEM};
     // Narrow inspector: leave out what doesn't fit rather than spill into the next panel.
-    if crate::ui::no_room(ui, 24.0) {
+    if crate::ui::no_room(ui, ROW_ITEM.x) {
         return false;
     }
-    let (r, resp) = ui.allocate_exact_size(vec2(24.0, 20.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(ROW_ITEM, Sense::click());
     crate::ui::note_control(ui, r, tip);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, tip));
-    if on {
-        ui.painter().rect_filled(r, CornerRadius::same(4), pal.accent.gamma_multiply(0.85));
-    } else if resp.hovered() {
-        ui.painter().rect_filled(r, CornerRadius::same(4), pal.hover);
-    }
-    paint(ui.painter(), Rect::from_center_size(r.center(), Vec2::splat(14.0)), if on { Color32::WHITE } else { pal.text_dim });
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, tip));
+    let hot = resp.hovered();
+    crate::kit::item_face(ui.painter(), r, hot, on, crate::kit::round(), pal);
+    paint(ui.painter(), Rect::from_center_size(r.center(), Vec2::splat(ROW_GLYPH)), crate::kit::item_ink(true, hot, on, pal));
     resp.on_hover_text(tip).clicked()
 }
 
-/// A quiet rounded segment behind a group of toolbar buttons, as Options draws its groups.
+/// A group of toolbar buttons in one capsule, as the path bar groups its own.
 pub(crate) fn seg_frame(ui: &mut Ui, pal: &theme::Palette, add: impl FnOnce(&mut Ui)) {
     // No room for even one button: no empty outline either.
     if crate::ui::no_room(ui, 30.0) {
         return;
     }
-    // The buttons go straight into the toolbar row, so they centre on it like the close
-    // button does; the segment is a fixed 24 px around that centre (buttons are 20 high),
-    // painted under them once their width is known.
-    let bg = ui.painter().add(egui::Shape::Noop);
-    let x0 = ui.cursor().min.x;
-    let gap = ui.spacing().item_spacing.x;
-    ui.spacing_mut().item_spacing.x = 1.0;
-    ui.add_space(2.0);
-    add(ui);
-    ui.add_space(2.0);
-    ui.spacing_mut().item_spacing.x = gap;
-    let cy = ui.max_rect().center().y;
-    let r = Rect::from_min_max(pos2(x0, cy - 12.0), pos2(ui.cursor().min.x, cy + 12.0));
-    ui.painter().set(bg, egui::Shape::rect_filled(r, CornerRadius::same(6), pal.card()));
-    ui.painter().rect_stroke(r, CornerRadius::same(6), egui::Stroke::new(1.0, pal.card_line()), egui::StrokeKind::Inside);
-    ui.add_space(6.0);
+    crate::kit::capsule_group_h(ui, crate::kit::ROW_CAP_H, crate::kit::round(), pal, add);
+    ui.add_space(4.0);
 }
 
 #[allow(dead_code)]
@@ -1225,45 +1210,56 @@ pub fn inspector(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
     if crate::ui::glyph_button(&mut hui, Glyph::Close, "Close preview (Space)", true, &pal).clicked() {
         close = true;
     }
-    let (mr, mresp) = hui.allocate_exact_size(vec2(26.0, 22.0), Sense::click());
+    let round = crate::kit::round();
+    let (mr, mresp) = hui.allocate_exact_size(crate::kit::ROW_ITEM + vec2(2.0, 0.0), Sense::click());
     crate::ui::note_control(&hui, mr, "preview menu");
     let open = egui::Popup::is_id_open(hui.ctx(), egui::Popup::default_response_id(&mresp));
-    if mresp.hovered() || open {
-        hui.painter().rect_filled(mr, CornerRadius::same(5), pal.hover);
-    }
+    crate::kit::item_face(hui.painter(), mr, mresp.hovered(), open, round, &pal);
     for dx in [-5.0, 0.0, 5.0] {
-        hui.painter().circle_filled(mr.center() + vec2(dx, 0.0), 1.5, if mresp.hovered() || open { pal.text } else { pal.text_dim });
+        hui.painter().circle_filled(mr.center() + vec2(dx, 0.0), 1.5, crate::kit::item_ink(true, mresp.hovered(), open, &pal));
     }
     let mresp = mresp.on_hover_text("Preview options");
     if editable {
         let font = FontId::proportional((env.cfg.font_size - 1.0).max(10.0));
         let g = hui.painter().layout_no_wrap("Edit".into(), font, pal.text_dim);
         if !crate::ui::no_room(&hui, g.size().x + 16.0) {
-            let (er, eresp) = hui.allocate_exact_size(vec2(g.size().x + 16.0, 22.0), Sense::click());
+            let (er, eresp) = hui.allocate_exact_size(vec2(g.size().x + 16.0, crate::kit::ROW_ITEM.y), Sense::click());
             crate::ui::note_control(&hui, er, "Edit (Shift+F4)");
-            if eresp.hovered() {
-                hui.painter().rect_filled(er, CornerRadius::same(5), pal.hover);
-            }
+            crate::kit::item_face(hui.painter(), er, eresp.hovered(), false, round, &pal);
             hui.painter().galley(er.center() - g.size() / 2.0, g, if eresp.hovered() { pal.text } else { pal.text_dim });
             if eresp.on_hover_text("Edit (Shift+F4)").clicked() {
                 env.actions.push(crate::app::Action::Cmd(crate::commands::Cmd::EditInPreview));
             }
         }
     }
-    // The name, semibold; a click on it shows or hides the Details card.
+    // The name, semibold; a click on it shows or hides the Details card, lifted while it
+    // shows. After it, where there is room, what the file is and how big, as figures.
     if let Some(e) = &target {
         hui.add_space(6.0);
-        let room = hui.available_width();
+        let room = hui.available_width() - 8.0;
         if room >= 24.0 {
-            let g = crate::listing::elided(&hui, &e.name, theme::semibold(env.cfg.font_size - 0.5), room, pal.text);
+            let g = crate::listing::elided(&hui, &e.name, theme::semibold(env.cfg.font_size - 0.5), room - 16.0, pal.text);
+            let small = FontId::proportional(env.cfg.font_size - 1.5);
+            let what = if e.is_dir { String::new() } else { format!("{} · {}", crate::mime::mime_db().short(&e.name, &e.ext(), false, e.is_executable()), crate::fsx::fmt_size(e.size)) };
+            let meta = (!what.is_empty()).then(|| crate::listing::figures(&hui, &what, small, 400.0, pal.text_dim, crate::kit::words_of(pal.text_dim))).filter(|m| g.size().x + 16.0 + 10.0 + m.size().x <= room);
             hui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 // As tall as the buttons beside it, the name centred in it: a tall font no
                 // longer pushes the row off the header's middle.
-                let (r, resp) = ui.allocate_exact_size(vec2(g.size().x, 22.0), Sense::click());
+                let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 16.0, crate::kit::ROW_ITEM.y), Sense::click());
                 crate::ui::note_control(ui, r, "preview name");
-                ui.painter().galley(pos2(r.left(), r.center().y - g.size().y / 2.0), g, if ins.show_meta || resp.hovered() { pal.accent } else { pal.text });
+                crate::kit::item_face(ui.painter(), r, resp.hovered(), ins.show_meta, round, &pal);
+                if ins.show_meta {
+                    ui.painter().galley_with_override_text_color(pos2(r.left() + 8.0, r.center().y - g.size().y / 2.0), g, crate::kit::on_lift(&pal));
+                } else {
+                    ui.painter().galley(pos2(r.left() + 8.0, r.center().y - g.size().y / 2.0), g, pal.text);
+                }
                 if resp.on_hover_text(if ins.show_meta { "Hide details" } else { "Details" }).clicked() {
                     ins.show_meta = !ins.show_meta;
+                }
+                if let Some(m) = meta {
+                    ui.add_space(4.0);
+                    let (mr, _) = ui.allocate_exact_size(m.size(), Sense::hover());
+                    ui.painter().galley(mr.min, m, pal.text_dim);
                 }
             });
         }
@@ -1273,43 +1269,55 @@ pub fn inspector(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
         Content::Big(_) => true,
         _ => false,
     };
+    // The menus' own rows: a check for what is on, keys as keycaps, dashed rules between
+    // groups (see popups::menu_check).
     egui::Popup::menu(&mresp).show(|ui| {
-        ui.set_min_width(200.0);
-        let sep = |ui: &mut Ui| {
-            ui.separator();
-        };
+        use crate::popups::{menu_action, menu_check, menu_item, menu_note, menu_sep};
+        ui.set_min_width(220.0);
         let bigger = |ins: &mut Inspector, d: f32| ins.text_size = (ins.text_size + d).clamp(-6.0, 16.0);
+        let sizes = |ui: &mut Ui, ins: &mut Inspector| {
+            if menu_item(ui, "Larger text", Some("Ctrl+wheel".into()), &pal) {
+                bigger(ins, 1.0);
+            }
+            if menu_item(ui, "Smaller text", None, &pal) {
+                bigger(ins, -1.0);
+            }
+        };
         match ins.content {
             Content::Image => {
                 if let Some(a) = ins.anim.as_mut().filter(|a| a.moving()) {
-                    if ui.button(if a.playing { "Pause" } else { "Play" }).clicked() {
+                    if menu_item(ui, if a.playing { "Pause" } else { "Play" }, None, &pal) {
                         a.toggle();
                     }
-                    sep(ui);
+                    menu_sep(ui, &pal);
                 }
                 for (f, tip) in [(Fit::Fit, "Zoom to fit"), (Fit::Actual, "Actual pixels (1:1)"), (Fit::Fill, "Fill the preview")] {
-                    if ui.radio(ins.fit == f && ins.zoom == 1.0, tip).clicked() {
+                    if menu_check(ui, tip, ins.fit == f && ins.zoom == 1.0, None, &pal) {
                         ins.fit = f;
                         ins.zoom = 1.0;
                         ins.pan = Vec2::ZERO;
                     }
                 }
-                ui.checkbox(&mut ins.pixel_grid, "Pixel grid at high zoom");
-                ui.checkbox(&mut ins.minimap, "Minimap while zoomed");
-                sep(ui);
+                if menu_check(ui, "Pixel grid at high zoom", ins.pixel_grid, None, &pal) {
+                    ins.pixel_grid = !ins.pixel_grid;
+                }
+                if menu_check(ui, "Minimap while zoomed", ins.minimap, None, &pal) {
+                    ins.minimap = !ins.minimap;
+                }
+                menu_sep(ui, &pal);
             }
             Content::Pdf(ref mut v) => {
                 let pages = v.pages.unwrap_or(0);
                 if pages > 0 {
-                    ui.label(egui::RichText::new(format!("Page {} of {pages}", v.page)).color(pal.text_dim));
+                    menu_note(ui, &format!("Page {} of {pages}", v.page), &pal);
                 }
-                if ui.add_enabled(v.page > 1, egui::Button::new("Previous page")).clicked() {
+                if menu_action(ui, "Previous page", None, v.page > 1, &pal) {
                     v.page -= 1;
                 }
-                if ui.add_enabled(v.page < pages, egui::Button::new("Next page")).clicked() {
+                if menu_action(ui, "Next page", None, v.page < pages, &pal) {
                     v.page += 1;
                 }
-                sep(ui);
+                menu_sep(ui, &pal);
             }
             Content::Text { ref rich, .. } => {
                 let kind = rich.as_ref().and_then(|r| r.kind());
@@ -1323,77 +1331,59 @@ pub fn inspector(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
                         RichKind::Data => "Tree",
                         RichKind::Table => "Table",
                     };
-                    if ui.radio(!source, shown).clicked() && source {
+                    if menu_check(ui, shown, !source, None, &pal) && source {
                         env.actions.push(crate::app::Action::SourceView(k, false));
                     }
-                    if ui.radio(source, "Source").clicked() && !source {
+                    if menu_check(ui, "Source", source, None, &pal) && !source {
                         env.actions.push(crate::app::Action::SourceView(k, true));
                     }
-                    sep(ui);
+                    menu_sep(ui, &pal);
                 }
                 // A data file that would not parse shows its text either way.
                 let as_text = !book && (kind.is_none() || source || broken);
                 if as_text {
-                    ui.checkbox(&mut ins.line_numbers, "Line numbers");
-                    if !env_file {
-                        let mut w = ins.wraps();
-                        if ui.checkbox(&mut w, "Wrap lines").clicked() {
-                            ins.toggle_wrap();
-                        }
+                    if menu_check(ui, "Line numbers", ins.line_numbers, None, &pal) {
+                        ins.line_numbers = !ins.line_numbers;
+                    }
+                    if !env_file && menu_check(ui, "Wrap lines", ins.wraps(), None, &pal) {
+                        ins.toggle_wrap();
                     }
                 }
-                if env_file {
-                    ui.checkbox(&mut ins.env_all, "Show values");
+                if env_file && menu_check(ui, "Show values", ins.env_all, None, &pal) {
+                    ins.env_all = !ins.env_all;
                 }
-                if as_text && !env_file && blame_ok {
-                    ui.checkbox(&mut ins.blame_on, "Blame");
+                if as_text && !env_file && blame_ok && menu_check(ui, "Blame", ins.blame_on, None, &pal) {
+                    ins.blame_on = !ins.blame_on;
                 }
-                if as_text && !env_file && (log || ins.grew || ins.follow) {
-                    let mut f = ins.follow;
-                    if ui.checkbox(&mut f, "Follow").clicked() {
-                        ins.toggle_follow();
-                    }
+                if as_text && !env_file && (log || ins.grew || ins.follow) && menu_check(ui, "Follow", ins.follow, None, &pal) {
+                    ins.toggle_follow();
                 }
-                if ui.add(egui::Button::new("Larger text").shortcut_text("Ctrl+wheel")).clicked() {
-                    bigger(ins, 1.0);
-                }
-                if ui.button("Smaller text").clicked() {
-                    bigger(ins, -1.0);
-                }
-                sep(ui);
+                sizes(ui, ins);
+                menu_sep(ui, &pal);
             }
             Content::Big(ref v) => {
-                if !v.hex {
-                    ui.checkbox(&mut ins.line_numbers, "Line numbers");
+                let hex = v.hex;
+                if !hex && menu_check(ui, "Line numbers", ins.line_numbers, None, &pal) {
+                    ins.line_numbers = !ins.line_numbers;
                 }
-                if ui.add(egui::Button::new("Larger text").shortcut_text("Ctrl+wheel")).clicked() {
-                    bigger(ins, 1.0);
-                }
-                if ui.button("Smaller text").clicked() {
-                    bigger(ins, -1.0);
-                }
-                sep(ui);
+                sizes(ui, ins);
+                menu_sep(ui, &pal);
             }
             Content::Sqlite(_) => {
-                if ui.add(egui::Button::new("Larger text").shortcut_text("Ctrl+wheel")).clicked() {
-                    bigger(ins, 1.0);
-                }
-                if ui.button("Smaller text").clicked() {
-                    bigger(ins, -1.0);
-                }
-                sep(ui);
+                sizes(ui, ins);
+                menu_sep(ui, &pal);
             }
             _ => {}
         }
-        if findable && ui.add(egui::Button::selectable(ins.find.is_some(), "Find").shortcut_text("Ctrl+F")).clicked() && ins.find.take().is_none() {
+        if findable && menu_check(ui, "Find", ins.find.is_some(), Some("Ctrl+F"), &pal) && ins.find.take().is_none() {
             ins.find = Some(crate::findbar::Finder::new(String::new()));
         }
-        if target.is_some() {
-            ui.checkbox(&mut ins.show_meta, "Details");
+        if target.is_some() && menu_check(ui, "Details", ins.show_meta, None, &pal) {
+            ins.show_meta = !ins.show_meta;
         }
-        sep(ui);
+        menu_sep(ui, &pal);
         for (l, tip) in [(InspectorLayout::Auto, "Place automatically"), (InspectorLayout::Right, "Dock right"), (InspectorLayout::Bottom, "Dock bottom")] {
-            if ui.radio(cur_layout == l, tip).clicked() {
+            if menu_check(ui, tip, cur_layout == l, None, &pal) {
                 ins.layout = Some(l);
             }
         }
@@ -1957,6 +1947,15 @@ fn edit_view(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
         }) {
             ins.text_size = (ins.text_size - 1.0).max(-6.0);
         }
+        // The size the text is at, between the steps that change it.
+        let size = env.cfg.inspector_font_size + ins.text_size;
+        let small = FontId::proportional(env.cfg.font_size - 1.5);
+        let g = crate::listing::tabular(ui, &format!("{size:.0}"), small.clone(), 60.0, pal.text_dim);
+        let wide = crate::listing::tabular(ui, "00", small, 60.0, pal.text_dim).size().x + 6.0;
+        if !crate::ui::no_room(ui, wide + crate::kit::ROW_ITEM.x) {
+            let (r, _) = ui.allocate_exact_size(vec2(wide, crate::kit::ROW_ITEM.y), Sense::hover());
+            ui.painter().galley(pos2(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, pal.text_dim);
+        }
         if seg_button(ui, false, "Larger text", &pal, |p, r, c| {
             theme::paint_symbol(p, r, "a-arrow-up", c);
         }) {
@@ -1976,11 +1975,15 @@ fn edit_view(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
         if room < 40.0 {
             return;
         }
-        let label = if dirty { format!("● {name}") } else { name };
-        let g = crate::listing::elided(ui, &label, FontId::proportional(12.0), (room - 20.0).min(260.0), pal.text);
-        let (r, _) = ui.allocate_exact_size(vec2(g.size().x + 20.0, 22.0), Sense::hover());
-        ui.painter().rect_filled(r, CornerRadius::same(11), pal.accent.gamma_multiply(0.22));
-        ui.painter().galley(pos2(r.left() + 10.0, r.center().y - g.size().y / 2.0), g, pal.text);
+        // A chip as the status bar's; unsaved changes put the accent's dot before the name.
+        let dot = if dirty { 12.0 } else { 0.0 };
+        let g = crate::listing::elided(ui, &name, FontId::proportional(12.0), (room - 20.0 - dot).min(260.0), pal.text);
+        let (r, _) = ui.allocate_exact_size(vec2(g.size().x + 20.0 + dot, crate::kit::CHIP_H), Sense::hover());
+        crate::kit::chip_face(ui.painter(), r, false, false, None, crate::kit::round(), &pal);
+        if dirty {
+            ui.painter().circle_filled(pos2(r.left() + 13.0, r.center().y), 3.0, pal.accent);
+        }
+        ui.painter().galley(pos2(r.left() + 10.0 + dot, r.center().y - g.size().y / 2.0), g, pal.text);
     });
     let mut body = Rect::from_min_max(pos2(rect.left(), hdr.bottom() + 1.0), rect.max);
     let mut bui = ui.new_child(UiBuilder::new().max_rect(body).id_salt(("insp-edit-body", id)));

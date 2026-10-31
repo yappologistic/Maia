@@ -114,6 +114,12 @@ pub fn find_in(line: &str, q: &str, case: bool, out: &mut Vec<(u32, u32)>) {
     }
 }
 
+thread_local! {
+    /// Where find bars were drawn this frame: the toasts rise above one that is at the
+    /// window's bottom right, where they would cover its buttons.
+    pub static DRAWN: std::cell::RefCell<Vec<Rect>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// The bar, sliding up from the bottom of `body` as it opens; `any`: there are matches to
 /// step through. Returns what was asked and the room left above it.
 #[allow(clippy::too_many_arguments)]
@@ -132,42 +138,52 @@ pub fn bar(ui: &mut Ui, body: Rect, f: &mut Finder, count: &str, any: bool, id: 
     }
     let h = (BAR_H * rows * ease).round();
     let bar = Rect::from_min_max(pos2(body.left(), body.bottom() - h), body.max);
+    DRAWN.with(|d| d.borrow_mut().push(bar));
     let mut out = Out::None;
     let p = ui.painter().with_clip_rect(bar.intersect(ui.clip_rect()));
     p.rect_filled(bar, CornerRadius::ZERO, pal.bg);
     p.line_segment([pos2(bar.left(), bar.top() - 0.5), pos2(bar.right(), bar.top() - 0.5)], Stroke::new(1.0, pal.border));
     let top = Rect::from_min_size(bar.min, vec2(bar.width(), BAR_H));
-    let mut bui = ui.new_child(UiBuilder::new().max_rect(top.shrink2(vec2(6.0, 4.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    // The filter's pill, its count inside it at the end; up and down in one capsule
+    // beside it, as a panel groups its switches; the way out bare at the end. All three
+    // sit three points inside the bar, as everything in a 30 point row does.
+    use crate::kit::{INSET, ITEM, ROW_CAP_H, ROW_GLYPH, ROW_ITEM};
+    let round = crate::kit::round();
+    let row = Rect::from_center_size(top.center(), vec2(top.width() - 12.0, ROW_CAP_H));
+    let mut bui = ui.new_child(UiBuilder::new().max_rect(row).layout(egui::Layout::left_to_right(egui::Align::Center)));
     bui.set_clip_rect(bar.intersect(ui.clip_rect()));
     bui.set_opacity(ease);
-    bui.spacing_mut().item_spacing.x = 2.0;
-    let (gr, _) = bui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
-    paint_glyph(bui.painter(), Rect::from_center_size(gr.center(), Vec2::splat(13.0)), Glyph::Search, pal.text_dim);
+    let close_r = Rect::from_center_size(pos2(row.right() - ITEM.x / 2.0, row.center().y), ITEM);
+    let nav = Rect::from_min_max(pos2(close_r.left() - 4.0 - 2.0 * ROW_ITEM.x - 2.0 * INSET, row.top()), pos2(close_r.left() - 4.0, row.bottom()));
+    let pill = Rect::from_min_max(row.min, pos2((nav.left() - 6.0).max(row.left() + 60.0), row.bottom()));
+    if crate::kit::bar_item_at(&bui, close_r, egui::Id::new(("find close", id)), "toolbar button", "Close (Esc)", true, false, round, pal, |p, r, c| paint_glyph(p, r, Glyph::Close, c)).clicked() {
+        out = Out::Close;
+    }
+    crate::kit::capsule(bui.painter(), nav, round, pal);
+    for (k, (icon, tip, o)) in [(Glyph::ChevronUp, "Previous match (Shift+Enter)", Out::Prev), (Glyph::ChevronDown, "Next match (Enter)", Out::Next)].into_iter().enumerate() {
+        let ir = Rect::from_min_size(pos2(nav.left() + INSET + k as f32 * ROW_ITEM.x, nav.top() + INSET), ROW_ITEM);
+        if crate::kit::bar_item_at(&bui, ir, egui::Id::new(("find step", id, k)), tip, tip, any, false, round, pal, |p, r, c| paint_glyph(p, r.shrink((crate::kit::GLYPH - ROW_GLYPH) / 2.0 + 1.0), icon, c)).clicked() {
+            out = o;
+        }
+    }
+    crate::kit::capsule(bui.painter(), pill, round, pal);
+    paint_glyph(bui.painter(), Rect::from_center_size(pos2(pill.left() + 15.0, pill.center().y), Vec2::splat(13.0)), Glyph::Search, pal.text_dim);
     let none = !f.query.is_empty() && !any && count == "No matches";
-    let cg = bui.painter().layout_no_wrap(count.to_string(), FontId::proportional(11.5), if none { pal.danger } else { pal.text_dim });
-    // Right to left: the buttons and the count keep their room, the field takes the rest.
+    let cg = crate::listing::figures(&bui, count, FontId::proportional(11.5), 200.0, if none { pal.danger } else { pal.text_dim }, if none { pal.danger } else { crate::kit::words_of(pal.text_dim) });
+    // In a narrow panel the field keeps room to type in; the count gives way.
+    let show_count = pill.width() - 32.0 - cg.size().x - 14.0 >= 40.0;
+    let field_right = if show_count {
+        bui.painter().galley(pos2(pill.right() - 12.0 - cg.size().x, pill.center().y - cg.size().y / 2.0), cg.clone(), pal.text_dim);
+        pill.right() - 12.0 - cg.size().x - 6.0
+    } else {
+        pill.right() - 10.0
+    };
     let fid = egui::Id::new(("insp-find", id));
-    let mut r = None;
-    bui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        if crate::ui::glyph_button(ui, Glyph::Close, "Close (Esc)", true, pal).clicked() {
-            out = Out::Close;
-        }
-        for (icon, tip, o) in [(Glyph::ChevronDown, "Next match (Enter)", Out::Next), (Glyph::ChevronUp, "Previous match (Shift+Enter)", Out::Prev)] {
-            if icon_button(ui, icon, tip, any, pal) {
-                out = o;
-            }
-        }
-        // In a narrow panel the field keeps room to type in; the count gives way.
-        if ui.available_width() - cg.size().x - 10.0 >= 40.0 {
-            let (cr, _) = ui.allocate_exact_size(cg.size() + vec2(10.0, 0.0), Sense::hover());
-            ui.painter().galley(pos2(cr.left() + 4.0, cr.center().y - cg.size().y / 2.0), cg, pal.text_dim);
-        }
-        // The bar's height, whatever the Spacing.
-        ui.spacing_mut().interact_size.y = ui.available_height();
-        let te = egui::TextEdit::singleline(&mut f.query).id(fid).hint_text(egui::RichText::new("Find").color(pal.text_dim)).frame(crate::ui::bare_edit()).desired_width(ui.available_width()).font(FontId::proportional(12.5));
-        r = Some(ui.add(te));
-    });
+    let fr = Rect::from_min_max(pos2(pill.left() + 26.0, pill.top() + 1.0), pos2(field_right, pill.bottom() - 1.0));
+    let mut fui = bui.new_child(UiBuilder::new().max_rect(fr).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    fui.spacing_mut().interact_size.y = fr.height();
+    let te = egui::TextEdit::singleline(&mut f.query).id(fid).hint_text(egui::RichText::new("Find").color(pal.text_dim)).frame(crate::ui::bare_edit()).desired_width(fr.width()).font(FontId::proportional(12.5));
+    let r = Some(fui.add(te));
     let Some(r) = r else { return (out, body) };
     // As the bar slides up, only what shows of the field is there to click.
     crate::ui::note_control(&bui, r.rect.intersect(bar), "find field");
@@ -195,15 +211,19 @@ pub fn bar(ui: &mut Ui, body: Rect, f: &mut Finder, count: &str, any: bool, id: 
     }
     f.focused = ui.memory(|m| m.has_focus(fid));
     if let Some(rep) = f.replace.as_mut() {
-        let row = Rect::from_min_size(pos2(bar.left(), top.bottom()), vec2(bar.width(), BAR_H));
-        let mut rui = ui.new_child(UiBuilder::new().max_rect(row.shrink2(vec2(6.0, 4.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        let row = Rect::from_center_size(pos2(bar.center().x, top.bottom() + BAR_H / 2.0), vec2(bar.width() - 12.0, ROW_CAP_H));
+        let mut rui = ui.new_child(UiBuilder::new().max_rect(row).layout(egui::Layout::left_to_right(egui::Align::Center)));
         rui.set_clip_rect(bar.intersect(ui.clip_rect()));
         rui.set_opacity(ease);
         rui.spacing_mut().item_spacing.x = 6.0;
-        let (gr, _) = rui.allocate_exact_size(vec2(16.0, 20.0), Sense::hover());
-        theme::paint_symbol(rui.painter(), Rect::from_center_size(gr.center(), Vec2::splat(13.0)), "replace", pal.text_dim);
-        let w = (rui.available_width() - 150.0).max(40.0);
-        let r = rui.add(egui::TextEdit::singleline(rep).id_salt(("insp-replace", id)).hint_text(egui::RichText::new("Replace").color(pal.text_dim)).frame(crate::ui::bare_edit()).desired_width(w).font(FontId::proportional(12.5)));
+        // The replacement in a pill as the query's, the two actions after it.
+        let w = (rui.available_width() - 130.0).max(60.0);
+        let pr = Rect::from_min_size(row.min, vec2(w, ROW_CAP_H));
+        crate::kit::capsule(rui.painter(), pr, round, pal);
+        theme::paint_symbol(rui.painter(), Rect::from_center_size(pos2(pr.left() + 15.0, pr.center().y), Vec2::splat(13.0)), "replace", pal.text_dim);
+        rui.allocate_exact_size(vec2(26.0, ROW_CAP_H), Sense::hover());
+        let r = rui.add(egui::TextEdit::singleline(rep).id_salt(("insp-replace", id)).hint_text(egui::RichText::new("Replace").color(pal.text_dim)).frame(crate::ui::bare_edit()).desired_width(w - 36.0).font(FontId::proportional(12.5)));
+        rui.add_space(10.0);
         crate::ui::note_control(&rui, r.rect, "replace field");
         if r.lost_focus() && rui.input(|i| i.key_pressed(egui::Key::Enter)) {
             out = Out::Replace;
@@ -220,23 +240,20 @@ pub fn bar(ui: &mut Ui, body: Rect, f: &mut Finder, count: &str, any: bool, id: 
     (out, Rect::from_min_max(body.min, pos2(body.right(), bar.top() - 1.0)))
 }
 
-fn icon_button(ui: &mut Ui, icon: Glyph, tip: &'static str, enabled: bool, pal: &Palette) -> bool {
-    let (r, resp) = ui.allocate_exact_size(vec2(22.0, 20.0), if enabled { Sense::click() } else { Sense::hover() });
-    crate::ui::note_control(ui, r, tip);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, tip));
-    if enabled && resp.hovered() {
-        ui.painter().rect_filled(r, CornerRadius::same(4), pal.hover);
-    }
-    let col = if enabled { pal.text_dim } else { pal.text_dim.gamma_multiply(0.4) };
-    paint_glyph(ui.painter(), Rect::from_center_size(r.center(), Vec2::splat(12.0)), icon, col);
-    enabled && resp.on_hover_text(tip).clicked()
+fn small_button(ui: &mut Ui, label: &'static str, enabled: bool, pal: &Palette) -> bool {
+    let r = ui.add_enabled_ui(enabled, |ui| crate::kit::small_button(ui, label, pal)).inner;
+    crate::ui::note_control(ui, r.rect, label);
+    enabled && r.clicked()
 }
 
-fn small_button(ui: &mut Ui, label: &'static str, enabled: bool, pal: &Palette) -> bool {
-    let b = egui::Button::new(egui::RichText::new(label).size(11.5)).fill(pal.card()).stroke(Stroke::new(1.0, pal.card_line())).corner_radius(4.0).min_size(vec2(0.0, 20.0));
-    let r = ui.add_enabled(enabled, b);
-    crate::ui::note_control(ui, r.rect, label);
-    r.clicked()
+/// One match in the text: tinted in the accent, the current one with its hairline as
+/// well, so the letters under it stay as readable as the rest.
+pub fn paint_match(p: &egui::Painter, r: Rect, current: bool, pal: &Palette) {
+    if current {
+        p.rect(r.expand(1.0), CornerRadius::same(3), pal.accent.gamma_multiply(if pal.dark { 0.22 } else { 0.18 }), Stroke::new(1.0, pal.accent.gamma_multiply(0.85)), egui::StrokeKind::Inside);
+    } else {
+        p.rect_filled(r, CornerRadius::same(2), pal.accent.gamma_multiply(if pal.dark { 0.16 } else { 0.13 }));
+    }
 }
 
 /// Paint the matches on one row of a text preview: `cols(a, b)` gives the columns of the
@@ -251,12 +268,7 @@ pub fn paint_hits(p: &egui::Painter, hits: &[Hit], cur: Option<usize>, line: u32
         }
         let cols = |x: usize, y: usize| text.get(x..y).map_or(0, |t| t.chars().map(crate::inspector::char_cols).sum::<usize>()) as f32;
         let r = Rect::from_min_size(pos2(x0 + cols(a, s) * cw, top + 1.0), vec2((cols(s, e) * cw).max(2.0), h - 2.0));
-        if cur == Some(first + k) {
-            p.rect_filled(r.expand(1.0), CornerRadius::same(3), pal.accent.gamma_multiply(0.55));
-            p.rect_stroke(r.expand(1.0), CornerRadius::same(3), Stroke::new(1.0, pal.accent), egui::StrokeKind::Outside);
-        } else {
-            p.rect_filled(r, CornerRadius::same(2), pal.accent.gamma_multiply(0.25));
-        }
+        paint_match(p, r, cur == Some(first + k), pal);
     }
 }
 

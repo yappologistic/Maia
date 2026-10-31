@@ -1880,9 +1880,10 @@ pub fn view(ui: &mut Ui, rect: Rect, h: &mut History, wrap: &mut bool, env: &mut
         }
         let font = if icon.is_empty() { FontId::monospace(11.5) } else { FontId::proportional(12.0) };
         let g = crate::listing::elided(ui, &label, font, room.min(260.0), pal.text);
-        let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + iw + 20.0, 22.0), if hash.is_some() { Sense::click() } else { Sense::hover() });
+        let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + iw + 20.0, crate::kit::CHIP_H), if hash.is_some() { Sense::click() } else { Sense::hover() });
         let lit = hash.is_some() && resp.hovered();
-        ui.painter().rect_filled(r, CornerRadius::same(11), pal.accent.gamma_multiply(if lit { 0.36 } else { 0.22 }));
+        // A chip as the status bar's: what this view is of.
+        crate::kit::chip_face(ui.painter(), r, lit, false, None, crate::kit::round(), &pal);
         crate::theme::paint_symbol(ui.painter(), Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), Vec2::splat(12.0)), icon, pal.text);
         ui.painter().galley(pos2(r.left() + 10.0 + iw, r.center().y - g.size().y / 2.0), g, pal.text);
         if let Some(full) = hash {
@@ -2284,14 +2285,10 @@ fn files_summary(ui: &mut Ui, r: Rect, n: usize, totals: (u64, u64), toggle: boo
     let mut act = None;
     if toggle {
         let mut tui = ui.new_child(UiBuilder::new().max_rect(Rect::from_min_max(pos2(r.right() - 62.0, r.top()), r.max)).layout(Layout::left_to_right(Align::Center)));
-        crate::inspector::seg_frame(&mut tui, pal, |ui| {
-            if crate::inspector::seg_button(ui, !tree, "Show as a list", pal, |p, r, c| crate::theme::paint_glyph(p, r, Glyph::List, c)) && tree {
-                act = Some(Act::Tree(false));
-            }
-            if crate::inspector::seg_button(ui, tree, "Group by folder", pal, |p, r, c| crate::theme::paint_glyph(p, r, Glyph::ListTree, c)) && !tree {
-                act = Some(Act::Tree(true));
-            }
-        });
+        let items = [(Glyph::List, "Show as a list", "Show as a list"), (Glyph::ListTree, "Group by folder", "Group by folder")];
+        if let Some(k) = crate::kit::glyph_choice(&mut tui, egui::Id::new("commit files as"), &items, tree as usize, crate::kit::round(), pal) {
+            act = Some(Act::Tree(k == 1));
+        }
     }
     act
 }
@@ -2315,22 +2312,32 @@ fn text_seg(ui: &mut Ui, labels: [&str; 2], on: usize, tips: [&str; 2], what: [&
     let room = ((ui.available_width() - 4.0) / 2.0 - 16.0).max(16.0);
     let gs = labels.map(|t| crate::listing::elided(ui, t, font.clone(), room, pal.text));
     let w: f32 = gs.iter().map(|g| g.size().x + 16.0).sum::<f32>() + 4.0;
-    let (r, _) = ui.allocate_exact_size(vec2(w, 24.0), Sense::hover());
-    ui.painter().rect_filled(r, CornerRadius::same(6), pal.card());
-    ui.painter().rect_stroke(r, CornerRadius::same(6), Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
-    let (mut x, mut pick) = (r.left() + 2.0, None);
+    let (r, _) = ui.allocate_exact_size(vec2(w, crate::kit::ROW_CAP_H), Sense::hover());
+    let round = crate::kit::round();
+    crate::kit::capsule(ui.painter(), r, round, pal);
+    let (mut x, mut pick) = (r.left() + crate::kit::INSET, None);
+    let cells: Vec<Rect> = gs
+        .iter()
+        .map(|g| {
+            let br = Rect::from_min_size(pos2(x, r.top() + crate::kit::INSET), vec2(g.size().x + 16.0, crate::kit::ROW_ITEM.y));
+            x = br.right();
+            br
+        })
+        .collect();
+    // The lifted pill slides to the side picked, as a dialog's choices do.
+    let id = ui.scope_id().with(what);
+    let l = crate::kit::slide(ui.ctx(), id.with("l"), cells[on.min(1)].left() - r.left()) + r.left();
+    let pw = crate::kit::slide(ui.ctx(), id.with("w"), cells[on.min(1)].width());
+    crate::kit::item_face(ui.painter(), Rect::from_min_size(pos2(l, r.top() + crate::kit::INSET), vec2(pw, crate::kit::ROW_ITEM.y)), false, true, round, pal);
     for (i, g) in gs.into_iter().enumerate() {
-        let br = Rect::from_min_size(pos2(x, r.top() + 2.0), vec2(g.size().x + 16.0, 20.0));
-        x = br.right();
+        let br = cells[i];
         let resp = ui.interact(br, ui.id().with(what[i]), Sense::click());
         crate::ui::note_control(ui, br, what[i]);
-        let col = if i == on { Color32::WHITE } else { pal.text_dim };
-        if i == on {
-            ui.painter().rect_filled(br, CornerRadius::same(4), pal.accent.gamma_multiply(0.85));
-        } else if resp.hovered() {
-            ui.painter().rect_filled(br, CornerRadius::same(4), pal.hover);
+        if i != on && resp.hovered() {
+            crate::kit::item_face(ui.painter(), br, true, false, round, pal);
         }
-        ui.painter().galley(br.center() - g.size() / 2.0, g, col);
+        let col = crate::kit::item_ink(true, resp.hovered(), i == on, pal);
+        ui.painter().galley_with_override_text_color(br.center() - g.size() / 2.0, g, col);
         if resp.on_hover_text(tips[i]).clicked() && i != on {
             pick = Some(i);
         }

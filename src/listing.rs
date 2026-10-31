@@ -173,6 +173,12 @@ thread_local! {
 /// counts line up down a column. egui's shaper takes no OpenType features (no `tnum`),
 /// so each digit is given that room with space around it instead.
 pub fn tabular(ui: &Ui, text: &str, font: FontId, width: f32, color: Color32) -> Arc<Galley> {
+    figures(ui, text, font, width, color, color)
+}
+
+/// `tabular`, with the words among the figures ("KB", "files", "Today") in `words`: the
+/// figures are what is read, the words step back.
+pub fn figures(ui: &Ui, text: &str, font: FontId, width: f32, color: Color32, words: Color32) -> Arc<Galley> {
     let key = (font.size.to_bits(), ui.ctx().pixels_per_point().to_bits());
     let adv = DIGITS.with(|d| {
         *d.borrow_mut().entry(key).or_insert_with(|| {
@@ -185,16 +191,18 @@ pub fn tabular(ui: &Ui, text: &str, font: FontId, width: f32, color: Color32) ->
     });
     let widest = adv.iter().copied().fold(0.0, f32::max);
     let fmt = egui::TextFormat { font_id: font.clone(), color, ..Default::default() };
+    let wfmt = egui::TextFormat { font_id: font.clone(), color: words, ..Default::default() };
     // Half the pad before a narrow digit and half after it (as the next section's lead),
-    // so it sits in the middle of the widest digit's room.
+    // so it sits in the middle of the widest digit's room. A run of letters is a word.
     let mut job = LayoutJob::default();
     let mut run = String::new();
+    let mut word = false;
     let mut carry = 0.0;
     for ch in text.chars() {
         match ch.to_digit(10) {
             Some(d) => {
                 if !run.is_empty() {
-                    job.append(&run, carry, fmt.clone());
+                    job.append(&run, carry, if word { wfmt.clone() } else { fmt.clone() });
                     run.clear();
                     carry = 0.0;
                 }
@@ -203,11 +211,22 @@ pub fn tabular(ui: &Ui, text: &str, font: FontId, width: f32, color: Color32) ->
                 job.append(ch.encode_utf8(&mut b), carry + half, fmt.clone());
                 carry = half;
             }
-            None => run.push(ch),
+            None => {
+                let w = ch.is_alphabetic();
+                if w != word && !run.is_empty() && !ch.is_whitespace() {
+                    job.append(&run, carry, if word { wfmt.clone() } else { fmt.clone() });
+                    run.clear();
+                    carry = 0.0;
+                }
+                if !ch.is_whitespace() {
+                    word = w;
+                }
+                run.push(ch);
+            }
         }
     }
     if !run.is_empty() {
-        job.append(&run, carry, fmt);
+        job.append(&run, carry, if word { wfmt } else { fmt });
     }
     job.wrap = egui::text::TextWrapping { max_width: width.max(8.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
     ui.fonts_mut(|f| f.layout_job(job))
@@ -465,7 +484,9 @@ fn name_colour(pal: &theme::Palette, selected: bool) -> Color32 {
 }
 
 fn sel_colors(pal: &theme::Palette, selected: bool) -> (Color32, Color32, Color32) {
-    if selected { (pal.on_sel_dim(), pal.on_sel(), pal.on_sel()) } else { (pal.text_dim, pal.accent, Color32::TRANSPARENT) }
+    // A picked row is lifted, not filled: its text keeps the theme's own colours, except
+    // on a high-contrast theme's saturated selection.
+    if selected && pal.strong { (pal.on_sel_dim(), pal.on_sel(), pal.on_sel()) } else { (pal.text_dim, pal.accent, Color32::TRANSPARENT) }
 }
 
 /// After a row's name: its colour dots, then its other tags in small dim text. Returns
@@ -878,24 +899,19 @@ pub(crate) fn drop_target(ui: &Ui, rect: Rect, e: &Entry, env: &mut Env) -> bool
 
 fn paint_item_bg(p: &egui::Painter, r: Rect, selected: bool, cursor: bool, hovered: bool, drop: bool, env: &Env, rad: u8) {
     let pal = env.pal;
-    let fill = if selected && cursor && env.active {
-        pal.cursor
-    } else if selected {
-        pal.selected
+    // Picked rows lift a step, as a dialog's chosen row does; the panel with the keyboard
+    // marks them with the accent's bar, and lifts its cursor's row a little further.
+    if selected {
+        crate::kit::picked(p, r, rad, env.active, cursor && env.active, pal);
     } else if hovered {
-        pal.row_hover
-    } else {
-        Color32::TRANSPARENT
-    };
-    if fill != Color32::TRANSPARENT {
-        p.rect_filled(r, CornerRadius::same(rad), fill);
+        p.rect_filled(r, CornerRadius::same(rad), crate::kit::touch(pal));
     }
     // A high-contrast theme rings the cursor thick and in its text colour, over the
     // selection too, so it is found without looking for it.
     if pal.strong && cursor && env.active {
         p.rect_stroke(r, CornerRadius::same(rad), Stroke::new(2.0, pal.text), StrokeKind::Inside);
     } else if cursor && env.active && !selected {
-        p.rect_stroke(r.shrink(0.5), CornerRadius::same(rad), Stroke::new(1.0, pal.accent.gamma_multiply(0.7)), StrokeKind::Inside);
+        crate::kit::cursor_ring(p, r, rad, pal);
     }
     if drop {
         p.rect_stroke(r.shrink(0.5), CornerRadius::same(rad), Stroke::new(1.5, pal.accent), StrokeKind::Inside);
@@ -1082,6 +1098,18 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
     if tab::is_computer(&t.path) && !cols.iter().any(|(c, _)| *c == Column::Usage) {
         cols.push((Column::Usage, 150.0));
     }
+    // What folders hold means nothing where none is listed: those columns step aside
+    // rather than fill every row with "--", and come back with the first folder.
+    if !t.view.iter().any(|&i| t.entries.get(i as usize).is_some_and(|e| e.is_dir)) {
+        cols.retain(|(c, _)| !matches!(c, Column::Folders | Column::Files));
+    }
+    // No column narrower than its own title at this font size: a title cut to "Fold…"
+    // says nothing. Room is left for the sort arrow, and Type's for its funnel too.
+    let head_font = FontId::proportional((env.cfg.font_size * 0.85).round());
+    for (c, w) in cols.iter_mut().filter(|(c, _)| *c != Column::Name) {
+        let tw = ui.painter().layout_no_wrap(c.title().to_string(), head_font.clone(), pal.text_dim).size().x;
+        *w = w.max((tw + if *c == Column::Type { 48.0 } else { 34.0 }).ceil());
+    }
     let total_w: f32 = cols.iter().map(|c| c.1).sum::<f32>() + pad * 2.0;
     let body = Rect::from_min_max(pos2(rect.left(), rect.top() + header_h), rect.max);
     let content_w = total_w.max(body.width());
@@ -1188,8 +1216,9 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
                         t.cursor_screen_pos = Some(pos2(rr.left() + 40.0, rr.bottom()));
                     }
                     let drop = drop_target(ui, rr, &e, env);
+                    // Stripes take a row's own shape, so a lifted row sits among them as one.
                     if env.cfg.alt_rows && ri % 2 == 1 && !selected {
-                        ui.painter().rect_filled(rr, CornerRadius::ZERO, pal.alt);
+                        ui.painter().rect_filled(rr.shrink2(vec2(3.0, 0.5)), CornerRadius::same(6), pal.alt);
                     }
                     // The item being renamed drops its highlight; the others fade back.
                     let editing = rename_focus(ui, rr, idx, t, env);
@@ -1316,7 +1345,15 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
                                     _ => String::new(),
                                 };
                                 let figures = matches!(other, Column::Size | Column::Modified | Column::Created | Column::Accessed | Column::Deleted | Column::Taken | Column::Folders | Column::Files | Column::Dimensions | Column::Duration);
-                                let g = if figures { tabular(ui, &txt, small.clone(), inner.width(), dimc(sub)) } else { elided(ui, &txt, small.clone(), inner.width(), dimc(sub)) };
+                                // Figures line up and their words ("KB", "Today") step back; a
+                                // cell with nothing to say ("--") steps back further.
+                                let g = if txt == "--" {
+                                    elided(ui, &txt, small.clone(), inner.width(), dimc(crate::kit::words_of(crate::kit::words_of(sub))))
+                                } else if figures {
+                                    self::figures(ui, &txt, small.clone(), inner.width(), dimc(sub), dimc(crate::kit::words_of(sub)))
+                                } else {
+                                    elided(ui, &txt, small.clone(), inner.width(), dimc(sub))
+                                };
                                 let gx = if other.right_aligned() { inner.right() - g.size().x } else { inner.left() };
                                 ui.painter().galley(pos2(gx, cell.center().y - g.size().y / 2.0), g, sub);
                             }
@@ -1364,7 +1401,6 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
     let mut sort_click: Option<SortKey> = None;
     // The header steps back behind the rows: smaller, dim, regular weight. Its select-all
     // box and type funnel wait for the pointer, unless a type filter is on.
-    let head_font = FontId::proportional((env.cfg.font_size * 0.85).round());
     let over_header = ui.rect_contains_pointer(header);
     for (ci, (c, w)) in cols.iter().enumerate() {
         let w = col_w(*c, *w);
@@ -1372,7 +1408,7 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
         let resp = ui.interact(cell.intersect(header), Id::new(("hdr", t.id, ci)), Sense::click());
         let active_sort = c.sort_key() == Some(t.settings.sort);
         if resp.hovered() {
-            painter.rect_filled(cell, CornerRadius::same(4), pal.hover);
+            painter.rect_filled(cell.shrink2(vec2(2.0, 3.0)), CornerRadius::same(6), crate::kit::touch(&pal));
         }
         // Thin separator at each column's right edge (the resize handle).
         painter.line_segment([pos2(cell.right() - 0.5, cell.top() + 6.0), pos2(cell.right() - 0.5, cell.bottom() - 6.0)], Stroke::new(1.0, pal.border));
@@ -1422,13 +1458,18 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
             }
         }
         resp.context_menu(|ui| {
-            ui.label(egui::RichText::new("Columns").small().color(pal.text_dim));
-            for cc in Column::ALL {
-                if cc == Column::Name {
-                    continue;
-                }
-                let mut on = cols.iter().any(|(x, _)| *x == cc);
-                if ui.checkbox(&mut on, cc.title()).changed() {
+            ui.set_min_width(210.0);
+            // A column chosen but stepped aside for now is still chosen.
+            let chosen = |cc: Column| cols.iter().any(|(x, _)| *x == cc) || t.settings.columns.iter().any(|(x, _)| *x == cc);
+            let all: Vec<Column> = Column::ALL.into_iter().filter(|c| *c != Column::Name).collect();
+            let n_on = all.iter().filter(|c| chosen(**c)).count();
+            // The heading, and how many of them are on, as the sidebar counts its sections.
+            let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
+            ui.painter().text(pos2(hr.left() + 10.0, hr.bottom() - 4.0), Align2::LEFT_BOTTOM, "Columns", FontId::proportional(11.5), pal.text_dim);
+            let g = figures(ui, &format!("{n_on} of {}", all.len()), FontId::proportional(11.5), 80.0, pal.text_dim, crate::kit::words_of(pal.text_dim));
+            ui.painter().galley(pos2(hr.right() - 8.0 - g.size().x, hr.bottom() - 4.0 - g.size().y), g, pal.text_dim);
+            for cc in all {
+                if crate::popups::menu_check(ui, cc.title(), chosen(cc), None, &pal) {
                     toggle_col = Some(cc);
                 }
             }
@@ -1599,13 +1640,13 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
             match mode {
                 Mode::List => {
                     let editing = rename_focus(ui, r, idx, t, env);
-                    paint_item_bg(ui.painter(), r.shrink2(vec2(2.0, 0.5)), selected && !editing, is_cursor && !editing, resp.hovered() && !editing, drop, env, 6);
+                    paint_item_bg(ui.painter(), r.shrink2(vec2(3.0, 0.5)), selected && !editing, is_cursor && !editing, resp.hovered() && !editing, drop, env, 6);
                     if env.cut.contains(&e.path) {
                         paint_ants(ui, r.shrink2(vec2(3.0, 1.5)), env);
                     }
                     crate::compare::paint(ui.painter(), r, &e.path, &pal);
                     handle_item(ui, &resp, idx, t, env);
-                    let ic = Rect::from_min_size(pos2(r.left() + 6.0, r.center().y - 8.0), Vec2::splat(16.0));
+                    let ic = Rect::from_min_size(pos2(r.left() + 16.0, r.center().y - 8.0), Vec2::splat(16.0));
                     t.item_rects.push((idx, ic));
                     let boxed = !tab::is_computer(&t.path) && item_checkbox(ui, ic.shrink(1.0), idx, ui.rect_contains_pointer(r), t, env);
                     if boxed {
@@ -1704,13 +1745,13 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
                     if !rename_field(ui, name_line, idx, t, env, &font) {
                         let rows = if s < 72.0 { 1 } else { 2 };
                         let (sub, acc, _) = sel_colors(&pal, false);
-                        let mut job = name_job(ui, &display_name(&e, env.cfg), None, q, &font, dimc(pal.text), sub, acc, text_r.width(), rows);
+                        let mut job = name_job(ui, &display_name(&e, env.cfg), None, q, &font, dimc(if picked { crate::kit::on_lift(&pal) } else { pal.text }), sub, acc, text_r.width(), rows);
                         job.halign = egui::Align::Center;
                         let g = ui.fonts_mut(|f| f.layout_job(job));
                         let gh = g.size().y;
                         if picked {
                             let back = Rect::from_center_size(pos2(text_r.center().x, text_r.top() + gh / 2.0), vec2((g.size().x + 10.0).min(r.width() - 4.0), gh + 2.0));
-                            ui.painter().rect_filled(back, CornerRadius::same(5), pal.accent.gamma_multiply(if pal.dark { 0.35 } else { 0.22 }));
+                            ui.painter().rect_filled(back, CornerRadius::same(5), crate::kit::lift(&pal));
                         }
                         ui.painter().galley(pos2(text_r.center().x, text_r.top()), g, pal.text);
                         {
@@ -1868,7 +1909,7 @@ fn column_cells(ui: &Ui, r: Rect, ic: Rect, e: &Entry, env: &Env, q: &fuzzy::Que
     }
     if chev {
         let cr = Rect::from_center_size(pos2(r.right() - 6.0 - cs / 2.0, r.center().y), Vec2::splat(cs));
-        theme::paint_glyph(ui.painter(), cr, theme::Glyph::ChevronRight, dimc(if selected { pal.on_sel_dim() } else { pal.text_dim }));
+        theme::paint_glyph(ui.painter(), cr, theme::Glyph::ChevronRight, dimc(sub));
     }
     paint_mark(ui.painter(), pos2(dot_x, r.center().y), e, env, pal);
 }
@@ -1993,10 +2034,10 @@ fn own_column(ui: &mut Ui, cr: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Quer
             let drop = drop_target(ui, r, &e, env);
             let faded = env.cut.contains(&e.path) || unmounted(t, &e) || dim_ignored && crate::gitstatus::ignored(git.as_deref(), &e.path, &t.path);
             let editing = rename_focus(ui, r, idx, t, env);
-            paint_item_bg(ui.painter(), r.shrink2(vec2(2.0, 0.5)), selected && !editing, is_cursor && !editing, resp.hovered() && !editing, drop, env, 6);
+            paint_item_bg(ui.painter(), r.shrink2(vec2(3.0, 0.5)), selected && !editing, is_cursor && !editing, resp.hovered() && !editing, drop, env, 6);
             crate::compare::paint(ui.painter(), r, &e.path, &pal);
             handle_item(ui, &resp, idx, t, env);
-            let ic = Rect::from_min_size(pos2(r.left() + 6.0, r.center().y - 8.0), Vec2::splat(16.0));
+            let ic = Rect::from_min_size(pos2(r.left() + 16.0, r.center().y - 8.0), Vec2::splat(16.0));
             let boxed = !computer && item_checkbox(ui, ic.shrink(1.0), idx, ui.rect_contains_pointer(r), t, env);
             if computer {
                 paint_drive(ui, ic, t, &e, if faded { pal.text_dim.gamma_multiply(0.45) } else { pal.text_dim });
@@ -2048,15 +2089,13 @@ fn side_column(ui: &mut Ui, cr: Rect, col: &mut Tab, child: Option<u32>, env: &m
             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, &e.name));
             let drop = drop_target(ui, r, e, env);
             // The way down is marked quieter than a selection: the picking happens in the
-            // tab's own column. A step towards the text colour, the trail's own, so the
-            // selection's colour is left to the one folder that has it; a high-contrast
-            // theme keeps the selection's tint, where a grey step would not be seen.
+            // tab's own column. It lifts as a picked row does, without the accent's bar,
+            // which is left to the one folder that has the selection.
             if on {
-                let trail = if env.pal.strong { env.pal.panel.lerp_to_gamma(env.pal.selected, 0.6) } else { env.pal.panel.lerp_to_gamma(env.pal.text, if env.pal.dark { 0.1 } else { 0.08 }) };
-                ui.painter().rect_filled(r.shrink2(vec2(2.0, 0.5)), CornerRadius::same(4), trail);
+                crate::kit::picked(ui.painter(), r.shrink2(vec2(3.0, 0.5)), 6, false, false, env.pal);
             }
-            paint_item_bg(ui.painter(), r.shrink2(vec2(2.0, 0.5)), false, false, resp.hovered() && !on, drop, env, 6);
-            let ic = Rect::from_min_size(pos2(r.left() + 6.0, r.center().y - 8.0), Vec2::splat(16.0));
+            paint_item_bg(ui.painter(), r.shrink2(vec2(3.0, 0.5)), false, false, resp.hovered() && !on, drop, env, 6);
+            let ic = Rect::from_min_size(pos2(r.left() + 16.0, r.center().y - 8.0), Vec2::splat(16.0));
             let faded = env.cut.contains(&e.path);
             column_cells(ui, r, ic, e, env, &none, false, faded, true, git.as_deref());
             if resp.clicked() {

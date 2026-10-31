@@ -726,7 +726,7 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
         vz.map(|z: f32| !cur_columns && !cur_stack && crate::listing::view_name(z) == crate::listing::view_name(cur_zoom))
     };
     let screen = ctx.content_rect();
-    let row_h = 24.0;
+    let row_h = crate::popups::MENU_ROW;
     let w = 340.0;
     // The menu's height as drawn: rows and separators each with the Spacing gap after
     // them, the search row and the margins. Short of it, a menu opened low ran off the
@@ -752,7 +752,7 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
                 ui.set_width(w - 10.0);
                 {
                     let before = st.query.clone();
-                    let (te, closed) = crate::ui::search_row(ui, &mut st.query, "Select a command…", egui::TextStyle::Body.resolve(ui.style()), Glyph::Search, 13.0, true, &pal);
+                    let (te, closed) = crate::ui::search_row_in(ui, &mut st.query, "Select a command…", egui::TextStyle::Body.resolve(ui.style()), Glyph::Search, 13.0, true, true, &pal);
                     if closed {
                         close_now = true;
                     }
@@ -828,10 +828,7 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
                 egui::ScrollArea::vertical().max_height(screen.height() - 80.0 - bar_h).min_scrolled_height(screen.height() - 80.0 - bar_h).auto_shrink([false, true]).show(ui, |ui| {
                     for (i, (depth, it, label, is_pinned)) in rows.iter().enumerate() {
                         if is_sep(&it) {
-                            ui.add_space(3.0);
-                            let yy = ui.cursor().top();
-                            ui.painter().line_segment([pos2(ui.min_rect().left() + 6.0, yy), pos2(ui.min_rect().right() - 6.0, yy)], Stroke::new(1.0, pal.border));
-                            ui.add_space(4.0);
+                            crate::popups::menu_sep(ui, &pal);
                             continue;
                         }
                         let sel = i == st.sel;
@@ -852,7 +849,7 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
                         // mark at its edge. Only a high-contrast theme keeps the solid fill,
                         // and with it the colours made for it (`loud`).
                         if sel {
-                            crate::kit::chosen(ui.painter(), r, 5, &pal);
+                            crate::kit::chosen(ui.painter(), r, 6, &pal);
                         }
                         let loud = sel && pal.strong;
                         let on = if loud { pal.on_sel() } else { pal.text };

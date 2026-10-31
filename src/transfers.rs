@@ -157,24 +157,24 @@ pub fn clash_box(ui: &mut Ui, job: &Job, clash: &Clash, same: bool, pal: &Palett
         ui.add(egui::Label::new(job_text).wrap());
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            let b = ui.add(egui::Button::new(egui::RichText::new("Keep both").color(pal.on_accent())).fill(pal.accent).small());
+            let b = crate::kit::small_main_button(ui, "Keep both", pal);
             crate::ui::note_control(ui, b.rect, "clash keep both");
             if b.clicked() {
                 answer = Some(Conflict::KeepBoth);
             }
-            let r = ui.add(egui::Button::new("Replace").small()).on_hover_text("The one there goes to the trash; Undo brings it back");
+            let r = crate::kit::small_button(ui, "Replace", pal).on_hover_text("The one there goes to the trash; Undo brings it back");
             crate::ui::note_control(ui, r.rect, "clash replace");
             if r.clicked() {
                 answer = Some(Conflict::Overwrite);
             }
             if clash.dirs {
-                let m = ui.add(egui::Button::new("Merge").small()).on_hover_text("Copy into the folder there, replacing files");
+                let m = crate::kit::small_button(ui, "Merge", pal).on_hover_text("Copy into the folder there, replacing files");
                 crate::ui::note_control(ui, m.rect, "clash merge");
                 if m.clicked() {
                     answer = Some(Conflict::Merge);
                 }
             }
-            let s = ui.add(egui::Button::new("Skip").small());
+            let s = crate::kit::small_button(ui, "Skip", pal);
             crate::ui::note_control(ui, s.rect, "clash skip");
             if s.clicked() {
                 answer = Some(Conflict::Skip);
@@ -502,22 +502,22 @@ fn grip(p: &egui::Painter, c: Pos2, col: Color32) {
     }
 }
 
-/// The chip in the status bar: the text, and a fill along its foot as far as the jobs
-/// have got. Returns its response.
-pub fn chip(ui: &mut Ui, text: &str, frac: f32, open: bool, font: FontId, pal: &Palette) -> Option<egui::Response> {
-    let g = ui.painter().layout_no_wrap(text.to_string(), font, pal.text_dim);
-    let w = g.size().x + 12.0;
+/// The chip in the status bar: a pill that fills from the left as far as the jobs have
+/// got, its figures over the fill; lifted while the list of them is open. Returns its
+/// response.
+pub fn chip(ui: &mut Ui, text: &str, frac: f32, open: bool, font: FontId, round: bool, pal: &Palette) -> Option<egui::Response> {
+    let g = crate::listing::figures(ui, text, font, 400.0, pal.text, crate::kit::words_of(pal.text_dim));
+    let w = g.size().x + 20.0;
     if w > ui.available_width() {
         return None;
     }
-    let (r, resp) = ui.allocate_exact_size(vec2(w, 20.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(w, crate::kit::CHIP_H), Sense::click());
     crate::ui::note_control(ui, r, "transfers chip");
-    if resp.hovered() || open {
-        ui.painter().rect_filled(r, CornerRadius::same(5), if open { pal.accent.gamma_multiply(0.2) } else { pal.hover });
+    crate::kit::chip_face(ui.painter(), r, resp.hovered(), open, Some(frac), round, pal);
+    if open {
+        ui.painter().galley_with_override_text_color(pos2(r.left() + 10.0, r.center().y - g.size().y / 2.0), g, crate::kit::on_lift(pal));
+    } else {
+        ui.painter().galley(pos2(r.left() + 10.0, r.center().y - g.size().y / 2.0), g, pal.text);
     }
-    ui.painter().galley(pos2(r.left() + 6.0, r.center().y - g.size().y / 2.0), g, pal.text_dim);
-    let bar = Rect::from_min_max(pos2(r.left() + 5.0, r.bottom() - 4.0), pos2(r.right() - 5.0, r.bottom() - 2.5));
-    ui.painter().rect_filled(bar, CornerRadius::same(1), pal.border);
-    ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac, bar.height())), CornerRadius::same(1), pal.accent);
     Some(resp.on_hover_text("Copies and moves under way: pause them, put them in another order"))
 }

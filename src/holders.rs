@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use egui::{Color32, CornerRadius, FontId, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{CornerRadius, FontId, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 
 use crate::app::App;
 use crate::popups::{self as pp, Popup};
@@ -591,7 +591,7 @@ pub fn popup(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
                 ui.add(egui::Label::new(egui::RichText::new(q).color(pal.text)).wrap());
                 pp::dialog_buttons(ui, |ui| {
                     let label = if a.force { "Force Stop" } else { "Stop" };
-                    let b = ui.add(egui::Button::new(egui::RichText::new(label).color(Color32::WHITE)).fill(pal.danger).min_size(vec2(72.0, 0.0)));
+                    let b = pp::danger_button(ui, label, &pal);
                     crate::ui::note_control(ui, b.rect, "holder confirm");
                     confirm |= b.clicked();
                     let c = pp::plain_button(ui, "Cancel", &pal);

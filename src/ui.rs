@@ -33,8 +33,19 @@ pub fn bare_edit() -> egui::Frame {
 /// the field's response and whether the close button was clicked.
 #[allow(clippy::too_many_arguments)]
 pub fn search_row(ui: &mut Ui, text: &mut String, hint: &str, font: FontId, glyph: Glyph, glyph_side: f32, close: bool, pal: &Palette) -> (egui::Response, bool) {
+    search_row_in(ui, text, hint, font, glyph, glyph_side, close, false, pal)
+}
+
+/// `search_row`, in the filter's pill when `pill`: every search field looks alike.
+#[allow(clippy::too_many_arguments)]
+pub fn search_row_in(ui: &mut Ui, text: &mut String, hint: &str, font: FontId, glyph: Glyph, glyph_side: f32, close: bool, pill: bool, pal: &Palette) -> (egui::Response, bool) {
     let probe = ui.painter().layout_no_wrap("H".into(), font.clone(), Color32::WHITE);
-    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), (probe.size().y + 6.0).max(26.0)), Sense::hover());
+    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), (probe.size().y + 6.0).max(if pill { crate::kit::CAP_H } else { 26.0 })), Sense::hover());
+    let inset = if pill { 6.0 } else { 0.0 };
+    if pill {
+        crate::kit::capsule(ui.painter(), row, crate::kit::round(), pal);
+    }
+    let row = row.shrink2(vec2(inset, 0.0));
     let field = Rect::from_min_max(pos2(row.left() + 24.0, row.top()), pos2(row.right() - if close { 26.0 } else { 4.0 }, row.bottom()));
     let out = ui
         .scope_builder(UiBuilder::new().max_rect(field), |ui| {
@@ -49,7 +60,7 @@ pub fn search_row(ui: &mut Ui, text: &mut String, hint: &str, font: FontId, glyp
         let cr = Rect::from_center_size(pos2(row.right() - 11.0, mid), vec2(22.0, 22.0));
         let cresp = ui.interact(cr, ui.id().with("search row close"), Sense::click());
         if cresp.hovered() {
-            ui.painter().rect_filled(cr, CornerRadius::same(4), pal.hover);
+            ui.painter().rect_filled(cr, crate::kit::radius(cr.height(), crate::kit::round()), crate::kit::touch(pal));
         }
         paint_glyph(ui.painter(), Rect::from_center_size(cr.center(), Vec2::splat(10.0)), Glyph::Close, pal.text_dim);
         closed = cresp.on_hover_text("Close (Esc)").clicked();
@@ -115,15 +126,13 @@ pub fn glyph_button_as(ui: &mut Ui, g: Glyph, tip: &str, enabled: bool, pal: &Pa
     if no_room(ui, 26.0) {
         return ui.allocate_exact_size(Vec2::ZERO, Sense::hover()).1;
     }
-    let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 24.0), if enabled { Sense::click() } else { Sense::hover() });
+    let (rect, resp) = ui.allocate_exact_size(crate::kit::ITEM, if enabled { Sense::click() } else { Sense::hover() });
     note_control(ui, rect, what);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, tip));
-    if resp.hovered() && enabled {
-        // Toolbar buttons light up with a tint of the accent.
-        ui.painter().rect_filled(rect, CornerRadius::same(5), pal.row_hover);
-    }
-    let col = if enabled { if resp.hovered() { pal.text } else { pal.text_dim } } else { pal.text_dim.gamma_multiply(0.4) };
-    paint_glyph(ui.painter(), Rect::from_center_size(rect.center(), Vec2::splat(15.0)), g, col);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, tip));
+    // A bar's item standing alone: half a step lifted under the pointer, as in a group.
+    let hot = resp.hovered() && enabled;
+    crate::kit::item_face(ui.painter(), rect, hot, false, crate::kit::round(), pal);
+    paint_glyph(ui.painter(), Rect::from_center_size(rect.center(), Vec2::splat(crate::kit::GLYPH)), g, crate::kit::item_ink(enabled, hot, false, pal));
     if !tip.is_empty() {
         resp.on_hover_text(tip)
     } else {
@@ -1157,17 +1166,20 @@ impl App {
     }
 
     fn header_ui(&mut self, ui: &mut Ui, id: u64, rect: Rect) {
+        use crate::kit::{CAP_H, INSET, ITEM};
         let pal = self.pal;
-        // The ⋮ menu keeps its place at the right end whatever the width; everything else
+        let round = self.cfg.round_corners;
+        // Three capsules of one height, then the ⋮ menu: the way back and up, the path
+        // with what belongs to the folder (its saved view, its bookmark), and the filter.
+        // The menu keeps its place at the right end whatever the width; everything else
         // gives way before it (a narrow split ran its buttons into the next panel).
-        let menu_w = 28.0;
-        let menu_r = Rect::from_center_size(pos2(rect.right() - 6.0 - menu_w / 2.0, rect.center().y), vec2(menu_w, 24.0));
+        let menu_r = Rect::from_center_size(pos2(rect.right() - 6.0 - ITEM.x / 2.0, rect.center().y), ITEM);
         let left = Rect::from_min_max(pos2(rect.left() + 6.0, rect.top()), pos2((menu_r.left() - 4.0).max(rect.left() + 6.0), rect.bottom()));
         let outer_clip = rect.intersect(ui.clip_rect());
         let mut child = ui.new_child(UiBuilder::new().max_rect(left).layout(egui::Layout::left_to_right(egui::Align::Center)));
         child.set_clip_rect(left.intersect(ui.clip_rect()));
         let ui = &mut child;
-        ui.spacing_mut().item_spacing.x = 2.0;
+        ui.spacing_mut().item_spacing.x = 6.0;
         let (can_back, can_fwd, path, flatten, saved) = {
             let t = self.panels[&id].tab();
             (t.can_back() || t.flatten, t.can_forward(), t.path.clone(), t.flatten || t.expand_all_on, t.saved_scope.is_some())
@@ -1180,47 +1192,30 @@ impl App {
             (t.hist_pos.checked_sub(1).and_then(|i| t.history.get(i)).map(|h| show(&h.path)), t.history.get(t.hist_pos + 1).map(|h| show(&h.path)))
         };
         let up_to = if tab::is_computer(&path) { None } else if tab::is_github(&path) { Some("Computer".into()) } else { Some(path.parent().map(|p| p.display().to_string()).unwrap_or_else(|| "Computer".into())) };
-        let r = glyph_button(ui, Glyph::Back, "", can_back, &pal);
-        if cmd_tip(r, back_to, Cmd::Back, &self.keymap, &pal).clicked() {
-            cmd = Some(Cmd::Back);
-        }
-        let r = glyph_button(ui, Glyph::Forward, "", can_fwd, &pal);
-        if cmd_tip(r, fwd_to, Cmd::Forward, &self.keymap, &pal).clicked() {
-            cmd = Some(Cmd::Forward);
-        }
-        let r = glyph_button(ui, Glyph::Up, "", !tab::is_computer(&path), &pal);
-        if cmd_tip(r, up_to, Cmd::Up, &self.keymap, &pal).clicked() {
-            cmd = Some(Cmd::Up);
-        }
-        let hr = glyph_button(ui, Glyph::ChevronDown, "Recent locations", true, &pal);
-        if hr.clicked() {
-            self.popup = Popup::history(id, hr.rect.left_bottom());
-        }
-        toolbar_sep(ui, &pal);
-        // Lock (saved view settings): open when this folder follows the general view.
-        let lr = glyph_button_col(ui, if saved { Glyph::Lock } else { Glyph::LockOpen }, if saved { "View settings saved for this folder" } else { "Save view settings for this folder" }, if saved { pal.accent } else { pal.text_dim }, &pal);
-        if lr.clicked() {
-            self.popup = Popup::saved_view(id);
-        }
-        // Bookmark star
-        let bookmarked = self.ud.bookmarks.contains(&path);
-        let star_room = !no_room(ui, 24.0);
-        let (r, resp) = ui.allocate_exact_size(if star_room { vec2(24.0, 24.0) } else { Vec2::ZERO }, Sense::click());
-        if resp.hovered() {
-            ui.painter().rect_filled(r, CornerRadius::same(5), pal.hover);
-        }
-        if star_room {
-            paint_bookmark(ui.painter(), Rect::from_center_size(r.center(), Vec2::splat(15.0)), bookmarked, if bookmarked { pal.text } else { pal.text_dim });
-        }
-        if cmd_tip(resp, Some(if bookmarked { "Remove bookmark".into() } else { "Bookmark this folder".into() }), Cmd::ToggleBookmark, &self.keymap, &pal).clicked() && !tab::is_place(&path) {
-            self.actions.push(Action::FocusPanel(id));
-            if bookmarked {
-                self.actions.push(Action::BookmarkRemove(path.clone()));
-            } else {
-                self.actions.push(Action::BookmarkAdd(path.clone()));
+        let hist_open = matches!(self.popup, Popup::History { panel, .. } if panel == id);
+        let mut hist_at = None;
+        let keymap = &self.keymap;
+        crate::kit::capsule_group(ui, round, &pal, |ui| {
+            let r = crate::kit::bar_item(ui, "toolbar button", "", can_back, false, round, &pal, |p, r, c| paint_glyph(p, r, Glyph::Back, c));
+            if cmd_tip(r, back_to, Cmd::Back, keymap, &pal).clicked() {
+                cmd = Some(Cmd::Back);
             }
+            let r = crate::kit::bar_item(ui, "toolbar button", "", can_fwd, false, round, &pal, |p, r, c| paint_glyph(p, r, Glyph::Forward, c));
+            if cmd_tip(r, fwd_to, Cmd::Forward, keymap, &pal).clicked() {
+                cmd = Some(Cmd::Forward);
+            }
+            let r = crate::kit::bar_item(ui, "toolbar button", "", !tab::is_computer(&path), false, round, &pal, |p, r, c| paint_glyph(p, r, Glyph::Up, c));
+            if cmd_tip(r, up_to, Cmd::Up, keymap, &pal).clicked() {
+                cmd = Some(Cmd::Up);
+            }
+            let hr = crate::kit::bar_item(ui, "toolbar button", "Recent locations", true, hist_open, round, &pal, |p, r, c| paint_glyph(p, r, Glyph::ChevronDown, c));
+            if hr.clicked() {
+                hist_at = Some(hr.rect.left_bottom());
+            }
+        });
+        if let Some(at) = hist_at {
+            self.popup = Popup::history(id, at);
         }
-        toolbar_sep(ui, &pal);
         // The filter field at the right end: compact while idle, wider while it is used,
         // and never taking the path's room below a few segments.
         let rest = ui.available_width();
@@ -1231,34 +1226,56 @@ impl App {
         };
         let fw = if github { 0.0 } else if busy { (rest * 0.45).clamp(170.0, 340.0) } else { (rest * 0.24).clamp(90.0, 210.0) };
         let fw = if github { 0.0 } else { fw.min(rest - 110.0).max(64.0f32.min(rest * 0.5)) };
-        let crumbs_w = (rest - fw - if fw > 0.0 { 6.0 } else { 0.0 }).max(0.0);
-        let crumbs_rect = Rect::from_min_size(ui.cursor().min, vec2(crumbs_w, 26.0));
-        let crumbs_rect = Rect::from_center_size(pos2(crumbs_rect.center().x, rect.center().y), crumbs_rect.size());
-        ui.allocate_rect(crumbs_rect, Sense::hover());
-        let smart = self.panels[&id].tab().smart.as_ref().map(|s| s.name.clone());
-        self.breadcrumbs(ui, id, crumbs_rect, &path, flatten, smart);
+        // The filter keeps to the right end of the room, the path takes what is left before
+        // it: measured from both ends, neither runs into the menu or is cut short.
+        let end = ui.max_rect().right();
+        let fr = Rect::from_min_max(pos2(end - fw, rect.center().y - CAP_H / 2.0), pos2(end, rect.center().y + CAP_H / 2.0));
+        let path_w = ((if fw > 0.0 { fr.left() - 6.0 } else { end }) - ui.cursor().min.x).max(0.0);
+        let cap = Rect::from_min_size(pos2(ui.cursor().min.x, rect.center().y - CAP_H / 2.0), vec2(path_w, CAP_H));
+        ui.allocate_rect(cap, Sense::hover());
+        if path_w > 2.0 * INSET + 8.0 {
+            crate::kit::capsule(ui.painter(), cap, round, &pal);
+            // The folder's own two, inside the path at its end, when there is room for
+            // them and a few segments.
+            let own = path_w >= 2.0 * ITEM.x + 2.0 * INSET + 96.0;
+            let inner = cap.shrink(INSET);
+            let crumbs_rect = Rect::from_min_max(inner.min, pos2(if own { inner.right() - 2.0 * ITEM.x - 2.0 } else { inner.right() }, inner.bottom()));
+            let smart = self.panels[&id].tab().smart.as_ref().map(|s| s.name.clone());
+            self.breadcrumbs(ui, id, crumbs_rect, &path, flatten, smart);
+            if own {
+                // Lock (saved view settings): open when this folder follows the general view.
+                let lr = Rect::from_min_size(pos2(inner.right() - 2.0 * ITEM.x, inner.top()), ITEM);
+                let lresp = crate::kit::bar_item_at(ui, lr, Id::new(("saved view", id)), "toolbar button", if saved { "View settings saved for this folder" } else { "Save view settings for this folder" }, true, false, round, &pal, |p, r, c| paint_glyph(p, r, if saved { Glyph::Lock } else { Glyph::LockOpen }, if saved { pal.accent } else { c }));
+                if lresp.clicked() {
+                    self.popup = Popup::saved_view(id);
+                }
+                // Bookmark ribbon: solid while the folder is bookmarked.
+                let bookmarked = self.ud.bookmarks.contains(&path);
+                let br = Rect::from_min_size(pos2(inner.right() - ITEM.x, inner.top()), ITEM);
+                let bresp = crate::kit::bar_item_at(ui, br, Id::new(("bookmark", id)), "bookmark", "", true, false, round, &pal, |p, r, c| paint_bookmark(p, r, bookmarked, if bookmarked { pal.text } else { c }));
+                if cmd_tip(bresp, Some(if bookmarked { "Remove bookmark".into() } else { "Bookmark this folder".into() }), Cmd::ToggleBookmark, &self.keymap, &pal).clicked() && !tab::is_place(&path) {
+                    self.actions.push(Action::FocusPanel(id));
+                    if bookmarked {
+                        self.actions.push(Action::BookmarkRemove(path.clone()));
+                    } else {
+                        self.actions.push(Action::BookmarkAdd(path.clone()));
+                    }
+                }
+            }
+        }
         if fw > 0.0 {
-            ui.add_space(4.0);
-            // Tall enough for the text at larger font sizes: a taller line than the box hung
-            // below its middle.
-            let fh = (self.cfg.font_size * 1.3 + 6.0).clamp(22.0, HEADER_H - 6.0);
-            let fr = Rect::from_center_size(pos2(ui.cursor().min.x + fw / 2.0, rect.center().y), vec2(fw, fh));
-            ui.allocate_rect(fr, Sense::hover());
             self.filter_field(ui, id, fr);
         }
-        let r = menu_r;
         ui.set_clip_rect(outer_clip);
-        let resp = ui.interact(r, Id::new(("panel menu", id)), Sense::click());
-        note_control(ui, r, "panel menu");
-        if resp.hovered() {
-            ui.painter().rect_filled(r, CornerRadius::same(5), pal.hover);
-        }
-        for dy in [-4.5, 0.0, 4.5] {
-            ui.painter().circle_filled(r.center() + vec2(0.0, dy), 1.5, pal.text_dim);
-        }
-        if resp.on_hover_text("Panel menu").clicked() {
+        let open = matches!(self.popup, Popup::PanelMenu { panel, .. } if panel == id);
+        let resp = crate::kit::bar_item_at(ui, menu_r, Id::new(("panel menu", id)), "panel menu", "Panel menu", true, open, round, &pal, |p, r, c| {
+            for dy in [-4.5, 0.0, 4.5] {
+                p.circle_filled(r.center() + vec2(0.0, dy), 1.5, c);
+            }
+        });
+        if resp.clicked() {
             self.actions.push(Action::FocusPanel(id));
-            self.popup = Popup::panel_menu(id, r.left_bottom());
+            self.popup = Popup::panel_menu(id, menu_r.left_bottom());
         }
         if let Some(c) = cmd {
             self.actions.push(Action::FocusPanel(id));
@@ -1270,9 +1287,10 @@ impl App {
         let pal = self.pal;
         let font = FontId::proportional(self.cfg.font_size);
         // Empty space → GoTo with the current path.
+        let round = self.cfg.round_corners;
         let bg = ui.interact(rect, Id::new(("crumbs_bg", id)), Sense::click());
         if bg.hovered() {
-            ui.painter().rect_filled(rect, CornerRadius::same(6), pal.raised.gamma_multiply(0.5));
+            ui.painter().rect_filled(rect, crate::kit::radius(rect.height(), round), crate::kit::touch(&pal));
         }
         if bg.clicked() {
             self.actions.push(Action::FocusPanel(id));
@@ -1339,35 +1357,50 @@ impl App {
             }
         }
         let sep_w = 16.0;
-        let mut widths: Vec<f32> = segs.iter().map(|(l, _)| ui.painter().layout_no_wrap(l.clone(), font.clone(), pal.text).size().x + 12.0).collect();
-        // Narrow panels: shrink every segment (eliding with "…") before dropping any.
-        let avail = rect.width() - 8.0 - sep_w * widths.len() as f32;
-        let over = widths.iter().sum::<f32>() - avail;
-        if over > 0.0 && avail > 0.0 {
-            // The folders above give way; the current one keeps its whole name, and only
-            // shrinks below when it alone is wider than the bar.
-            let (min_w, n) = (44.0, widths.len());
-            let shrinkable: f32 = widths[..n - 1].iter().map(|w| (w - min_w).max(0.0)).sum();
+        let ell_w = 22.0;
+        let mut widths: Vec<f32> = segs.iter().map(|(l, _)| ui.painter().layout_no_wrap(l.clone(), font.clone(), pal.text).size().x + 16.0).collect();
+        // Too long for the bar: the middle folds into "…" first, so the names that show
+        // are whole, keeping where the path starts and where it ends.
+        let n = segs.len();
+        let room = rect.width() - 4.0;
+        let span = |widths: &[f32], shown: &[usize]| -> f32 {
+            let mut w = 0.0;
+            let mut prev: Option<usize> = None;
+            for &i in shown {
+                if prev.is_some_and(|q| q + 1 != i) || (prev.is_none() && i > 0) {
+                    w += ell_w;
+                }
+                w += widths[i] + sep_w;
+                prev = Some(i);
+            }
+            w
+        };
+        let mut shown: Vec<usize> = (0..n).collect();
+        let mut start = 1;
+        while span(&widths, &shown) > room && start + 1 < n {
+            start += 1;
+            shown = std::iter::once(0).chain(start..n).collect();
+        }
+        // Still too long: the names that show give way (eliding with "…"), the current
+        // one last; then the start goes too.
+        let over = span(&widths, &shown) - room;
+        if over > 0.0 {
+            let min_w = 48.0;
+            let (head, last) = shown.split_at(shown.len() - 1);
+            let shrinkable: f32 = head.iter().map(|&i| (widths[i] - min_w).max(0.0)).sum();
             if shrinkable > 0.0 {
                 let k = (over / shrinkable).min(1.0);
-                for w in widths[..n - 1].iter_mut() {
-                    *w -= (*w - min_w).max(0.0) * k;
+                for &i in head {
+                    widths[i] -= (widths[i] - min_w).max(0.0) * k;
                 }
             }
+            if span(&widths, &shown) > room && shown.len() > 1 && last[0] > 0 {
+                shown.remove(0);
+            }
         }
-        let mut start = 0;
-        let total = |s: usize| widths[s..].iter().sum::<f32>() + sep_w * (widths.len() - s) as f32 + if s > 0 { 24.0 } else { 0.0 };
-        while start + 1 < segs.len() && total(start) > rect.width() - 8.0 {
-            start += 1;
-        }
-        let mut x = rect.left() + 2.0;
-        if start > 0 {
-            ui.painter().text(pos2(x + 8.0, rect.center().y), Align2::CENTER_CENTER, "…", font.clone(), pal.text_dim);
-            x += 20.0;
-        }
-        let n = segs.len();
-        // Going into a folder, the new names rise into the path; an accent line moves
-        // under the folder shown. Kept per panel: the path drawn and since when.
+        // Going into a folder, the new names rise into the path; the lifted pill of the
+        // folder shown slides to it from the last one. Kept per panel: the path drawn and
+        // since when.
         let now = ui.input(|i| i.time);
         let anim = self.cfg.animations;
         let key = Id::new(("crumb moves", id));
@@ -1389,28 +1422,39 @@ impl App {
         if rise < 1.0 {
             ui.ctx().request_repaint();
         }
-        let mut under: Option<Rect> = None;
-        for (i, (label, p)) in segs.iter().enumerate().skip(start) {
+        let pill_slot = ui.painter().add(egui::Shape::Noop);
+        let rad = crate::kit::radius(rect.height(), round);
+        let mut here: Option<Rect> = None;
+        let mut x = rect.left();
+        let mut prev: Option<usize> = None;
+        for &i in &shown {
+            let (label, p) = &segs[i];
+            // A gap in what is shown: the folded middle.
+            if prev.is_some_and(|q| q + 1 != i) || (prev.is_none() && i > 0) {
+                ui.painter().text(pos2(x + ell_w / 2.0 - 2.0, rect.center().y), Align2::CENTER_CENTER, "…", font.clone(), pal.text_dim);
+                x += ell_w;
+            }
+            prev = Some(i);
             let last = i + 1 == n;
             let fresh = i >= kept && rise < 1.0;
-            let room = widths[i].min(rect.right() - x - 4.0).max(20.0);
-            let dropped_here = matches!(&self.popup, Popup::PathDropdown(st) if st.panel == id && st.dir == *p);
-            let g = listing::elided(ui, label, font.clone(), room - 10.0, if dropped_here { Color32::WHITE } else if last { pal.text } else { pal.text_dim });
-            // Shortened segments take only the width of their (elided) text.
-            let w = (g.size().x + 12.0).min(room);
-            let r = Rect::from_min_size(pos2(x, rect.top() + 1.0), vec2(w, rect.height() - 2.0));
-            let resp = ui.interact(r, Id::new(("crumb", id, i)), Sense::click());
-            // The segment whose dropdown is open becomes an accent pill.
+            let room = widths[i].min(rect.right() - x - 2.0).max(20.0);
             let dropped = matches!(&self.popup, Popup::PathDropdown(st) if st.panel == id && st.dir == *p);
+            let g = listing::elided(ui, label, font.clone(), room - 14.0, if last || dropped { pal.text } else { pal.text_dim });
+            // Shortened segments take only the width of their (elided) text.
+            let w = (g.size().x + 16.0).min(room);
+            let r = Rect::from_min_size(pos2(x, rect.top()), vec2(w, rect.height()));
+            let resp = ui.interact(r, Id::new(("crumb", id, i)), Sense::click());
+            // The segment whose dropdown is open lifts, with its chevron.
             if dropped {
-                ui.painter().rect_filled(Rect::from_min_max(r.min, pos2(r.right() + sep_w, r.bottom())), CornerRadius::same(5), pal.accent);
-            } else if resp.hovered() {
-                ui.painter().rect_filled(r, CornerRadius::same(5), pal.hover);
+                ui.painter().rect(Rect::from_min_max(r.min, pos2(r.right() + sep_w, r.bottom())), rad, crate::kit::lift(&pal), Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+            } else if resp.hovered() && !last {
+                ui.painter().rect_filled(r, rad, crate::kit::touch(&pal));
             }
             let (dy, a) = if fresh { (6.0 * (1.0 - rise), rise) } else { (0.0, 1.0) };
-            ui.painter().galley(pos2(r.left() + 6.0, r.center().y - g.size().y / 2.0 + dy), g, pal.text.gamma_multiply(a));
+            let tc = if last || dropped { crate::kit::on_lift(&pal) } else if resp.hovered() { pal.text } else { pal.text_dim };
+            ui.painter().galley(pos2(r.left() + 8.0, r.center().y - g.size().y / 2.0 + dy), g, tc.gamma_multiply(a));
             if last {
-                under = Some(Rect::from_min_max(pos2(r.left() + 6.0, r.bottom() - 3.0), pos2(r.left() + 6.0 + (w - 12.0).max(4.0), r.bottom() - 1.0)));
+                here = Some(r);
             }
             if resp.clicked() {
                 self.actions.push(Action::Navigate { panel: id, path: p.clone() });
@@ -1424,16 +1468,16 @@ impl App {
             x += w;
             // Separator chevron opens the subfolder dropdown for this segment.
             if !tab::is_place(p) || !last {
-                let sr = Rect::from_min_size(pos2(x, rect.top() + 3.0), vec2(sep_w, rect.height() - 6.0));
+                let sr = Rect::from_min_size(pos2(x, rect.top()), vec2(sep_w, rect.height()));
                 let sresp = ui.interact(sr, Id::new(("crumb_sep", id, i)), Sense::click());
-                if sresp.hovered() {
-                    ui.painter().rect_filled(sr, CornerRadius::same(4), pal.hover);
+                if sresp.hovered() && !dropped {
+                    ui.painter().rect_filled(sr.shrink2(vec2(0.0, 2.0)), CornerRadius::same(4), crate::kit::touch(&pal));
                 }
                 // After the last segment the chevron only shows on hover.
-                if dropped_here {
-                    paint_glyph(ui.painter(), Rect::from_center_size(sr.center(), Vec2::splat(10.0)), Glyph::ChevronDown, Color32::WHITE);
+                if dropped {
+                    paint_glyph(ui.painter(), Rect::from_center_size(sr.center(), Vec2::splat(10.0)), Glyph::ChevronDown, crate::kit::on_lift(&pal));
                 } else if !last || sresp.hovered() || ui.rect_contains_pointer(rect) {
-                    paint_glyph(ui.painter(), Rect::from_center_size(sr.center(), Vec2::splat(10.0)), Glyph::ChevronRight, pal.text_dim.gamma_multiply(0.8));
+                    paint_glyph(ui.painter(), Rect::from_center_size(sr.center(), Vec2::splat(10.0)), Glyph::ChevronRight, pal.text_dim.gamma_multiply(if sresp.hovered() { 1.0 } else { 0.7 }));
                 }
                 if sresp.clicked() {
                     let next = segs.get(i + 1).map(|s| s.1.clone());
@@ -1448,14 +1492,16 @@ impl App {
                 break;
             }
         }
-        // The line under the folder shown slides to it from the last one.
-        if let Some(u) = under {
-            let t = if anim { 0.22 } else { 0.0 };
-            let l = ui.ctx().animate_value_with_time(Id::new(("crumb line l", id)), u.left(), t);
-            let r = ui.ctx().animate_value_with_time(Id::new(("crumb line r", id)), u.right(), t);
-            let line = Rect::from_min_max(pos2(l.min(r - 4.0), u.top()), pos2(r, u.bottom()));
-            if line.is_finite() && rect.contains(line.center()) {
-                ui.painter().rect_filled(line, CornerRadius::same(1), pal.accent.gamma_multiply(0.85));
+        // The folder shown is lifted; going elsewhere, the lift slides to its new place.
+        // Otherwise it keeps to its folder at once: a window being resized drags no pill.
+        if let Some(u) = here {
+            let t = if anim && now - since < 0.3 { 0.22 } else { 0.0 };
+            let l = ui.ctx().animate_value_with_time(Id::new(("crumb lift l", id)), u.left(), t);
+            let r = ui.ctx().animate_value_with_time(Id::new(("crumb lift r", id)), u.right(), t);
+            let pill = Rect::from_min_max(pos2(l.min(r - 8.0).max(rect.left()), u.top()), pos2(r.min(rect.right()), u.bottom()));
+            if pill.is_finite() && pill.width() > 4.0 {
+                ui.painter().set(pill_slot, egui::Shape::rect_filled(pill, rad, crate::kit::lift(&pal)));
+                ui.painter().rect_stroke(pill, rad, Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
             }
         }
     }
@@ -1470,10 +1516,17 @@ impl App {
         let types_on = !t.settings.only_types.is_empty();
         let (vf, vfi) = (t.counts.0, t.counts.2);
         let fw = frame_rect.width();
-        ui.painter().rect(frame_rect, CornerRadius::same(6), pal.bg, Stroke::new(1.0, if p_filter_active(t) { pal.accent.gamma_multiply(0.7) } else { pal.border }), StrokeKind::Inside);
+        // A capsule like the path's beside it; only a filter in force draws its edge in
+        // the accent (the field has the keyboard whenever typing filters, so that says
+        // nothing).
+        let round = self.cfg.round_corners;
+        crate::kit::capsule(ui.painter(), frame_rect, round, &pal);
+        if p_filter_active(t) {
+            ui.painter().rect_stroke(frame_rect, crate::kit::radius(frame_rect.height(), round), Stroke::new(1.0, pal.accent.gamma_multiply(0.7)), StrokeKind::Inside);
+        }
         // Searching inside files shows as the field's own icon, in the accent; a click on it
         // goes back to names.
-        let ir = Rect::from_center_size(pos2(frame_rect.left() + 12.0, frame_rect.center().y), Vec2::splat(14.0));
+        let ir = Rect::from_center_size(pos2(frame_rect.left() + 15.0, frame_rect.center().y), Vec2::splat(14.0));
         if t.content.on {
             let cresp = ui.interact(ir.expand(2.0), Id::new(("fcont", id)), Sense::click()).on_hover_text("Searching inside files · click for names (Ctrl+Shift+F)");
             note_control(ui, ir, "contents toggle");
@@ -1487,14 +1540,15 @@ impl App {
         }
         let btns = if t.filter.is_empty() { 0.0 } else { 1.0 } + if types_on { 1.0 } else { 0.0 };
         let nudge = cap_nudge(ui, &egui::TextStyle::Body.resolve(ui.style()));
-        let edit_rect = Rect::from_min_max(pos2(frame_rect.left() + 22.0, frame_rect.top() + 1.0 + nudge), pos2(frame_rect.right() - 22.0 * btns - 4.0, frame_rect.bottom() - 1.0 + nudge));
         let shown = vf + vfi;
-        // Files when only files are listed; an empty folder has items, not files.
-        let changed = if t.git_only.is_some() { " changed" } else { "" };
-        let hint = format!("Filter {}{changed} {}…", fmt_count(shown), if shown > 0 && (t.flatten || vf == 0) { if shown == 1 { "file" } else { "files" } } else if shown == 1 { "item" } else { "items" });
-        // Short form when the full hint wouldn't fit.
-        let hint = if fw < 170.0 { "Filter…".to_string() } else { hint };
-        let hint = if t.content.on { if fw < 150.0 { "Find…".into() } else { "Find in files…".into() } } else { hint };
+        // How many are listed, as a figure at the field's end: what the filter would
+        // narrow, then what it has left. Only where it leaves the field room to type.
+        let small = FontId::proportional(self.cfg.font_size - 1.5);
+        let count = (fw >= 130.0 && !t.content.on).then(|| listing::tabular(ui, &fmt_count(shown), small, 80.0, crate::kit::words_of(pal.text_dim)));
+        let count_w = count.as_ref().map_or(0.0, |g| g.size().x + 8.0);
+        let edit_rect = Rect::from_min_max(pos2(frame_rect.left() + 26.0, frame_rect.top() + 1.0 + nudge), pos2(frame_rect.right() - 22.0 * btns - 8.0 - count_w, frame_rect.bottom() - 1.0 + nudge));
+        let changed = if t.git_only.is_some() { "Filter changed…" } else { "Filter…" };
+        let hint = if t.content.on { if fw < 150.0 { "Find…" } else { "Find in files…" } } else { changed };
         let before = t.filter.clone();
         let mut fui = ui.new_child(UiBuilder::new().max_rect(edit_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
         // A field is at least a control's height, which grows with Spacing: taller than the
@@ -1526,12 +1580,16 @@ impl App {
         if t.filter != before {
             t.dirty = true;
         }
-        let mut bx = frame_rect.right() - 13.0;
+        let mut bx = frame_rect.right() - 16.0;
+        if let Some(g) = count {
+            let cx = frame_rect.right() - 12.0 - 22.0 * btns - g.size().x;
+            ui.painter().galley(pos2(cx, frame_rect.center().y - g.size().y / 2.0), g, pal.text_dim);
+        }
         if !t.filter.is_empty() {
             let cr = Rect::from_center_size(pos2(bx, frame_rect.center().y), Vec2::splat(18.0));
             let cresp = ui.interact(cr, Id::new(("fclr", id)), Sense::click()).on_hover_text("Clear filter (Esc)");
             if cresp.hovered() {
-                ui.painter().rect_filled(cr, CornerRadius::same(4), pal.hover);
+                ui.painter().rect_filled(cr, crate::kit::radius(cr.height(), round), crate::kit::touch(&pal));
             }
             paint_glyph(ui.painter(), cr.shrink(4.0), Glyph::Close, pal.text_dim);
             if cresp.clicked() {
@@ -1543,7 +1601,7 @@ impl App {
         if types_on {
             let cr = Rect::from_center_size(pos2(bx, frame_rect.center().y), Vec2::splat(18.0));
             let cresp = ui.interact(cr, Id::new(("tclr", id)), Sense::click()).on_hover_text("Showing only some file types · click to show all");
-            ui.painter().rect_filled(cr, CornerRadius::same(4), if cresp.hovered() { pal.hover } else { pal.accent.gamma_multiply(0.25) });
+            ui.painter().rect_filled(cr, crate::kit::radius(cr.height(), round), if cresp.hovered() { crate::kit::touch(&pal) } else { pal.accent.gamma_multiply(0.25) });
             funnel(ui.painter(), cr.center(), pal.accent);
             ui.painter().line_segment([cr.left_bottom() + vec2(4.0, -4.0), cr.right_top() + vec2(-4.0, 4.0)], Stroke::new(1.3, pal.accent));
             if cresp.clicked() {
@@ -1632,7 +1690,7 @@ impl App {
             ui.spacing_mut().item_spacing.x = 6.0;
             if let Some(f) = free {
                 let s = format!("{} free", fsx::fmt_size(f));
-                let g = ui.painter().layout_no_wrap(s, font_small.clone(), pal.text_dim);
+                let g = listing::figures(ui, &s, font_small.clone(), 400.0, pal.text_dim, crate::kit::words_of(pal.text_dim));
                 if g.size().x + 8.0 <= ui.available_width() {
                     let (r, resp) = ui.allocate_exact_size(g.size(), Sense::hover());
                     ui.painter().galley(r.min, g, pal.text_dim);
@@ -1641,7 +1699,7 @@ impl App {
             }
             // While jobs run: how many and how far, opening the list of them.
             if let Some((text, frac)) = &jobs {
-                if let Some(r) = crate::transfers::chip(ui, text, *frac, jobs_open, font_small.clone(), &pal) {
+                if let Some(r) = crate::transfers::chip(ui, text, *frac, jobs_open, font_small.clone(), self.cfg.round_corners, &pal) {
                     jobs_at = Some(r.rect);
                     if r.clicked() && ui.is_visible() {
                         self.popup = if jobs_open { Popup::None } else { Popup::Transfers(crate::transfers::State::new(r.rect)) };
@@ -1663,30 +1721,31 @@ impl App {
                 let name = ui.painter().layout_no_wrap(b.clone(), font_small.clone(), pal.text_dim);
                 let nums: Vec<(bool, std::sync::Arc<egui::Galley>)> = counts.iter().map(|(up, n)| (*up, ui.painter().layout_no_wrap(n.clone(), font_small.clone(), pal.text_dim))).collect();
                 let arrow = (font_small.size * 0.7).round();
-                let w = 16.0 + name.size().x + nums.iter().map(|(_, g)| arrow + 2.0 + g.size().x + 6.0).sum::<f32>() + 12.0;
+                // A pill at rest, as it opens the branches: lifted while the history it
+                // leads to is open.
+                let w = 27.0 + name.size().x + nums.iter().map(|(_, g)| 6.0 + arrow + 2.0 + g.size().x).sum::<f32>() + 9.0;
                 if w <= ui.available_width() {
-                    let (r, resp) = ui.allocate_exact_size(vec2(w, 20.0), Sense::click());
+                    let (r, resp) = ui.allocate_exact_size(vec2(w, crate::kit::CHIP_H), Sense::click());
                     note_control(ui, r, "status chip");
                     chip_at = Some(r);
-                    if resp.hovered() || history {
-                        ui.painter().rect_filled(r, CornerRadius::same(5), if history { pal.accent.gamma_multiply(0.2) } else { pal.hover });
-                    }
+                    crate::kit::chip_face(ui.painter(), r, resp.hovered(), history, None, self.cfg.round_corners, &pal);
+                    let ink = if history { crate::kit::on_lift(&pal) } else if resp.hovered() { pal.text } else { pal.text_dim };
                     let p = ui.painter();
-                    crate::theme::paint_symbol(p, Rect::from_center_size(pos2(r.left() + 12.0, r.center().y), Vec2::splat(13.0)), "git-branch", pal.text_dim);
-                    let mut x = r.left() + 22.0;
-                    p.galley(pos2(x, r.center().y - name.size().y / 2.0), name.clone(), pal.text_dim);
+                    crate::theme::paint_symbol(p, Rect::from_center_size(pos2(r.left() + 15.0, r.center().y), Vec2::splat(13.0)), "git-branch", ink);
+                    let mut x = r.left() + 27.0;
+                    p.galley_with_override_text_color(pos2(x, r.center().y - name.size().y / 2.0), name.clone(), ink);
                     x += name.size().x + 6.0;
                     for (up, g) in &nums {
                         // A small drawn arrow: the bundled fonts have no arrow glyphs.
                         let (cx, cy, h) = (x + arrow / 2.0, r.center().y, arrow / 2.0);
-                        let st = Stroke::new(1.3, pal.text_dim);
+                        let st = Stroke::new(1.3, ink);
                         let (tip, tail) = if *up { (cy - h, cy + h) } else { (cy + h, cy - h) };
                         p.line_segment([pos2(cx, tail), pos2(cx, tip)], st);
                         let back = if *up { tip + h * 0.7 } else { tip - h * 0.7 };
                         p.line_segment([pos2(cx - h * 0.7, back), pos2(cx, tip)], st);
                         p.line_segment([pos2(cx + h * 0.7, back), pos2(cx, tip)], st);
                         x += arrow + 2.0;
-                        p.galley(pos2(x, r.center().y - g.size().y / 2.0), g.clone(), pal.text_dim);
+                        p.galley_with_override_text_color(pos2(x, r.center().y - g.size().y / 2.0), g.clone(), ink);
                         x += g.size().x + 6.0;
                     }
                     let tip = match (*ahead, *behind) {
@@ -1729,7 +1788,8 @@ impl App {
                 line = if line.is_empty() { w.clone() } else { format!("{line} · {w}") };
             }
             if !line.is_empty() {
-                let g = listing::elided(ui, &line, font_small.clone(), ui.available_width(), pal.text_dim);
+                // Figures read first; their words ("files", "selected", "MB") step back.
+                let g = listing::figures(ui, &line, font_small.clone(), ui.available_width(), pal.text_dim, crate::kit::words_of(pal.text_dim));
                 let (r, _) = ui.allocate_exact_size(g.size(), Sense::hover());
                 ui.painter().galley(r.min, g, pal.text_dim);
             }
@@ -1861,9 +1921,12 @@ impl App {
             return;
         }
         let screen = ctx.content_rect();
+        // Above a find bar open at the window's bottom right, not over its buttons.
+        let over_bar = crate::findbar::DRAWN.with(|d| d.borrow().iter().filter(|b| b.right() > screen.right() - 360.0 && b.bottom() > screen.bottom() - 120.0).map(|b| screen.bottom() - b.top()).fold(0.0f32, f32::max));
+        let lift = (over_bar - 30.0).max(0.0);
         egui::Area::new(Id::new("jobs"))
             .order(egui::Order::Foreground)
-            .anchor(Align2::RIGHT_BOTTOM, vec2(-14.0, -38.0 - self.shelf.shown_h))
+            .anchor(Align2::RIGHT_BOTTOM, vec2(-14.0, -38.0 - self.shelf.shown_h - lift))
             .show(ctx, |ui| {
                 ui.set_max_width(340.0f32.min(screen.width() - 40.0));
                 let mut remove = None;
@@ -2043,7 +2106,8 @@ impl App {
                         // It comes in over a fifth of a second, as it goes.
                         let a = if crate::kit::moving(ctx) { a * (el / 0.2).min(1.0) } else { a };
                         let tool = self.toast_tool;
-                        let r = egui::Frame::popup(ui.style()).fill(pal.raised.gamma_multiply(a)).corner_radius(CornerRadius::same(8)).inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
+                        // A pill as the bars' chips are, rounder still while it is one line.
+                        let r = egui::Frame::popup(ui.style()).fill(pal.raised.gamma_multiply(a)).stroke(Stroke::new(1.0, pal.card_line().gamma_multiply(a))).corner_radius(CornerRadius::same(if crate::kit::round() { 16 } else { 0 })).inner_margin(egui::Margin::symmetric(14, 8)).show(ui, |ui| {
                             // Only a toast with its action lays out in a row: a long one
                             // alone wraps within the card's width, as it always has.
                             match (tool, &undo) {
@@ -2185,29 +2249,6 @@ pub fn star(p: &egui::Painter, c: egui::Pos2, r: f32, col: Color32, filled: bool
 pub fn funnel(p: &egui::Painter, c: egui::Pos2, col: Color32) {
     p.add(egui::Shape::convex_polygon(vec![c + vec2(-5.0, -4.0), c + vec2(5.0, -4.0), c + vec2(1.0, 1.0), c + vec2(-1.0, 1.0)], col, Stroke::NONE));
     p.rect_filled(Rect::from_min_max(c + vec2(-1.0, 1.0), c + vec2(1.0, 5.0)), CornerRadius::ZERO, col);
-}
-
-/// Thin vertical divider between toolbar groups.
-fn toolbar_sep(ui: &mut Ui, pal: &Palette) {
-    if no_room(ui, 9.0) {
-        return;
-    }
-    let (r, _) = ui.allocate_exact_size(vec2(9.0, 20.0), Sense::hover());
-    ui.painter().line_segment([pos2(r.center().x, r.top() + 1.0), pos2(r.center().x, r.bottom() - 1.0)], Stroke::new(1.0, pal.border));
-}
-
-/// Toolbar icon button with an explicit icon color.
-fn glyph_button_col(ui: &mut Ui, g: Glyph, tip: &str, col: Color32, pal: &Palette) -> egui::Response {
-    if no_room(ui, 26.0) {
-        return ui.allocate_exact_size(Vec2::ZERO, Sense::hover()).1;
-    }
-    let (r, resp) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::click());
-    note_control(ui, r, "toolbar button");
-    if resp.hovered() {
-        ui.painter().rect_filled(r, CornerRadius::same(5), pal.hover);
-    }
-    paint_glyph(ui.painter(), Rect::from_center_size(r.center(), Vec2::splat(15.0)), g, col);
-    resp.on_hover_text(tip)
 }
 
 /// Bookmark ribbon: outlined, or solid when the folder is bookmarked.
