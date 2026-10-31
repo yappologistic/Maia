@@ -122,7 +122,7 @@ fn start(q: &str, root: PathBuf, dirs: Vec<PathBuf>, flat: bool, hidden: bool, c
             let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 4);
             // Each batch of the listing (or of the recursive walk, as it streams in) is
             // shared out among the workers.
-            let mut each = |batch: Vec<Entry>| {
+            let each = |batch: Vec<Entry>| {
                 let files: Vec<&Entry> = batch.iter().filter(ok).collect();
                 let next = AtomicUsize::new(0);
                 std::thread::scope(|s| {

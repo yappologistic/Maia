@@ -47,7 +47,7 @@ extern "C" fn on_fatal(sig: libc::c_int) {
         if fd >= 0 {
             let mut buf = [0u8; 64];
             let mut n = 0;
-            let mut num = |buf: &mut [u8; 64], n: &mut usize, mut v: u64| {
+            let num = |buf: &mut [u8; 64], n: &mut usize, mut v: u64| {
                 let mut d = [0u8; 20];
                 let mut i = d.len();
                 loop {

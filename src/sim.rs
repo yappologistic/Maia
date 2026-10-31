@@ -7015,7 +7015,7 @@ mod journeys {
         // Every theme can be seen, its name whole: in view, or scrolled to (the search,
         // the switch and Done stay put).
         theme_cards_reachable(&mut s, "a normal window");
-        let ctl = |s: &Sim, name: &str| crate::ui::CONTROLS.with(|c| c.borrow().iter().find(|(_, _, w)| *w == name).map(|(_, r, _)| *r));
+        let ctl = |_s: &Sim, name: &str| crate::ui::CONTROLS.with(|c| c.borrow().iter().find(|(_, _, w)| *w == name).map(|(_, r, _)| *r));
         let shown = |s: &Sim| ThemeName::ALL.iter().filter(|t| ctl(s, t.label()).is_some()).count();
         let done = ctl(&s, "themes done").unwrap_or_else(|| s.fail("no Done"));
         s.act(&format!("scroll {:.0} {:.0} 2000", done.center().x - 200.0, done.top() - 120.0));
@@ -7167,7 +7167,7 @@ mod journeys {
     /// Every card the picker shows can be brought into view, between the search and
     /// Done, with its name whole (not cut with "…") and inside the window.
     fn theme_cards_reachable(s: &mut Sim, what: &str) {
-        let ctl = |s: &Sim, name: &str| crate::ui::CONTROLS.with(|c| c.borrow().iter().find(|(_, _, w)| *w == name).map(|(_, r, _)| *r));
+        let ctl = |_s: &Sim, name: &str| crate::ui::CONTROLS.with(|c| c.borrow().iter().find(|(_, _, w)| *w == name).map(|(_, r, _)| *r));
         let top = ctl(s, "theme search").map(|r| r.bottom()).unwrap_or_else(|| s.fail("no search"));
         let done = ctl(s, "themes done").unwrap_or_else(|| s.fail("no Done"));
         let shown: Vec<crate::theme::ThemeName> = crate::theme::ThemeName::ALL.into_iter().filter(|t| ctl(s, t.label()).is_some()).collect();
@@ -8892,7 +8892,7 @@ mod journeys {
         look(&mut s, "after sync");
         // Undo takes the whole sync back: copies gone, replaced and mirrored back.
         s.act("key ctrl+z");
-        wait_until(&mut s, "sync undone", 10, |s| !b.join("only-a.txt").exists() && b.join("only-b.txt").exists() && mark(&a.join("only-a.txt")) == Some(Diff::Only));
+        wait_until(&mut s, "sync undone", 10, |_s| !b.join("only-a.txt").exists() && b.join("only-b.txt").exists() && mark(&a.join("only-a.txt")) == Some(Diff::Only));
         assert_eq!(std::fs::read_to_string(b.join("newer.txt")).unwrap(), "old");
         // Either panel moving clears every mark.
         s.act("key Tab");
@@ -10243,7 +10243,7 @@ mod journeys {
         // Ignoring a file, then every file like another.
         go(&mut s, &app);
         let root = app.clone();
-        let faded = move |s: &Sim, f: &str| crate::gitstatus::ignored(crate::gitstatus::repo_for(&root).as_deref(), &root.join(f), &root);
+        let faded = move |_s: &Sim, f: &str| crate::gitstatus::ignored(crate::gitstatus::repo_for(&root).as_deref(), &root.join(f), &root);
         assert!(!faded(&s, "scratch.txt"));
         // The menu offers it once git's word on the folder is in (late on a busy machine).
         let repo = app.clone();
@@ -14873,7 +14873,7 @@ mod journeys {
         let themed = std::env::var_os("MAIA_SIM_THEME").is_some();
         assert!((themed || s.app.cfg.theme == d.theme) && !s.app.cfg.show_hidden && !s.app.cfg.single_click && !s.app.cfg_dirty, "nothing chosen yet");
         look_welcome(&mut s, "welcome first page");
-        let controls = |s: &Sim, what: &str| crate::ui::CONTROLS.with(|c| c.borrow().iter().filter(|(_, _, w)| *w == what).map(|(_, r, _)| *r).collect::<Vec<_>>());
+        let controls = |_s: &Sim, what: &str| crate::ui::CONTROLS.with(|c| c.borrow().iter().filter(|(_, _, w)| *w == what).map(|(_, r, _)| *r).collect::<Vec<_>>());
         let click = |s: &mut Sim, r: Rect| s.act(&format!("click {:.0} {:.0}", r.center().x, r.center().y));
         // The look: a theme pointed at shows the window in it, one clicked is kept.
         click_control(&mut s, "welcome next");
@@ -17942,7 +17942,7 @@ mod journeys {
         std::fs::remove_dir(home.join("Gone soon")).unwrap();
         s.act("key ctrl+g");
         assert!(matches!(s.app.popup, Popup::Jump(_)), "Jump by its key");
-        wait_until(&mut s, "the folders checked", 10, |s| controls_named("jump row").len() >= 4);
+        wait_until(&mut s, "the folders checked", 10, |_s| controls_named("jump row").len() >= 4);
         s.idle(4);
         let rows: Vec<String> = s.texts.iter().filter(|(_, t)| t.starts_with("~/")).map(|(_, t)| t.clone()).collect();
         assert!(!rows.iter().any(|t| t.contains("Gone soon")), "a deleted folder isn't offered: {rows:?}");
@@ -17958,7 +17958,7 @@ mod journeys {
         assert_eq!(s.tab().path, home.join("Pictures/Trip"), "went there");
         // A few letters of the folder's own name beat the same letters further up.
         s.act("key ctrl+g");
-        wait_until(&mut s, "listed again", 10, |s| controls_named("jump row").len() >= 4);
+        wait_until(&mut s, "listed again", 10, |_s| controls_named("jump row").len() >= 4);
         s.act("text tax");
         s.idle(3);
         s.act("key Enter");
@@ -17968,7 +17968,7 @@ mod journeys {
         s.app.cfg.font_size = 16.5;
         s.app.cfg.spacing = 1.6;
         s.act("key ctrl+g");
-        wait_until(&mut s, "listed small", 10, |s| controls_named("jump row").len() >= 1);
+        wait_until(&mut s, "listed small", 10, |_s| controls_named("jump row").len() >= 1);
         look_popup(&mut s, "jump small");
         s.act("key Escape");
         settles_idle(&mut s, "jump");
@@ -18075,7 +18075,7 @@ mod journeys {
         let mut s = Sim::new(&proj, vec2(1280.0, 800.0));
         s.app.cfg.theme = crate::theme::ThemeName::Graphite;
         s.idle(20);
-        wait_until(&mut s, "the card", 10, |s| controls_named("readme edge").len() == 1);
+        wait_until(&mut s, "the card", 10, |_s| controls_named("readme edge").len() == 1);
         s.idle(20);
         assert!(some_text(&s, "Show all"));
         look(&mut s, "readme card");
@@ -18093,7 +18093,7 @@ mod journeys {
         std::fs::write(home.join("Music/README.md"), "# Music\n\nThe albums.\n\n".repeat(30)).unwrap();
         go(&mut s, &home.join("Music"));
         s.idle(20);
-        wait_until(&mut s, "the music card", 10, |s| controls_named("readme edge").len() == 1);
+        wait_until(&mut s, "the music card", 10, |_s| controls_named("readme edge").len() == 1);
         s.idle(20);
         let e2 = controls_named("readme edge")[0];
         assert!((e2.center().y - after).abs() < 8.0, "the same height everywhere: {} vs {after}", e2.center().y);
@@ -18115,7 +18115,7 @@ mod journeys {
         assert!(s.app.ud.readme_hidden.contains(&home.join("Music")));
         go(&mut s, &proj);
         s.idle(20);
-        wait_until(&mut s, "the project's card", 10, |s| controls_named("readme edge").len() == 1);
+        wait_until(&mut s, "the project's card", 10, |_s| controls_named("readme edge").len() == 1);
         // At the owner's look, split, narrow; then the command hides them all.
         s.app.cfg.font_size = 16.5;
         s.app.cfg.spacing = 1.6;
@@ -19010,7 +19010,7 @@ mod journeys {
         wait_until(&mut s, "the viewer gone", 5, |s| !s.popup_open());
         // The preview's colours: one copied.
         s.cmd(ToggleInspector);
-        wait_until(&mut s, "the colours", 20, |s| controls_named("picture colour").len() >= 2);
+        wait_until(&mut s, "the colours", 20, |_s| controls_named("picture colour").len() >= 2);
         // The preview slides open: its chips' places once it rests.
         s.idle(20);
         let chip = controls_named("picture colour")[0];

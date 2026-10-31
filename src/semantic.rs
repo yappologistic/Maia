@@ -345,7 +345,7 @@ fn update(folders: &[PathBuf], pictures: bool, shared: &Mutex<Shared>, stop: &At
             let (mut texts, mut pics): (Job, Job) = (Job { rows: vec![], inputs: vec![] }, Job { rows: vec![], inputs: vec![] });
             let mut inflight = 0usize;
             // Results in, written to their rows; with `all`, waits for every batch out.
-            let mut take = |next: &mut Index, failed: &mut std::collections::HashSet<usize>, inflight: &mut usize, all: bool| -> Result<(), String> {
+            let take = |next: &mut Index, failed: &mut std::collections::HashSet<usize>, inflight: &mut usize, all: bool| -> Result<(), String> {
                 while *inflight > 0 {
                     let r = if all { done_rx.recv().map_err(|_| "The indexer stopped".to_string())? } else {
                         match done_rx.try_recv() {

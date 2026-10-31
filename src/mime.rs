@@ -333,7 +333,7 @@ impl Apps {
         let me: &'static Apps = apps();
         let removed: Vec<&String> = me.removed.get(mime).map(|v| v.iter().collect()).unwrap_or_default();
         let mut out: Vec<&App> = vec![];
-        let mut push = |a: &'static App, out: &mut Vec<&App>| {
+        let push = |a: &'static App, out: &mut Vec<&App>| {
             if !out.iter().any(|o| o.id == a.id) && !removed.contains(&&a.id) {
                 out.push(a);
             }
@@ -424,7 +424,7 @@ pub fn expand_exec(exec: &str, paths: &[PathBuf], app_name: &str) -> Vec<String>
 #[cfg(test)]
 pub static LAUNCHED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
-pub fn spawn_detached(mut cmd: Command) -> Result<(), String> {
+pub fn spawn_detached(#[allow(unused_mut)] mut cmd: Command) -> Result<(), String> {
     #[cfg(test)]
     {
         LAUNCHED.lock().unwrap_or_else(|e| e.into_inner()).push(format!("{cmd:?}"));

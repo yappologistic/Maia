@@ -1,6 +1,6 @@
 //! Colors, fonts and vector icons.
 
-use egui::{self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Painter, Pos2, Rect, Shape, Stroke, StrokeKind, Vec2, pos2, vec2};
+use egui::{self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Painter, Rect, Shape, Stroke, StrokeKind, Vec2, pos2, vec2};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -3461,7 +3461,7 @@ pub fn install_fonts(ctx: &egui::Context, family: &str, mono_family: &str) {
     let mut fonts = FontDefinitions::empty();
     let mut prop: Vec<String> = vec![];
     let mut mono: Vec<String> = vec![];
-    let mut add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8], list: &mut Vec<String>| {
+    let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8], list: &mut Vec<String>| {
         fonts.font_data.insert(name.into(), FontData::from_static(bytes).into());
         list.push(name.into());
     };

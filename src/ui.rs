@@ -68,15 +68,14 @@ pub fn search_row_in(ui: &mut Ui, text: &mut String, hint: &str, font: FontId, g
     (out.response.response, closed)
 }
 
-/// Small square button with a painted glyph.
-/// Test builds: every toolbar/status control drawn this frame, so the user simulations can
-/// catch two controls drawn on top of each other. Compiles to nothing otherwise.
+// Test builds: every toolbar/status control drawn this frame, so the user simulations can
+// catch two controls drawn on top of each other. Compiles to nothing otherwise.
 #[cfg(test)]
 thread_local! {
     pub static CONTROLS: std::cell::RefCell<Vec<(egui::LayerId, Rect, &'static str)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// Test builds: popup frames drawn this frame (text inside must stay inside).
+// Test builds: popup frames drawn this frame (text inside must stay inside).
 #[cfg(test)]
 thread_local! {
     pub static POPUPS: std::cell::RefCell<Vec<Rect>> = const { std::cell::RefCell::new(Vec::new()) };

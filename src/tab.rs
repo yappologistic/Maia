@@ -1558,7 +1558,7 @@ fn type_keys<'a>(items: impl Iterator<Item = &'a Entry>) -> Vec<Option<u64>> {
     let db = crate::mime::mime_db();
     let mut kinds: Vec<String> = vec![];
     let mut by_ext: HashMap<(&'a str, bool, bool), usize> = HashMap::new();
-    let mut place = |kinds: &mut Vec<String>, k: String| kinds.iter().position(|x| *x == k).unwrap_or_else(|| {
+    let place = |kinds: &mut Vec<String>, k: String| kinds.iter().position(|x| *x == k).unwrap_or_else(|| {
         kinds.push(k);
         kinds.len() - 1
     });

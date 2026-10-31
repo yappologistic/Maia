@@ -2075,7 +2075,6 @@ fn cmd_row_as(ui: &mut Ui, app: &App, c: Cmd, title: &str) -> bool {
 }
 
 fn palette(app: &mut App, ctx: &egui::Context, st: &mut PaletteState) -> bool {
-    let mut toggle_compact = false;
     let pal = app.pal;
     // ---------------- hotkey capture
     if let Some(cap) = st.capture.as_mut() {

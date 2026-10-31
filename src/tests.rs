@@ -2438,7 +2438,7 @@ fn filter_conditions_by_size_and_date() {
     let mut stats = HashMap::new();
     let mut t = Tab::new(77, d.clone(), ViewSettings::default(), egui::Context::default());
     pump(&mut t, &stats);
-    let mut shown = |t: &mut Tab, stats: &HashMap<PathBuf, crate::stats::DirStats>, f: &str| -> Vec<String> {
+    let shown = |t: &mut Tab, stats: &HashMap<PathBuf, crate::stats::DirStats>, f: &str| -> Vec<String> {
         t.filter = f.into();
         pump(t, stats);
         let mut v: Vec<String> = t.view.iter().map(|&i| t.entries[i as usize].name.clone()).collect();
@@ -4013,7 +4013,7 @@ fn option_search_spans_sections() {
 /// downloads, and an install that checks the download before it replaces anything.
 #[test]
 fn updates_check_compare_and_install() {
-    use crate::update::{Fetch, Release, State, Updater, curl_args, newer, parse_release, parse_sum, version};
+    use crate::update::{Fetch, State, Updater, curl_args, newer, parse_release, parse_sum, version};
     assert_eq!(version("v1.2.3"), Some((1, 2, 3)));
     assert_eq!(version("0.10"), Some((0, 10, 0)));
     assert_eq!(version("2.0.0-beta.1"), Some((2, 0, 0)));
@@ -4297,8 +4297,6 @@ fn a_broken_link_is_not_executable() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
-/// How long Search Code takes over a big tree (MAIA_BENCH_DIR, else /usr/include), warm,
-/// for plain text, whole words and expressions that match little, so all of it is read.
 /// How long the filter takes over a flattened tree of about 350,000 files (a real folder,
 /// /usr by default, repeated until it is that big), for plain words and for long queries.
 /// `cargo test --release filter_query_speed -- --ignored --nocapture`
@@ -4339,6 +4337,8 @@ fn filter_query_speed() {
     }
 }
 
+/// How long Search Code takes over a big tree (MAIA_BENCH_DIR, else /usr/include), warm,
+/// for plain text, whole words and expressions that match little, so all of it is read.
 #[test]
 #[ignore]
 fn code_search_speed() {
@@ -8998,7 +8998,7 @@ fn find_bar_stays_inside_its_body() {
     let ctx = egui::Context::default();
     crate::theme::install_fonts(&ctx, "", "");
     // Shapes painted beyond the panel's own background, and the room left below the bar.
-    let mut run = |body: Option<egui::Rect>| {
+    let run = |body: Option<egui::Rect>| {
         let mut f = Finder::new("main".into());
         let mut rest = egui::Rect::NOTHING;
         let out = ctx.run_pass(egui::RawInput::default(), |ctx| {
@@ -10292,7 +10292,7 @@ fn redo_does_each_change_again() {
     let ctx = egui::Context::default();
     let d = tmpdir("redo");
     let mut app = crate::app::App::new(&ctx, vec![d.clone()]);
-    let mut push = |app: &mut crate::app::App, label: &str, kind| app.undo.push(UndoEntry { label: label.into(), kind });
+    let push = |app: &mut crate::app::App, label: &str, kind| app.undo.push(UndoEntry { label: label.into(), kind });
     let read = |p: &str| std::fs::read_to_string(d.join(p)).ok();
     // Renamed.
     touch(&d.join("b.txt"), "a");
@@ -14612,7 +14612,7 @@ fn same_named_tabs_tell_themselves_apart() {
     let ctx = egui::Context::default();
     let mut app = crate::app::App::new(&ctx, vec![d.join("maia/src")]);
     let id = app.active;
-    let mut add = |app: &mut crate::app::App, p: PathBuf, n: u64| {
+    let add = |app: &mut crate::app::App, p: PathBuf, n: u64| {
         let t = Tab::new(9000 + n, p, ViewSettings::default(), ctx.clone());
         app.panels.get_mut(&id).unwrap().tabs.push(t);
     };
