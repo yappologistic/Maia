@@ -181,9 +181,14 @@ fn main() {
     memory::tune();
     let mut paths: Vec<PathBuf> = vec![];
     let mut new_window = false;
-    let mut args = std::env::args().skip(1);
-    while let Some(a) = args.next() {
-        match a.as_str() {
+    // Paths need not be UTF-8 (std::env::args would stop Maia at the first that isn't),
+    // and everything after `--` is a path, whatever it starts with.
+    let mut args = std::env::args_os().skip(1);
+    let mut options = true;
+    while let Some(raw) = args.next() {
+        let a = if options { raw.to_str().unwrap_or("") } else { "" };
+        match a {
+            "--" if options => options = false,
             "-h" | "--help" => {
                 print!("{HELP}");
                 return;
@@ -203,7 +208,7 @@ fn main() {
                 return;
             }
             "--install" | "--set-default" | "--uninstall" => {
-                let r = match a.as_str() {
+                let r = match a {
                     "--install" => install::install(),
                     "--set-default" => install::set_default(),
                     _ => install::uninstall(),
@@ -255,7 +260,7 @@ fn main() {
                 // Diagnostics: how each file would be opened.
                 for p in args.by_ref() {
                     let (label, mime, app, argv) = mime::describe_open(std::path::Path::new(&p));
-                    println!("{p}\n  type: {label} ({mime})\n  app:  {app}\n  cmd:  {}", argv.join(" "));
+                    println!("{}\n  type: {label} ({mime})\n  app:  {app}\n  cmd:  {}", p.to_string_lossy(), argv.join(" "));
                 }
                 return;
             }
@@ -265,9 +270,9 @@ fn main() {
                     paths.push(PathBuf::from(p));
                 }
             }
-            other => {
+            _ => {
                 // Accept plain paths and file:// URIs (from %U).
-                let p = clipboard::uri_to_path(other).unwrap_or_else(|| PathBuf::from(other));
+                let p = raw.to_str().and_then(clipboard::uri_to_path).unwrap_or_else(|| PathBuf::from(&raw));
                 let p = if p.is_absolute() { p } else { std::env::current_dir().unwrap_or_default().join(p) };
                 paths.push(p);
             }
