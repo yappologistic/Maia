@@ -1,7 +1,7 @@
 # Maia
 
 A fast, keyboard-first file manager for Linux, written in Rust with egui. One binary
-of under 5 MB, drawn on the GPU, with split panels, tabs, live filtering, previews and
+of under 8 MB, drawn on the GPU, with split panels, tabs, live filtering, previews and
 background file operations.
 
 ![Maia: a project's source files beside its git history](docs/maia.webp)
@@ -84,6 +84,7 @@ with:
 | Only what git marks as changed | Ctrl+Shift+G |
 | Recent git projects | Ctrl+Alt+P |
 | Rename, several at once | F2 |
+| Copy a path, quoted (right-click for it plain) | Ctrl+Shift+C |
 | Undo, and its history | Ctrl+Z, Ctrl+Alt+Z |
 | Click anything by its letters | Ctrl+J |
 | Options | Ctrl+, |
