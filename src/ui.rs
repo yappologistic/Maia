@@ -1466,8 +1466,9 @@ impl App {
                 self.popup = Popup::path_menu(id, p.clone(), resp.rect.left_bottom());
             }
             x += w;
-            // Separator chevron opens the subfolder dropdown for this segment.
-            if !tab::is_place(p) || !last {
+            // Separator chevron opens the subfolder dropdown for this segment; past the
+            // bar's end it would sit under the buttons beside it.
+            if (!tab::is_place(p) || !last) && x + sep_w <= rect.right() + 0.5 {
                 let sr = Rect::from_min_size(pos2(x, rect.top()), vec2(sep_w, rect.height()));
                 let sresp = ui.interact(sr, Id::new(("crumb_sep", id, i)), Sense::click());
                 if sresp.hovered() && !dropped {
