@@ -1848,6 +1848,8 @@ fn text_body(ui: &mut Ui, body: Rect, ins: &mut Inspector, e: &Entry, env: &mut 
         let count = if q.is_empty() { String::new() } else { format!("{} of {}", crate::table::fmt_count(ins.filtered.as_ref().map_or(0, |f| f.3.len())), crate::table::fmt_count(lines.len())) };
         let cg = ui.painter().layout_no_wrap(count, FontId::proportional(11.5), pal.text_dim);
         let field = Rect::from_min_max(pos2(bar.left() + 28.0, bar.top() + 4.0), pos2(bar.right() - cg.size().x - 16.0, bar.bottom() - 4.0));
+        // Toasts rise above it, as above a find bar, rather than cover the field.
+        crate::findbar::DRAWN.with(|d| d.borrow_mut().push(bar));
         paint_glyph(ui.painter(), Rect::from_center_size(pos2(bar.left() + 14.0, bar.center().y), Vec2::splat(13.0)), Glyph::Search, pal.text_dim);
         ui.painter().galley(pos2(bar.right() - 8.0 - cg.size().x, bar.center().y - cg.size().y / 2.0), cg, pal.text_dim);
         if field.width() > 30.0 {

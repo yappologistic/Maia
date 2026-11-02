@@ -115,8 +115,8 @@ pub fn find_in(line: &str, q: &str, case: bool, out: &mut Vec<(u32, u32)>) {
 }
 
 thread_local! {
-    /// Where find bars were drawn this frame: the toasts rise above one that is at the
-    /// window's bottom right, where they would cover its buttons.
+    /// Where find bars and the preview's line filter were drawn this frame: the toasts
+    /// rise above one that is at the window's bottom right, where they would cover it.
     pub static DRAWN: std::cell::RefCell<Vec<Rect>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
