@@ -127,6 +127,9 @@ pub struct ConflictState {
     /// The name being typed for the item at hand (Rename…).
     pub rename: Option<String>,
     focus_name: bool,
+    /// The item at hand's two sides as read when it came up: (index, both are folders,
+    /// the one coming, the one there), not read again every frame.
+    seen: Option<(usize, bool, Option<fsx::Entry>, Option<fsx::Entry>)>,
 }
 
 pub struct PropState {
@@ -141,6 +144,8 @@ pub struct PropState {
     apply: Option<OpKind>,
     /// File details read at most once a second (not on every frame).
     snap: Option<PropSnap>,
+    /// The next reading, on a worker: a slow or dead mount never holds up a frame.
+    reading: Option<std::sync::mpsc::Receiver<PropSnap>>,
     /// A checksum to compare with, as pasted.
     pub expected: String,
     pub sum_job: Option<crate::checksum::Job>,
@@ -160,28 +165,52 @@ struct PropSnap {
 
 impl PropState {
     fn refresh(&mut self) {
+        if let Some(rx) = &self.reading {
+            match rx.try_recv() {
+                Ok(snap) => {
+                    self.snap = Some(snap);
+                    self.reading = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(_) => self.reading = None,
+            }
+        }
         let fresh = self.snap.as_ref().map(|s| s.at.elapsed() < Duration::from_secs(1) || self.paths.len() > 500).unwrap_or(false);
         if fresh {
             return;
         }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let paths = self.paths.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(PropSnap::read(&paths));
+        });
+        // The first reading, on a working disk, is there for the dialog's first frame.
+        match self.snap.is_none().then(|| rx.recv_timeout(Duration::from_millis(40))) {
+            Some(Ok(snap)) => self.snap = Some(snap),
+            _ => self.reading = Some(rx),
+        }
+    }
+}
+
+impl PropSnap {
+    fn read(paths: &[PathBuf]) -> PropSnap {
         let mut s = PropSnap { at: Instant::now(), single: None, vol: None, link: None, multi: vec![], perms: vec![] };
-        if self.paths.len() == 1 {
-            let p = &self.paths[0];
+        if let [p] = paths {
             if let (Ok(m), Some(e)) = (std::fs::symlink_metadata(p), fsx::Entry::from_path(p)) {
                 s.link = e.is_link.then(|| std::fs::read_link(p).map(|t| t.display().to_string()).unwrap_or_default());
                 s.single = Some((m, e));
                 s.vol = fsx::disk_space(p);
             }
         } else {
-            s.multi = self.paths.iter().map(|p| match std::fs::metadata(p) {
+            s.multi = paths.iter().map(|p| match std::fs::metadata(p) {
                 Ok(m) if m.is_dir() => (true, 0),
                 Ok(m) => (false, m.len()),
                 Err(_) => (false, 0),
             }).collect();
         }
         use std::os::unix::fs::MetadataExt;
-        s.perms = self.paths.iter().filter_map(|p| std::fs::symlink_metadata(p).ok()).map(|m| (m.mode() & 0o7777, m.uid(), m.gid(), m.is_dir())).collect();
-        self.snap = Some(s);
+        s.perms = paths.iter().filter_map(|p| std::fs::symlink_metadata(p).ok()).map(|m| (m.mode() & 0o7777, m.uid(), m.gid(), m.is_dir())).collect();
+        s
     }
 }
 
@@ -594,10 +623,10 @@ impl Popup {
         Popup::Confirm { msg, ok: ok.into(), on_ok: Some(on_ok) }
     }
     pub fn conflict(srcs: Vec<PathBuf>, dest: PathBuf, mv: bool, items: Vec<ConflictItem>) -> Popup {
-        Popup::Conflict(ConflictState { srcs, dest, mv, items, idx: 0, decide: HashMap::new(), apply_all: false, rename: None, focus_name: false })
+        Popup::Conflict(ConflictState { srcs, dest, mv, items, idx: 0, decide: HashMap::new(), apply_all: false, rename: None, focus_name: false, seen: None })
     }
     pub fn properties(paths: Vec<PathBuf>) -> Popup {
-        Popup::Properties(PropState { paths, change: Default::default(), deep: false, ids: None, apply: None, snap: None, expected: String::new(), sum_job: None, sum: None })
+        Popup::Properties(PropState { paths, change: Default::default(), deep: false, ids: None, apply: None, snap: None, reading: None, expected: String::new(), sum_job: None, sum: None })
     }
     pub fn open_with(paths: Vec<PathBuf>) -> Popup {
         Popup::OpenWith { paths, query: String::new(), all: false, command: String::new() }
@@ -5289,8 +5318,10 @@ fn choose(app: &mut App, ctx: &egui::Context, msg: &str, sub: &str, choices: &mu
 fn conflict(app: &mut App, ctx: &egui::Context, st: &mut ConflictState) -> bool {
     let pal = app.pal;
     let Some(item) = st.items.get(st.idx) else { return false };
-    let both_dirs = item.src.is_dir() && item.dst.is_dir();
-    let (a, b) = (fsx::Entry::from_path(&item.src), fsx::Entry::from_path(&item.dst));
+    if st.seen.as_ref().is_none_or(|s| s.0 != st.idx) {
+        st.seen = Some((st.idx, item.src.is_dir() && item.dst.is_dir(), fsx::Entry::from_path(&item.src), fsx::Entry::from_path(&item.dst)));
+    }
+    let Some((_, both_dirs, a, b)) = st.seen.clone() else { return false };
     // Which of the two is newer, and bigger, said beside it: what decides it at a glance.
     let info = |e: &Option<fsx::Entry>, o: &Option<fsx::Entry>| -> String {
         let Some(e) = e else { return String::new() };
@@ -5909,6 +5940,7 @@ fn properties(app: &mut App, ctx: &egui::Context, st: &mut PropState) -> bool {
         app.actions.push(Action::StartJob(kind));
         // Read again at once, to show what the job did.
         st.snap = None;
+        st.reading = None;
     } else {
         st.snap = snap;
     }

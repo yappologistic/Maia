@@ -190,6 +190,11 @@ pub struct Inspector {
     pub versions: Option<Box<crate::versions::Page>>,
     /// A photo's EXIF for its details (read on a worker once the card is open).
     exif: Option<(PathBuf, Option<std::sync::mpsc::Receiver<Option<crate::exif::Exif>>>, Option<crate::exif::Exif>)>,
+    /// The shown file's extra details and link target, read once rather than per frame.
+    meta: Option<(PathBuf, Vec<(&'static str, String)>, Option<String>)>,
+    meta_stamp: Option<std::time::SystemTime>,
+    /// The shown file is on the disk, not inside an archive.
+    on_disk: bool,
     /// Find in the text shown, while its bar is open.
     pub find: Option<crate::findbar::Finder>,
     /// The preview was clicked last: Ctrl+F finds in it rather than filtering the list.
@@ -626,6 +631,9 @@ impl Default for Inspector {
             crop: None,
             versions: None,
             exif: None,
+            meta: None,
+            meta_stamp: None,
+            on_disk: false,
             find: None,
             keys: false,
             edit: None,
@@ -699,8 +707,9 @@ impl Inspector {
         }
         self.extracting = None;
         self.locked = false;
+        self.on_disk = e.path.exists();
         // Inside an archive: a file is extracted to the cache and previewed from there.
-        if !e.path.exists() {
+        if !self.on_disk {
             if let Some((archive, inner)) = crate::archive::split(&e.path) {
                 self.set(Content::Other);
                 if !e.is_dir && e.size <= 64 << 20 {
@@ -1204,7 +1213,7 @@ pub fn inspector(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
     // way out. The file's name has what they leave.
     let cur_layout = ins.layout.unwrap_or(env.cfg.inspector_layout);
     let book = matches!(&ins.content, Content::Text { rich, .. } if matches!(rich.as_deref(), Some(Rich::Book(_))));
-    let editable = matches!(ins.content, Content::Text { .. }) && !book && target.as_ref().is_some_and(|e| !e.is_dir && e.size <= crate::quickedit::MAX && e.path.exists());
+    let editable = matches!(ins.content, Content::Text { .. }) && !book && target.as_ref().is_some_and(|e| !e.is_dir && e.size <= crate::quickedit::MAX && ins.on_disk);
     if crate::ui::glyph_button(&mut hui, Glyph::Close, "Close preview (Space)", true, &pal).clicked() {
         close = true;
     }
@@ -1552,17 +1561,15 @@ pub fn inspector(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
                         });
                         ui.end_row();
                     };
+                    // Read again when the file shown or its modified time changes.
+                    if ins.meta.as_ref().is_none_or(|(p, _, _)| *p != e.path) || ins.meta_stamp != e.modified {
+                        ins.meta_stamp = e.modified;
+                        ins.meta = Some((e.path.clone(), extra_rows(&e.path), e.is_link.then(|| std::fs::read_link(&e.path).map(|p| p.display().to_string()).unwrap_or_default())));
+                    }
+                    let meta = ins.meta.as_ref();
                     if extra {
-                        use std::os::unix::fs::MetadataExt;
-                        if let Ok(m) = std::fs::symlink_metadata(&e.path) {
-                            row("Accessed", fsx::fmt_time(m.accessed().ok()));
-                            row("Changed", fsx::fmt_time(Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(m.ctime().max(0) as u64))));
-                            row("Owner", format!("{} ({})", user_name(m.uid()), m.uid()));
-                            row("Group", format!("{}", m.gid()));
-                            row("Links", m.nlink().to_string());
-                            row("Inode", m.ino().to_string());
-                            row("Device", format!("{}:{}", libc::major(m.dev()), libc::minor(m.dev())));
-                            row("Blocks", format!("{} ({})", m.blocks(), fsx::fmt_size(m.blocks() * 512)));
+                        for (k, v) in meta.map_or(&[][..], |m| &m.1[..]) {
+                            row(k, v.clone());
                         }
                     }
                     row("Path", e.path.display().to_string());
@@ -1574,8 +1581,8 @@ pub fn inspector(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
                     row("Created", fsx::fmt_time(e.created));
                     row("Modified", fsx::fmt_time(e.modified));
                     row("Permissions", format!("{} ({:o})", fsx::fmt_mode(e.mode, e.is_dir), e.mode & 0o7777));
-                    if e.is_link {
-                        row("Link target", std::fs::read_link(&e.path).map(|p| p.display().to_string()).unwrap_or_default());
+                    if let Some(t) = meta.and_then(|m| m.2.clone()) {
+                        row("Link target", t);
                     }
                     if thumbs::is_image_ext(&e.ext()) {
                         if let Some(l) = env.thumbs.get(&e.path, e.modified, 64.0) {
@@ -3199,6 +3206,22 @@ fn press_takes_keys(ui: &Ui, rect: Rect) -> Option<bool> {
         return None;
     }
     Some(rect.contains(pp))
+}
+
+/// The details the extra rows show, from one stat of `p`.
+fn extra_rows(p: &Path) -> Vec<(&'static str, String)> {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(m) = std::fs::symlink_metadata(p) else { return vec![] };
+    vec![
+        ("Accessed", fsx::fmt_time(m.accessed().ok())),
+        ("Changed", fsx::fmt_time(Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(m.ctime().max(0) as u64)))),
+        ("Owner", format!("{} ({})", user_name(m.uid()), m.uid())),
+        ("Group", format!("{}", m.gid())),
+        ("Links", m.nlink().to_string()),
+        ("Inode", m.ino().to_string()),
+        ("Device", format!("{}:{}", libc::major(m.dev()), libc::minor(m.dev()))),
+        ("Blocks", format!("{} ({})", m.blocks(), fsx::fmt_size(m.blocks() * 512))),
+    ]
 }
 
 /// Login name for a uid (from /etc/passwd), or the number.
