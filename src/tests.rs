@@ -14695,3 +14695,49 @@ fn search_row_glyph_on_the_letters_middle() {
         }
     }
 }
+
+/// Grouping by date reads the local date once per quarter hour, not per file: the labels
+/// must be the ones asking the C library for every time gives, across three years of
+/// times at uneven steps (daylight saving changes and midnights included).
+#[test]
+fn date_groups_match_asking_for_every_time() {
+    use std::time::{Duration, SystemTime};
+    fn asked(m: SystemTime) -> &'static str {
+        let nowt = SystemTime::now();
+        let days = crate::timefmt::local_day(nowt) - crate::timefmt::local_day(m);
+        let (now, d) = (crate::timefmt::local(nowt), crate::timefmt::local(m));
+        let wd = ((now.tm_wday + 6) % 7) as i64;
+        if days <= 0 {
+            "Today"
+        } else if days == 1 {
+            "Yesterday"
+        } else if days <= wd {
+            "Earlier this week"
+        } else if days <= wd + 7 {
+            "Last week"
+        } else if d.tm_mon == now.tm_mon && d.tm_year == now.tm_year {
+            "Earlier this month"
+        } else if (now.tm_year * 12 + now.tm_mon) - (d.tm_year * 12 + d.tm_mon) == 1 {
+            "Last month"
+        } else if d.tm_year == now.tm_year {
+            "Earlier this year"
+        } else if d.tm_year == now.tm_year - 1 {
+            "Last year"
+        } else {
+            "Older"
+        }
+    }
+    let cache = crate::tab::DayCache::new();
+    let now = SystemTime::now();
+    let mut seen = std::collections::HashSet::new();
+    let mut back = 0u64;
+    while back < 3 * 366 * 86_400 {
+        let t = now - Duration::from_secs(back);
+        let got = crate::tab::date_group(Some(t), &cache);
+        assert_eq!(got, asked(t), "{back} s ago");
+        seen.insert(got);
+        back += 397;
+    }
+    assert!(seen.len() >= 7, "the times reach most groups: {seen:?}");
+    assert_eq!(crate::tab::date_group(None, &cache), "Unknown");
+}

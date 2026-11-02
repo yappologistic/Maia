@@ -1473,7 +1473,7 @@ impl Tab {
                 let e = &self.entries[i as usize];
                 if e.is_dir { stats.get(&e.path).map(|s| s.size).unwrap_or(0) } else { e.size }
             }).sum();
-            let gc = GroupCtx { stats, vols: &self.vols, trash: &self.trash_meta, parent_total };
+            let gc = GroupCtx { stats, vols: &self.vols, trash: &self.trash_meta, parent_total, days: DayCache::new() };
             for &i in &top {
                 let label = group_label(&self.entries[i as usize], self.settings.group, &gc);
                 if !groups.contains_key(&label) {
@@ -1804,16 +1804,42 @@ pub struct GroupCtx<'a> {
     pub vols: &'a HashMap<PathBuf, VolInfo>,
     pub trash: &'a HashMap<PathBuf, (PathBuf, Option<SystemTime>)>,
     pub parent_total: u64,
+    pub days: DayCache,
+}
+
+/// Local dates for grouping by date, read once per rebuild for now and once per quarter
+/// hour for the items: every zone's offset and every midnight fall on a quarter hour, so
+/// all of one quarter hour has one local date. A timeline of 90,000 files asked the C
+/// library four times per file and spent 60 ms of a frame on it.
+pub struct DayCache {
+    now: (i64, i32, i32, i64),
+    seen: std::cell::RefCell<HashMap<i64, (i64, i32, i32)>>,
+}
+
+impl DayCache {
+    pub fn new() -> DayCache {
+        let t = SystemTime::now();
+        let tm = crate::timefmt::local(t);
+        DayCache { now: (crate::timefmt::local_day(t), tm.tm_year, tm.tm_mon, ((tm.tm_wday + 6) % 7) as i64), seen: Default::default() }
+    }
+
+    /// (local day number, year, month) of `t`.
+    fn day(&self, t: SystemTime) -> (i64, i32, i32) {
+        let slot = crate::timefmt::secs(t).div_euclid(900);
+        *self.seen.borrow_mut().entry(slot).or_insert_with(|| {
+            let tm = crate::timefmt::local(t);
+            (crate::timefmt::local_day(t), tm.tm_year, tm.tm_mon)
+        })
+    }
 }
 
 const DATE_GROUPS: [&str; 10] = ["Today", "Yesterday", "Earlier this week", "Last week", "Earlier this month", "Last month", "Earlier this year", "Last year", "Older", "Unknown"];
 
-fn date_group(t: Option<SystemTime>) -> String {
+pub(crate) fn date_group(t: Option<SystemTime>, c: &DayCache) -> String {
     let Some(m) = t else { return "Unknown".into() };
-    let nowt = std::time::SystemTime::now();
-    let days = crate::timefmt::local_day(nowt) - crate::timefmt::local_day(m);
-    let (now, d) = (crate::timefmt::local(nowt), crate::timefmt::local(m));
-    let wd = ((now.tm_wday + 6) % 7) as i64; // days since Monday
+    let (today, now_year, now_mon, wd) = c.now; // wd: days since Monday
+    let (day, year, mon) = c.day(m);
+    let days = today - day;
     if days <= 0 {
         "Today"
     } else if days == 1 {
@@ -1822,13 +1848,13 @@ fn date_group(t: Option<SystemTime>) -> String {
         "Earlier this week"
     } else if days <= wd + 7 {
         "Last week"
-    } else if d.tm_mon == now.tm_mon && d.tm_year == now.tm_year {
+    } else if mon == now_mon && year == now_year {
         "Earlier this month"
-    } else if (now.tm_year * 12 + now.tm_mon) - (d.tm_year * 12 + d.tm_mon) == 1 {
+    } else if (now_year * 12 + now_mon) - (year * 12 + mon) == 1 {
         "Last month"
-    } else if d.tm_year == now.tm_year {
+    } else if year == now_year {
         "Earlier this year"
-    } else if d.tm_year == now.tm_year - 1 {
+    } else if year == now_year - 1 {
         "Last year"
     } else {
         "Older"
@@ -1848,10 +1874,10 @@ fn group_label(e: &Entry, g: GroupBy, c: &GroupCtx) -> String {
         },
         // Same labels as the Type column.
         GroupBy::Type => crate::mime::mime_db().short(&e.name, &e.ext(), e.is_dir, e.is_executable()),
-        GroupBy::Modified => date_group(e.modified),
-        GroupBy::Created => date_group(e.created),
-        GroupBy::Accessed => date_group(e.accessed),
-        GroupBy::Deleted => date_group(c.trash.get(&e.path).and_then(|t| t.1)),
+        GroupBy::Modified => date_group(e.modified, &c.days),
+        GroupBy::Created => date_group(e.created, &c.days),
+        GroupBy::Accessed => date_group(e.accessed, &c.days),
+        GroupBy::Deleted => date_group(c.trash.get(&e.path).and_then(|t| t.1), &c.days),
         GroupBy::Original => c.trash.get(&e.path).and_then(|t| t.0.parent()).map(|p| p.display().to_string()).unwrap_or_else(|| "Unknown".into()),
         GroupBy::Size => {
             if e.is_dir {

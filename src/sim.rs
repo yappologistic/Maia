@@ -3675,6 +3675,38 @@ mod journeys {
         report("popups", &s);
     }
 
+    /// The Timeline over a home of 90,000 recent files, grouped by day: regrouping it (as
+    /// a copy or move into home does each time it lands) keeps every frame under the limit.
+    #[test]
+    fn timeline_of_a_big_home_stays_quick() {
+        if !sandboxed() {
+            return;
+        }
+        let home = fixture("bigtimeline");
+        for d in 0..90 {
+            let dir = home.join(format!("Work/d{d:02}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            for i in 0..1000 {
+                std::fs::write(dir.join(format!("file {i:04}.txt")), "x").unwrap();
+            }
+        }
+        let mut s = Sim::new(&home, vec2(1280.0, 800.0));
+        s.settle();
+        s.cmd(Timeline);
+        wait_until(&mut s, "the timeline read", 60, |s| !s.tab().is_loading() && s.tab().view.len() >= 90_000);
+        s.settle();
+        assert!(s.texts.iter().any(|(_, t)| t.starts_with("Today  (")), "grouped by day");
+        s.frame_ms.clear();
+        for _ in 0..3 {
+            s.tab_mut().dirty = true;
+            s.idle(2);
+        }
+        look(&mut s, "big timeline");
+        let (_, _, max) = s.timing();
+        assert!(max < SLOW_MS, "slowest frame regrouping the timeline {max:.1} ms");
+        report("big timeline", &s);
+    }
+
     /// The path bar's folder dropdown on a folder of thousands: it opens at once, keeps
     /// every frame short while open (only the rows in view are laid out), filters, and
     /// keeps the row the keys choose in view.
