@@ -844,8 +844,10 @@ impl Sim {
                 if self.texts.iter().any(|(_, s)| s == label) {
                     return;
                 }
-                // The text drawn last is the topmost layer's: the open menu's.
-                let Some(at) = self.texts.last().map(|t| t.0.center()) else { return };
+                // Inside the open dialog, whose footer stays put while its body scrolls;
+                // else at the text drawn last, the topmost layer's: the open menu's.
+                let at = crate::ui::POPUPS.with(|p| p.borrow().last().map(|r| r.center()));
+                let Some(at) = at.or_else(|| self.texts.last().map(|t| t.0.center())) else { return };
                 self.act(&format!("scroll {:.0} {:.0} {dy}", at.x, at.y));
                 self.idle(2);
             }
@@ -4862,7 +4864,23 @@ mod journeys {
 
     fn click_control(s: &mut Sim, what: &str) {
         s.idle(1);
-        let r = crate::ui::CONTROLS.with(|c| c.borrow().iter().find(|(_, _, w)| *w == what).map(|(_, r, _)| *r));
+        let find = |what: &str| crate::ui::CONTROLS.with(|c| c.borrow().iter().find(|(_, _, w)| *w == what).map(|(_, r, _)| *r));
+        // Scrolled out of a dialog's body (at large text sizes): its clipped rect is
+        // empty, and a click there would land outside and close it. Scroll it into view.
+        if find(what).is_some_and(|r| !r.is_positive()) {
+            if let Some(body) = crate::ui::POPUPS.with(|p| p.borrow().last().copied()) {
+                for dy in [-6.0, 6.0] {
+                    for _ in 0..12 {
+                        if find(what).is_some_and(|r| r.is_positive()) {
+                            break;
+                        }
+                        s.act(&format!("scroll {:.0} {:.0} {dy}", body.center().x, body.center().y));
+                        s.idle(2);
+                    }
+                }
+            }
+        }
+        let r = find(what).filter(|r| r.is_positive());
         if r.is_none() {
             // A preview option: in the preview's ⋯ menu, clicked there.
             if let Some(label) = preview_item(what) {
