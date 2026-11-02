@@ -155,12 +155,17 @@ pub fn bar(ui: &mut Ui, body: Rect, f: &mut Finder, count: &str, any: bool, id: 
     bui.set_opacity(ease);
     let close_r = Rect::from_center_size(pos2(row.right() - ITEM.x / 2.0, row.center().y), ITEM);
     let nav = Rect::from_min_max(pos2(close_r.left() - 4.0 - 2.0 * ROW_ITEM.x - 2.0 * INSET, row.top()), pos2(close_r.left() - 4.0, row.bottom()));
-    let pill = Rect::from_min_max(row.min, pos2((nav.left() - 6.0).max(row.left() + 60.0), row.bottom()));
+    // Too narrow for the field and the steps both: the field stays, Enter and Shift+Enter
+    // still step.
+    let steps = nav.left() - 6.0 >= row.left() + 60.0;
+    let pill = Rect::from_min_max(row.min, pos2(if steps { nav.left() } else { close_r.left() } - 6.0, row.bottom()));
     if crate::kit::bar_item_at(&bui, close_r, egui::Id::new(("find close", id)), "toolbar button", "Close (Esc)", true, false, round, pal, |p, r, c| paint_glyph(p, r, Glyph::Close, c)).clicked() {
         out = Out::Close;
     }
-    crate::kit::capsule(bui.painter(), nav, round, pal);
-    for (k, (icon, tip, o)) in [(Glyph::ChevronUp, "Previous match (Shift+Enter)", Out::Prev), (Glyph::ChevronDown, "Next match (Enter)", Out::Next)].into_iter().enumerate() {
+    if steps {
+        crate::kit::capsule(bui.painter(), nav, round, pal);
+    }
+    for (k, (icon, tip, o)) in [(Glyph::ChevronUp, "Previous match (Shift+Enter)", Out::Prev), (Glyph::ChevronDown, "Next match (Enter)", Out::Next)].into_iter().enumerate().filter(|_| steps) {
         let ir = Rect::from_min_size(pos2(nav.left() + INSET + k as f32 * ROW_ITEM.x, nav.top() + INSET), ROW_ITEM);
         if crate::kit::bar_item_at(&bui, ir, egui::Id::new(("find step", id, k)), tip, tip, any, false, round, pal, |p, r, c| paint_glyph(p, r.shrink((crate::kit::GLYPH - ROW_GLYPH) / 2.0 + 1.0), icon, c)).clicked() {
             out = o;
