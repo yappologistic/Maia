@@ -1,10 +1,11 @@
 //! Updates from the project's releases on GitHub, only when asked. "Check for updates"
 //! looks at the latest release; "Update" downloads its build, checks it against the
 //! release's checksum and puts it in place of the installed one, which the next start
-//! runs. The program alone and an AppImage are replaced by renaming over them; a .deb or
-//! .rpm install gets the release's package, handed to dpkg or rpm through pkexec, so the
-//! package manager keeps knowing what is installed. Nothing is sent but the requests
-//! themselves; curl does them, never with the user's own settings or credentials.
+//! runs. The program alone and an AppImage are replaced by renaming over them; a .deb,
+//! .rpm or pacman install gets the release's package, handed to dpkg, rpm or pacman
+//! through pkexec, so the package manager keeps knowing what is installed. Nothing is
+//! sent but the requests themselves; curl does them, never with the user's own settings
+//! or credentials.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -61,9 +62,10 @@ pub enum Installed {
     /// An AppImage, in a folder this user can write: the file the system runs, not the
     /// program inside it, which is on a read-only mount.
     AppImage(PathBuf),
-    /// By dpkg or rpm, from the release's package.
+    /// By dpkg, rpm or pacman, from the release's package.
     Deb,
     Rpm,
+    Pacman,
     /// Somewhere this user can't write that no package Maia makes put it.
     Elsewhere(PathBuf),
 }
@@ -76,6 +78,7 @@ impl Installed {
             Installed::AppImage(_) => Some(format!("Maia-{v}-{ARCH}.AppImage")),
             Installed::Deb => Some(format!("maia_{v}_{DEB_ARCH}.deb")),
             Installed::Rpm => Some(format!("maia-{v}-1.{ARCH}.rpm")),
+            Installed::Pacman => Some(format!("maia-{v}-1-{ARCH}.pkg.tar.zst")),
             Installed::Own | Installed::Elsewhere(_) => None,
         }
     }
@@ -99,7 +102,7 @@ fn running_appimage(exe: &Path) -> Option<PathBuf> {
     (exe.starts_with(&dir) && file.is_absolute()).then_some(file)
 }
 
-/// How `exe` was installed. Asks dpkg and rpm, so it runs on a thread: a package's
+/// How `exe` was installed. Asks dpkg, rpm and pacman, so it runs on a thread: a package's
 /// program is one its manager lists as owned by the package "maia".
 pub fn installed(exe: &Path, appimage: Option<&Path>, tools: Option<&crate::drives::Tools>) -> Installed {
     if let Some(a) = appimage {
@@ -125,6 +128,9 @@ pub fn installed(exe: &Path, appimage: Option<&Path>, tools: Option<&crate::driv
         }
         if ask("rpm", &["-qf", "--queryformat", "%{NAME}"]) == "maia" {
             return Installed::Rpm;
+        }
+        if ask("pacman", &["-Qoq"]) == "maia" {
+            return Installed::Pacman;
         }
     }
     Installed::Elsewhere(dir)
@@ -394,7 +400,7 @@ fn apply(r: &Release, how: &Installed, exe: &Path, work: &Path, fetch: &Fetch, t
             let want = release_sum(r, fetch, &name)?;
             replace_checked(file, url, &want, fetch, &r.version)
         }
-        Installed::Deb | Installed::Rpm => {
+        Installed::Deb | Installed::Rpm | Installed::Pacman => {
             let t = tools.ok_or("No package manager to install with")?;
             let name = how.package(&r.version).unwrap_or_default();
             let url = r.url(&name).ok_or("The latest release has no package for this system")?;
@@ -410,7 +416,11 @@ fn apply(r: &Release, how: &Installed, exe: &Path, work: &Path, fetch: &Fetch, t
             let done = (|| {
                 fetch(url, Some(&pkg))?;
                 let head = std::fs::read(&pkg).map_err(|e| e.to_string())?;
-                let magic: &[u8] = if *how == Installed::Deb { b"!<arch>\n" } else { b"\xed\xab\xee\xdb" };
+                let magic: &[u8] = match how {
+                    Installed::Deb => b"!<arch>\n",
+                    Installed::Rpm => b"\xed\xab\xee\xdb",
+                    _ => b"\x28\xb5\x2f\xfd",
+                };
                 if !head.starts_with(magic) {
                     return Err("The download isn't a package".to_string());
                 }
@@ -420,7 +430,8 @@ fn apply(r: &Release, how: &Installed, exe: &Path, work: &Path, fetch: &Fetch, t
                 installing();
                 let argv: Vec<std::ffi::OsString> = match how {
                     Installed::Deb => vec![t.program("dpkg").into(), "-i".into(), pkg.clone().into()],
-                    _ => vec![t.program("rpm").into(), "-U".into(), pkg.clone().into()],
+                    Installed::Rpm => vec![t.program("rpm").into(), "-U".into(), pkg.clone().into()],
+                    _ => vec![t.program("pacman").into(), "-U".into(), "--noconfirm".into(), pkg.clone().into()],
                 };
                 crate::admin::run_argv(t, &argv)
             })();

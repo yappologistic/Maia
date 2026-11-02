@@ -3,11 +3,14 @@
 #   maia-VERSION-linux-ARCH.tar.gz   the program, launcher entry, icon and an install.sh
 #   maia_VERSION_DEBARCH.deb         Debian, Ubuntu, Mint, Pop!_OS and the like
 #   maia-VERSION-1.ARCH.rpm          Fedora, openSUSE, RHEL and the like (needs rpmbuild)
+#   maia-VERSION-1-ARCH.pkg.tar.zst  Arch Linux and the like (needs zstd)
 #   Maia-VERSION-ARCH.AppImage       runs anywhere with FUSE (needs appimagetool)
 # Usage: tools/package.sh VERSION ARCH [OUT]   ARCH is x86_64 or aarch64.
 # A format whose tool is missing is skipped with a note; CI has them all.
 set -eu
 V=$1; A=$2; OUT=${3:-out}
+# pacman versions can't hold a hyphen (1.0.0-rc1 is 1.0.0_rc1); file names keep the tag's.
+PV=$(printf '%s' "$V" | tr - _)
 C=$(dirname "$(dirname "$(readlink -f "$0")")")
 BIN=$C/dist/maia
 ID=io.github.yappologistic.Maia
@@ -148,6 +151,45 @@ EOF
   echo "rpm: maia-$V-1.$A.rpm"
 else
   echo "rpm: skipped (no rpmbuild)"
+fi
+
+# ---------------------------------------------------------------- Arch
+# A pacman package is a tar of the tree and a .PKGINFO; pacman -U takes it as is.
+if command -v zstd >/dev/null; then
+  R=$W/arch
+  tree "$R/usr"
+  SZ=$(du -sb "$R/usr" | cut -f1)
+  cat > "$R/.PKGINFO" <<EOF
+pkgname = maia
+pkgbase = maia
+pkgver = $PV-1
+pkgdesc = Fast, keyboard-first file manager
+url = https://github.com/yappologistic/Maia
+builddate = ${SOURCE_DATE_EPOCH:-$(date +%s)}
+packager = Unknown Packager
+size = $SZ
+arch = $A
+license = GPL-3.0-or-later
+depend = glibc
+depend = libglvnd
+depend = libxkbcommon
+optdepend = wayland: Wayland
+optdepend = libx11: X11
+optdepend = xdg-utils: open files with other programs
+optdepend = libarchive: more archive formats
+optdepend = git: git history and staging
+optdepend = ffmpeg: convert sound and video
+optdepend = imagemagick: convert pictures
+optdepend = poppler: PDF previews
+optdepend = udisks2: mount and format drives
+optdepend = gvfs: network places
+optdepend = libreoffice-fresh: Office document previews
+EOF
+  (cd "$R" && tar --owner=0 --group=0 --numeric-owner --sort=name -cf - .PKGINFO usr) \
+    | zstd -q -19 -o "$OUT/maia-$V-1-$A.pkg.tar.zst"
+  echo "pacman: maia-$V-1-$A.pkg.tar.zst"
+else
+  echo "pacman: skipped (no zstd)"
 fi
 
 # ---------------------------------------------------------------- AppImage
