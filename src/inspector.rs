@@ -1087,10 +1087,8 @@ pub fn inspector(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
                 h.here = rel.to_string_lossy().into_owned();
             }
         }
-        if ui.input(|i| i.pointer.any_pressed()) {
-            if let Some(pp) = ui.ctx().pointer_interact_pos() {
-                ins.keys = rect.contains(pp);
-            }
+        if let Some(k) = press_takes_keys(ui, rect) {
+            ins.keys = k;
         }
         // Leaving the work tree closes its history. Diffs wrap as code previews do.
         if !here.starts_with(&h.root) || !crate::gitlog::view(ui, rect, h, &mut ins.wrap_code, env) {
@@ -1407,10 +1405,8 @@ pub fn inspector(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
     }
     let body = Rect::from_min_max(pos2(rect.left(), hdr.bottom() + 1.0), rect.max);
     // Clicked, the preview takes Ctrl+F; a click elsewhere gives it back to the list.
-    if ui.input(|i| i.pointer.any_pressed()) {
-        if let Some(pp) = ui.ctx().pointer_interact_pos() {
-            ins.keys = rect.contains(pp);
-        }
+    if let Some(k) = press_takes_keys(ui, rect) {
+        ins.keys = k;
     }
     let mut bui = ui.new_child(UiBuilder::new().max_rect(body).id_salt(("insp", env.panel_id)));
     bui.set_clip_rect(body.intersect(ui.clip_rect()));
@@ -3189,6 +3185,20 @@ fn volume_view(ui: &mut Ui, body: Rect, e: &Entry, v: Option<&tab::VolInfo>, pal
             ui.painter().galley(c + vec2(-g.size().x / 2.0, 34.0 + i as f32 * 18.0 - g.size().y / 2.0), g, pal.text_dim);
         }
     }
+}
+
+/// Whether a press this frame gives the preview at `rect` the keyboard (inside it) or
+/// the list (outside). A press on a menu or dialog says neither: the preview's ⋯ menu
+/// hangs over the list, and choosing in it keeps Ctrl+A and Ctrl+C on the preview.
+fn press_takes_keys(ui: &Ui, rect: Rect) -> Option<bool> {
+    if !ui.input(|i| i.pointer.any_pressed()) {
+        return None;
+    }
+    let pp = ui.ctx().pointer_interact_pos()?;
+    if ui.ctx().layer_id_at(pp).is_some_and(|l| l.order >= egui::Order::Foreground) {
+        return None;
+    }
+    Some(rect.contains(pp))
 }
 
 /// Login name for a uid (from /etc/passwd), or the number.
