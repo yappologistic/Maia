@@ -5755,6 +5755,7 @@ fn properties(app: &mut App, ctx: &egui::Context, st: &mut PropState) -> bool {
         Close,
     }
     let date = |t: Option<std::time::SystemTime>| crate::listing::fmt_date(t, &app.cfg);
+    let mut copied: Option<String> = None;
     let (_, foot, rect) = centered_footer(ctx, "props", 500.0, &pal, |ui| {
         ui.spacing_mut().item_spacing.y = 6.0;
         let Some(snap) = &snap else { return };
@@ -5812,7 +5813,16 @@ fn properties(app: &mut App, ctx: &egui::Context, st: &mut PropState) -> bool {
                         job.append(part, 0.0, egui::TextFormat { font_id: body.clone(), color: pal.text, ..Default::default() });
                     }
                     job.wrap.max_width = ui.available_width();
-                    ui.add(egui::Label::new(job).wrap());
+                    // Clicked, the folder's whole path is copied, as it is written.
+                    let r = ui.add(egui::Label::new(job).wrap().selectable(false).sense(Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Copy location");
+                    crate::ui::note_control(ui, r.rect, "copy location");
+                    if r.clicked() {
+                        if let Some(d) = p.parent() {
+                            let s = d.display().to_string();
+                            ui.ctx().copy_text(s.clone());
+                            copied = Some(s);
+                        }
+                    }
                 });
                 if e.is_dir {
                     match app.stats.map.get(&p) {
@@ -5906,7 +5916,7 @@ fn properties(app: &mut App, ctx: &egui::Context, st: &mut PropState) -> bool {
                 });
                 if let Some(parent) = st.paths[0].parent() {
                     field_row(ui, key_w, "Location", &pal, |ui| {
-                        ui.add(egui::Label::new(parent.display().to_string()).wrap());
+                        ui.add(egui::Label::new(parent.display().to_string()).wrap().selectable(true));
                     });
                 }
             });
@@ -5930,6 +5940,9 @@ fn properties(app: &mut App, ctx: &egui::Context, st: &mut PropState) -> bool {
         });
         act
     });
+    if let Some(s) = copied {
+        app.toast(format!("Copied {s}"));
+    }
     match foot {
         Foot::Apply => st.apply = Some(OpKind::Perms { paths: st.paths.clone(), change: std::mem::take(&mut st.change), deep: st.deep }),
         Foot::Close => close = true,

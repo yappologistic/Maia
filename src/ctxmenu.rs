@@ -369,7 +369,9 @@ pub fn build(app: &mut App, panel: u64, pos: Pos2, background: bool) -> Popup {
         }
         items.push(Item::cmd(Cmd::CopyTo));
         items.push(Item::cmd(Cmd::MoveTo));
-        let mut copy = vec![Item::cmd(Cmd::CopyPath), Item::cmd(Cmd::CopyPathRaw), Item::cmd(Cmd::CopyName), Item::cmd(Cmd::CopyPathRelative)];
+        // The path as it is, where it is looked for; quoted and other forms under Copy as.
+        items.push(Item::labeled(Cmd::CopyPathRaw, "Copy Path"));
+        let mut copy = vec![Item::cmd(Cmd::CopyPath), Item::cmd(Cmd::CopyName), Item::cmd(Cmd::CopyPathRelative)];
         // path:line, for the file a search showed a line of.
         if p.line_hint.as_ref().is_some_and(|h| ents.iter().any(|e| e.0 == h.0)) {
             copy.push(Item::cmd(Cmd::CopyPathLine));
