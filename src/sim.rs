@@ -1161,13 +1161,14 @@ pub fn contents_from_menu(s: &mut Sim) -> bool {
     let Some(r) = crate::ui::CONTROLS.with(|c| c.borrow().iter().find(|(_, _, w)| *w == "panel menu").map(|(_, r, _)| *r)) else { return false };
     s.act(&format!("click {:.0} {:.0}", r.center().x, r.center().y));
     s.idle(2);
-    s.scroll_popup_to("Search File Contents");
+    // A chip in the menu's row of what the list shows, down its scrolled part.
+    s.scroll_popup_to("Search contents");
     s.idle(15);
-    if !s.texts.iter().any(|(_, t)| t == "Search File Contents") {
+    let Some(c) = crate::ui::CONTROLS.with(|c| c.borrow().iter().find(|(_, _, w)| *w == "search contents").map(|(_, r, _)| *r)).filter(|r| Rect::from_min_size(Pos2::ZERO, s.size).contains(r.center())) else {
         s.act("key Escape");
         return false;
-    }
-    s.click_text("Search File Contents");
+    };
+    s.act(&format!("click {:.0} {:.0}", c.center().x, c.center().y));
     s.idle(2);
     true
 }
@@ -10614,7 +10615,8 @@ mod journeys {
         wait_until(&mut s, "narrowed", 10, |s| s.tab().view.len() == 2);
         assert_eq!(names(&s), ["src", "NEW.txt"]);
         s.idle(3);
-        assert!(some_text(&s, "Filter 2 changed items…"));
+        // The hint says what the filter narrows; the figure at its end, how many are left.
+        assert!(some_text(&s, "Filter changed…") && some_text(&s, "2"));
         look(&mut s, "only changed");
         s.shot("only-changed");
         s.act("key ctrl+shift+g");
