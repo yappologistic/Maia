@@ -14767,3 +14767,35 @@ fn date_groups_match_asking_for_every_time() {
     assert!(seen.len() >= 7, "the times reach most groups: {seen:?}");
     assert_eq!(crate::tab::date_group(None, &cache), "Unknown");
 }
+
+/// What's New's lights: a field of characters from empty to dense, in two tones, the
+/// same for the same moment, sliding right as the pages go on, and moving with time.
+#[test]
+fn whats_new_lights_drift_and_slide_with_the_pages() {
+    use crate::glow::{Ask, frame};
+    let a = Ask { cols: 180, rows: 52, shift: 0.0, moving: true };
+    let g = frame(&a, 6.0, 0.0);
+    assert_eq!((g.cols, g.rows, g.level.len(), g.warm.len()), (180, 52, 180 * 52, 180 * 52));
+    assert!(g.level.iter().all(|&l| l <= 9), "every level a character of the ramp");
+    let mut hist = [0usize; 10];
+    for &l in &g.level {
+        hist[l as usize] += 1;
+    }
+    assert!(g.level.iter().any(|&l| l == 0) && g.level.iter().any(|&l| l >= 6), "empty ground and dense light both: {hist:?}");
+    assert!(g.warm.iter().any(|&w| w > 160) && g.warm.iter().any(|&w| w < 60), "both tones");
+    let again = frame(&a, 6.0, 0.0);
+    assert_eq!(g.level, again.level, "the same moment draws the same");
+    let later = frame(&a, 9.0, 0.0);
+    assert_ne!(g.level, later.level, "the lights move");
+    // Where the light stands across the width, weighted by how dense it is.
+    let middle = |g: &crate::glow::Grid| {
+        let (mut sum, mut at) = (0.0f64, 0.0f64);
+        for (k, &l) in g.level.iter().enumerate() {
+            sum += l as f64;
+            at += l as f64 * (k % g.cols) as f64;
+        }
+        at / sum
+    };
+    let (first, last) = (frame(&a, 6.0, -0.15), frame(&a, 6.0, 0.15));
+    assert!(middle(&last) > middle(&first) + 10.0, "the last page's lights stand further right: {} against {}", middle(&last), middle(&first));
+}

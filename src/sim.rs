@@ -14918,6 +14918,8 @@ mod journeys {
         let themed = std::env::var_os("MAIA_SIM_THEME").is_some();
         assert!((themed || s.app.cfg.theme == d.theme) && !s.app.cfg.show_hidden && !s.app.cfg.single_click && !s.app.cfg_dirty, "nothing chosen yet");
         look_welcome(&mut s, "welcome first page");
+        // The welcome has the dither; the lights are What's New's.
+        assert!(s.texts.iter().filter(|(_, t)| crate::glow::RAMP[1..].contains(&t.as_str())).count() < 5, "no lights behind the welcome");
         let controls = |_s: &Sim, what: &str| crate::ui::CONTROLS.with(|c| c.borrow().iter().filter(|(_, _, w)| *w == what).map(|(_, r, _)| *r).collect::<Vec<_>>());
         let click = |s: &mut Sim, r: Rect| s.act(&format!("click {:.0} {:.0}", r.center().x, r.center().y));
         // The look: a theme pointed at shows the window in it, one clicked is kept.
@@ -15049,6 +15051,18 @@ mod journeys {
             assert!(some_text(&s, t), "{t:?} on What's New's first page");
         }
         look_welcome(&mut s, "news first page");
+        // The lights behind the card: drawn by their thread (on the wall clock), around
+        // the card and clear of Skip and the page dots, a still frame with Animations off.
+        let glyphs = |s: &Sim| s.texts.iter().filter(|(_, t)| crate::glow::RAMP[1..].contains(&t.as_str())).map(|x| x.0).collect::<Vec<_>>();
+        let t0 = Instant::now();
+        while glyphs(&s).len() < 200 && t0.elapsed().as_secs() < 5 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            s.idle(1);
+        }
+        let lit = glyphs(&s);
+        assert!(lit.len() >= 200, "the lights drawn: {} characters", lit.len());
+        let kept = controls_named("welcome skip").into_iter().chain(controls_named("tour dot")).collect::<Vec<_>>();
+        assert!(!kept.is_empty() && lit.iter().all(|g| kept.iter().all(|k| !k.intersects(*g))), "nothing drawn over Skip or the dots");
         click_control(&mut s, "welcome next");
         assert_eq!(tour(&s).page, 1);
         film_on(&mut s);

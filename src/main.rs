@@ -39,6 +39,7 @@ mod copyto;
 mod convert;
 mod devtools;
 mod dither;
+mod glow;
 mod drives;
 mod dupes;
 mod editor;

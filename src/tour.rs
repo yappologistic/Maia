@@ -219,6 +219,8 @@ pub struct State {
     opened: Option<f64>,
     /// The opening page's moving dither, while that page is shown.
     dither: Option<crate::dither::Dither>,
+    /// What's New's lights behind the card, on every page.
+    glow: Option<crate::glow::Glow>,
     /// The app's icon, decoded on a thread the first time it is shown.
     icon: Option<egui::TextureHandle>,
     icon_rx: Option<Receiver<egui::ColorImage>>,
@@ -228,7 +230,7 @@ pub struct State {
 }
 
 pub fn open(kind: Kind, auto: bool) -> Popup {
-    Popup::Tour(Box::new(State { kind, page: 0, auto, film: None, turned: None, opened: None, dither: None, icon: None, icon_rx: None, block_h: 0.0 }))
+    Popup::Tour(Box::new(State { kind, page: 0, auto, film: None, turned: None, opened: None, dither: None, glow: None, icon: None, icon_rx: None, block_h: 0.0 }))
 }
 
 impl State {
@@ -540,6 +542,9 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
     if let Some(f) = &mut st.film {
         f.pump(ctx);
     }
+    if st.kind == Kind::News && st.glow.is_none() {
+        st.glow = Some(crate::glow::Glow::new(ctx));
+    }
     if page.body == Body::Hero {
         if st.dither.is_none() {
             st.dither = Some(crate::dither::Dither::new(ctx));
@@ -597,6 +602,13 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut State) -> bool {
         let ch = (scr.height() - 56.0 - dots_h - 16.0).min(700.0).max(240.0).round();
         let card = Rect::from_min_size(pos2((scr.center().x - cw / 2.0).round(), (scr.top() + 52.0 + ((scr.height() - 52.0 - dots_h - ch) / 2.0 - 8.0).max(0.0)).round()), vec2(cw, ch));
         let rad = if app.cfg.round_corners { 16 } else { 0 };
+        if let Some(g) = &mut st.glow {
+            // Clear of the card, the page dots under it and Skip, so they read on it.
+            let dw = n as f32 * 14.0;
+            let dots = Rect::from_min_size(pos2((scr.center().x - dw / 2.0).round(), card.bottom() + 12.0), vec2(dw, 24.0)).expand2(vec2(18.0, 4.0));
+            let skip = Rect::from_min_size(pos2(scr.right() - 92.0, scr.top() + 10.0), vec2(80.0, 26.0)).expand(8.0);
+            g.paint(ui, scr, &[card.expand(2.0), dots, skip], st.page, n, pal.accent, pal.bg, anim);
+        }
         p.rect(card, CornerRadius::same(rad), pal.panel, Stroke::new(1.0, pal.border), StrokeKind::Inside);
         // Side by side, or the picture over the words in a narrow window.
         let stacked = cw < 760.0;
