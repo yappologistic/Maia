@@ -15067,26 +15067,32 @@ mod journeys {
         assert_eq!(tour(&s).page, 1);
         film_on(&mut s);
         // A command without keys is shown by its name, as the palette finds it.
+        assert!(some_text(&s, "Your GitHub beside your files") && some_text(&s, "GitHub Profile"), "the page and its command");
+        look_welcome(&mut s, "news film page");
         s.act("key ArrowRight");
         film_on(&mut s);
-        assert!(some_text(&s, "Show Space Used") && some_text(&s, "Free Up Space"));
-        for _ in 2..n {
+        assert!(some_text(&s, "Twenty more themes") && some_text(&s, "Choose Theme"));
+        s.act("key ArrowRight");
+        s.act("key ArrowRight");
+        film_on(&mut s);
+        assert!(some_text(&s, "Copy a path in one step") && some_text(&s, "Ctrl+Shift+C") && some_text(&s, "Copy As Path"), "the page, its keys as bound");
+        for _ in 4..n {
             s.act("key ArrowRight");
         }
         s.idle(14);
         assert_eq!(tour(&s).page, n - 1);
-        for t in ["Also new", "For everyone", "Send To Phone", "Transfers you can steer", "Done"] {
+        for t in ["Also new", "A calmer window", "A calmer look", "Peek into a folder", "Done"] {
             assert!(some_text(&s, t), "{t:?} on the last page");
         }
         assert!(!some_text(&s, "Skip"), "the last page ends it, no Skip");
         look_welcome(&mut s, "news list page");
         // The groups further down are a scroll away.
-        let at = s.text_rect_any(&["Send To Phone"]).unwrap_or_else(|| s.fail("no card"));
+        let at = s.text_rect_any(&["Peek into a folder"]).unwrap_or_else(|| s.fail("no card"));
         for _ in 0..6 {
             s.act(&format!("scroll {:.0} {:.0} -10", at.center().x, at.center().y));
             s.idle(3);
         }
-        assert!(some_text(&s, "Lines of code") && some_text(&s, "For developers"), "the last group reached");
+        assert!(some_text(&s, "No window at login") && some_text(&s, "Around the desktop"), "the last group reached");
         look_welcome(&mut s, "news list page scrolled");
         // Done closes it, saying where it is.
         click_control(&mut s, "welcome next");
@@ -15556,135 +15562,83 @@ mod journeys {
             f.shot(&mut s, 2400, "");
             f.finish(&s);
         }
-        if want("jump") {
+        if want("github") {
+            // A made-up account, through a gh that answers as GitHub did.
+            let d = fake_gh("films-gh", true);
+            crate::drives::FAKE.with(|f| *f.borrow_mut() = Some(d));
+            let _ = std::fs::remove_dir_all(crate::github::cache_dir());
+            std::fs::create_dir_all(crate::github::cache_dir()).unwrap();
+            std::fs::write(crate::github::cache_dir().join("achievements.txt"), "starstruck\tStarstruck\t1\t4\nquickdraw\tQuickdraw\t0\t1\npull-shark\tPull Shark\t2\t2\ngalaxy-brain\tGalaxy Brain\t0\t1").unwrap();
             let mut s = film_window(&h, fonts);
-            // Gone to as a person goes: the app counts each folder left.
-            let walk = |s: &mut Sim, p: &Path| {
-                let panel = s.app.active;
-                s.app.actions.push(crate::app::Action::Navigate { panel, path: p.to_path_buf() });
-                s.settle();
-            };
-            for (dir, n) in [(h.join("Code/weather"), 6), (pics.clone(), 4), (docs.join("Recipes"), 3), (docs.join("Invoices"), 2), (h.join("Music/Night Drive"), 1)] {
-                for _ in 0..n {
-                    walk(&mut s, &dir);
-                    walk(&mut s, &h);
-                }
-            }
-            let mut f = Film::new(&s, "jump");
-            s.act("key ctrl+g");
-            wait_until(&mut s, "the folders", 10, |_| controls_named("jump row").len() >= 4);
-            f.shot(&mut s, 1700, "Ctrl G");
-            s.act("text lis");
-            s.idle(3);
-            f.shot(&mut s, 1200, "");
+            s.app.github = Default::default();
+            let mut f = Film::new(&s, "github");
+            s.act("key ctrl+shift+p");
+            s.act("text github");
+            f.shot(&mut s, 1300, "Ctrl Shift P");
             s.act("key Enter");
-            wait_until(&mut s, "in Lisbon", 10, |s| s.tab().path == pics);
-            wait_thumbs(&mut s);
-            f.shot(&mut s, 2200, "Enter");
+            wait_until(&mut s, "the profile", 20, |s| some_text(s, "Ana Lima"));
+            f.shot(&mut s, 2300, "Enter");
+            // The newest commit opens with the page; the arrows walk to the next one.
+            let Some(next) = s.app.github.data.as_ref().and_then(|d| d.items.iter().enumerate().filter(|(_, i)| i.sha.is_some()).nth(1).map(|(k, _)| k)) else { s.fail("no second commit") };
+            for _ in 0..=next {
+                s.act("key ArrowDown");
+            }
+            wait_until(&mut s, "the next commit open", 10, |s| s.app.github.sel == next && some_text(s, "src/lamp.rs"));
+            f.shot(&mut s, 2300, "↓ ↓");
             f.finish(&s);
-            let _ = std::fs::remove_file(crate::config::userdata_path());
+            crate::drives::FAKE.with(|f| *f.borrow_mut() = Some(film_drives()));
         }
-        if want("space") {
-            let mut s = film_window(&h, fonts);
-            s.cmd(SpaceUsed);
-            wait_until(&mut s, "counted", 20, |s| !space(s).counting());
-            // What it counted, as if three days ago the harbour film had not come yet and
-            // Downloads had held a little more.
-            let mut sizes: std::collections::HashMap<String, u64> = space(&s).items.iter().filter_map(|i| Some((i.entry.name.clone(), i.size?))).collect();
-            if let Some(v) = sizes.get_mut("Videos") {
-                *v = v.saturating_sub(24 << 20);
-            }
-            if let Some(v) = sizes.get_mut("Downloads") {
-                *v += 9 << 20;
-            }
-            s.act("key Escape");
-            s.settle();
-            let today = crate::timefmt::local_day(std::time::SystemTime::now());
-            let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() - 3 * 86_400;
-            crate::grew::note_in(&crate::grew::book_path(), crate::grew::Reading { day: today - 3, at, dir: h.clone(), sizes });
-            s.cmd(SpaceUsed);
-            wait_until(&mut s, "what grew", 20, |s| !space(s).counting() && space(s).before.is_some());
-            // The whole window, for the ring beside the list.
-            s.act("key f");
-            let mut f = Film::new(&s, "space");
-            f.shot(&mut s, 2200, "");
-            s.act("key Tab");
-            s.idle(20);
-            f.shot(&mut s, 2400, "Tab");
-            s.act("key Escape");
-            f.finish(&s);
-        }
-        if want("calendar") {
-            // The trip's photos over three days in May: the time of day they were taken
-            // is the files' own.
-            let mut photos: Vec<PathBuf> = std::fs::read_dir(&pics).unwrap().flatten().map(|e| e.path()).collect();
-            photos.sort();
-            let at = |x: i64| crate::timefmt::local_day(std::time::UNIX_EPOCH + std::time::Duration::from_secs(x as u64));
-            for (i, p) in photos.iter().enumerate() {
-                let d = crate::calendar::day_of(2026, 5, if i < 3 { 14 } else if i < 7 { 15 } else { 17 });
-                let mut secs = d * 86_400 + 12 * 3600 + i as i64 * 600;
-                secs += (d - at(secs)) * 86_400;
-                std::fs::File::options().write(true).open(p).unwrap().set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs as u64)).unwrap();
-            }
-            let mut s = film_window(&pics, fonts);
-            wait_thumbs(&mut s);
-            let mut f = Film::new(&s, "calendar");
-            s.act("key shift+F3");
-            wait_until(&mut s, "the trip's month", 20, |s| some_text(s, "May 2026") && s.texts.iter().any(|(_, t)| t.starts_with("9 pictures")));
-            for _ in 0..20 {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                s.idle(4);
-            }
-            f.shot(&mut s, 1700, "Shift F3");
-            let days = controls_named("calendar day");
-            let Some(day) = s.texts.iter().filter(|(r, t)| t == "15" && days.iter().any(|d| d.contains(r.center()))).map(|x| x.0).next() else { s.fail("no 15th") };
-            f.shot_click(&mut s, &format!("click {:.0} {:.0}", day.center().x, day.center().y), 1700);
-            s.act("key shift+ArrowRight");
-            s.act("key shift+ArrowRight");
-            f.shot(&mut s, 2300, "Shift → →");
-            s.act("key Escape");
-            f.finish(&s);
-        }
-        if want("readme") {
-            let mut s = film_window(&h.join("Code/weather"), fonts);
-            wait_until(&mut s, "the card", 10, |_| controls_named("readme edge").len() == 1);
-            let mut f = Film::new(&s, "readme");
-            f.shot(&mut s, 1800, "");
-            // Its edge pulled down for more of it.
-            let e = controls_named("readme edge")[0].center();
-            let to = e + vec2(0.0, 120.0);
-            s.act(&format!("drag {:.0} {:.0} {:.0} {:.0}", e.x, e.y, to.x, to.y));
-            f.shot(&mut s, 2400, "");
-            if let Some(r) = f.rows.last_mut() {
-                r.3 = Some(pos2(to.x * s.ppp, to.y * s.ppp));
-            }
-            f.finish(&s);
-            s.app.cfg.readme_height = 0.0;
-            s.app.cfg_dirty = true;
-            s.settle();
-        }
-        if want("pastes") {
+        if want("themes") {
             let mut s = film_window(&docs, fonts);
-            // Three sets copied in three folders.
-            select_name(&mut s, "Garden plan.md");
-            s.act("key ctrl+c");
-            go(&mut s, &pics);
-            let names: Vec<String> = s.tab().view.iter().map(|&i| s.tab().entries[i as usize].name.clone()).filter(|n| n.starts_with("IMG_")).take(3).collect();
-            select_names(&mut s, &names.iter().map(String::as_str).collect::<Vec<_>>());
-            s.act("key ctrl+c");
-            go(&mut s, &h.join("Music"));
-            select_name(&mut s, "Night Drive");
-            s.act("key ctrl+c");
-            go(&mut s, &h.join("Downloads"));
-            s.app.toast = None;
-            let mut f = Film::new(&s, "pastes");
-            s.act("key ctrl+shift+v");
-            wait_until(&mut s, "the sets", 10, |_| controls_named("paste row").len() == 3);
-            f.shot(&mut s, 2000, "Ctrl Shift V");
-            s.act("text 2");
-            wait_until(&mut s, "the photos pasted", 10, |s| names.iter().all(|n| h.join("Downloads").join(n).exists()) && !s.popup_open());
-            wait_thumbs(&mut s);
-            f.shot(&mut s, 2200, "2");
+            let mut f = Film::new(&s, "themes");
+            for (i, (find, name)) in [("tokyo night moon", "Tokyo Night Moon"), ("pencil light", "Pencil Light")].into_iter().enumerate() {
+                s.act("key ctrl+shift+p");
+                s.act("text choose theme");
+                s.act("key Enter");
+                s.settle();
+                s.act(&format!("text {find}"));
+                wait_until(&mut s, "the theme found", 10, |s| some_text(s, name));
+                f.shot(&mut s, if i == 0 { 1300 } else { 1100 }, "");
+                // Worn, and back to the window in it.
+                s.act("key Enter");
+                wait_until(&mut s, "the theme worn", 10, |s| s.app.cfg.theme.label() == name);
+                for _ in 0..3 {
+                    if s.popup_open() {
+                        s.act("key Escape");
+                        s.settle();
+                    }
+                }
+                f.shot(&mut s, if i == 0 { 1600 } else { 1900 }, "Enter");
+            }
+            f.finish(&s);
+        }
+        if want("scripts") {
+            // One word each: a name of several right-to-left words still runs left to right.
+            let letters = docs.join("Letters");
+            std::fs::create_dir_all(&letters).unwrap();
+            for n in ["یادداشت.md", "رسالة.txt", "מכתב.txt", "पत्र.txt", "จดหมาย.txt", "Επιστολή.txt", "手紙.txt", "편지.txt", "Letter.txt"] {
+                std::fs::write(letters.join(n), "").unwrap();
+            }
+            let mut s = film_window(&letters, fonts);
+            let mut f = Film::new(&s, "scripts");
+            f.shot(&mut s, 2200, "");
+            s.act("text یاد");
+            wait_until(&mut s, "the filter", 10, |s| s.tab().view.len() == 1);
+            f.shot(&mut s, 2000, "");
+            f.finish(&s);
+        }
+        if want("copypath") {
+            let mut s = film_window(&docs, fonts);
+            let mut f = Film::new(&s, "copypath");
+            f.shot(&mut s, 900, "");
+            let r = s.text_rect("Garden plan.md");
+            f.shot_click(&mut s, &format!("click {:.0} {:.0} right", r.center().x, r.center().y), 1800);
+            s.scroll_popup_to("Copy Path");
+            let c = s.text_rect("Copy Path");
+            f.shot_click(&mut s, &format!("click {:.0} {:.0}", c.center().x, c.center().y), 2400);
+            if !s.app.toast.as_ref().is_some_and(|t| t.0 == "Copied ~/Documents/Garden plan.md") {
+                s.fail(&format!("the copy said {:?}", s.app.toast));
+            }
             f.finish(&s);
         }
         crate::drives::FAKE.with(|f| *f.borrow_mut() = None);

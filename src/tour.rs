@@ -21,7 +21,7 @@ use crate::popups::{self as pp, Popup};
 use crate::theme::{Palette, ThemeName};
 
 /// The version What's New describes. A start that has seen an older one shows it.
-pub const NEWS_VERSION: &str = "0.6.0";
+pub const NEWS_VERSION: &str = "0.7.0";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -60,11 +60,10 @@ const PALETTE: &[u8] = include_bytes!("../assets/tour/palette.webp");
 const SPLIT: &[u8] = include_bytes!("../assets/tour/split.webp");
 const PREVIEW: &[u8] = include_bytes!("../assets/tour/preview.webp");
 const GIT: &[u8] = include_bytes!("../assets/tour/git.webp");
-const JUMP: &[u8] = include_bytes!("../assets/tour/jump.webp");
-const SPACE: &[u8] = include_bytes!("../assets/tour/space.webp");
-const CALENDAR: &[u8] = include_bytes!("../assets/tour/calendar.webp");
-const README: &[u8] = include_bytes!("../assets/tour/readme.webp");
-const PASTES: &[u8] = include_bytes!("../assets/tour/pastes.webp");
+const GITHUB: &[u8] = include_bytes!("../assets/tour/github.webp");
+const THEMES_FILM: &[u8] = include_bytes!("../assets/tour/themes.webp");
+const SCRIPTS: &[u8] = include_bytes!("../assets/tour/scripts.webp");
+const COPYPATH: &[u8] = include_bytes!("../assets/tour/copypath.webp");
 
 pub const WELCOME: &[Page] = &[
     Page {
@@ -137,67 +136,61 @@ pub const WELCOME: &[Page] = &[
 
 pub const NEWS: &[Page] = &[
     Page {
-        title: "Maia 0.6.0",
-        text: "Space used draws the disk as a map and says what grew, the folders you use most are a few letters away, and photos lie on a calendar by day. The next pages show them at work.",
+        title: "Maia 0.7.0",
+        text: "A calmer look throughout, twenty more themes, your GitHub profile beside your files, and names in every script. The next pages show them at work.",
         body: Body::Hero,
         keys: &[],
     },
     Page {
-        title: "Jump to the folders you use",
-        text: "Jump ranks the folders you go to by how often and how lately. A few letters of a name find one, and Enter goes there. With zoxide installed, its folders join in.",
-        body: Body::Film(JUMP),
-        keys: &[Cmd::Jump],
+        title: "Your GitHub beside your files",
+        text: "GitHub Profile shows the account gh is signed in to: followers, achievements, the year's contributions and what you did lately. The arrows open a commit's files, Enter its history in your clone, O the commit on GitHub.",
+        body: Body::Film(GITHUB),
+        keys: &[Cmd::GitHubProfile],
     },
     Page {
-        title: "See what fills the disk",
-        text: "Space used lists a folder biggest first, and Tab turns it into a map of blocks, each as big as what it holds. A later count says what grew since, and Free up lists what could go.",
-        body: Body::Film(SPACE),
-        keys: &[Cmd::SpaceUsed, Cmd::FreeUpSpace],
+        title: "Twenty more themes",
+        text: "Choose Theme has twenty more, dark and light, from Tokyo Night Moon to Pencil Light. Type a few letters of a name, or of what it looks like, and Enter wears it.",
+        body: Body::Film(THEMES_FILM),
+        keys: &[Cmd::ChooseTheme],
     },
     Page {
-        title: "Photos by the day",
-        text: "View Calendar lays a folder's pictures on the days they were taken. Click a day to select its pictures, take in a run of days with Shift and the arrows, and Enter opens them.",
-        body: Body::Film(CALENDAR),
-        keys: &[Cmd::ViewCalendar],
+        title: "Names in every script",
+        text: "Persian, Arabic, Hebrew, Hindi, Thai, Greek, Japanese and Korean names are drawn whole, joined as they should be, where they showed as boxes. The font set in Options leads; the letters it lacks come from your system's.",
+        body: Body::Film(SCRIPTS),
+        keys: &[Cmd::Options],
     },
     Page {
-        title: "A folder's README above its files",
-        text: "A folder with a README shows the start of it in a card over the list. Drag the card's edge for more of it in every folder, or close it for this one.",
-        body: Body::Film(README),
-        keys: &[Cmd::ToggleReadme],
+        title: "Copy a path in one step",
+        text: "Right-click a file or folder for Copy Path, its full path as it is. Ctrl+Shift+C copies it quoted for a terminal, and in Properties a click on the location copies the folder's.",
+        body: Body::Film(COPYPATH),
+        keys: &[Cmd::CopyPath],
     },
-    Page {
-        title: "Paste what you copied earlier",
-        text: "The last nine sets of files copied or cut wait in a list for the session. A number or a click pastes one here; the clipboard itself still holds only the latest.",
-        body: Body::Film(PASTES),
-        keys: &[Cmd::PasteEarlier],
-    },
-    Page { title: "Also new", text: "The rest of 0.6.0, by who will use it most.", body: Body::List, keys: &[] },
+    Page { title: "Also new", text: "The rest of 0.7.0, by who will use it most.", body: Body::List, keys: &[] },
 ];
 
-/// Everything else 0.6.0 added: (group, [(icon, name, one line)]).
+/// Everything else 0.7.0 added: (group, [(icon, name, one line)]).
 pub const ALSO: &[(&str, &[(&str, &str, &str)])] = &[
     (
-        "For everyone",
+        "A calmer window",
         &[
-            ("smartphone", "Send To Phone", "The selection on this network for five minutes, through a code the phone's camera reads. Folders go as zips."),
-            ("pause", "Transfers you can steer", "Ctrl+Shift+J lists the copies and moves: pause one, start a waiting one now, or drag them into another order."),
-            ("pin", "Pin To Top", "A file or folder kept first in its folder, whatever the sort. Pin Tab keeps a tab small at the left."),
-            ("image", "Paste a picture", "A picture or text copied in another app pastes as a new file, named after the time."),
-            ("lock", "Photos without their place", "Email and Send To Phone can send copies without where a photo was taken or the camera. The original stays as it was."),
-            ("globe", "Where a download came from", "The inspector names the site a file was downloaded from, and Group By Origin sorts a folder by it."),
-            ("trash-2", "Free Up Space", "What could go to make room on a disk: build output, download caches, thumbnails, the trash."),
+            ("diamond", "A calmer look", "Less chrome and colour, one set of controls in every bar, menu and dialog, and words where icons said too little."),
+            ("scan-eye", "Peek into a folder", "Point at a folder and the first pictures in it fan out."),
+            ("search", "A filter you can watch", "Rows glide as the filter narrows them, the letters that matched lit."),
+            ("image", "Pictures in their own light", "A preview glows in its picture's colours, its five main colours copy with a click, and Sort By Colour orders a folder by them."),
+            ("clock", "A ribbon of dates", "Sorted by date, the scrollbar marks the years, and names the month while you drag it."),
+            ("columns-2", "Wipe to compare", "The viewer lays one picture over another with a line to drag between them, and a filmstrip runs along its foot."),
+            ("tag", "Coloured folders", "A folder's icon takes the colour of its label."),
         ],
     ),
     (
-        "Views and the look",
+        "Steadier",
         &[
-            ("view-stack", "The Stack view", "The items standing in a row, the one at the cursor turned to face you. Ctrl+Shift+8."),
-            ("diamond", "New icons", "One set throughout, drawn at exactly the pixels it takes, so it stays sharp at every size."),
-            ("house", "A new welcome", "A first start picks the look, the size and how things open, over the whole window."),
+            ("hard-drive", "A stalled drive holds nothing up", "Properties, the path's folder list and the preview read the disk away from the window, so a network drive that stops answering no longer freezes it."),
+            ("list", "Big folders stay quick", "The path's folder list and the Timeline stay smooth with tens of thousands of files."),
+            ("file", "Every name opens", "Paths whose names are not UTF-8 open from the command line and from other apps."),
         ],
     ),
-    ("For developers", &[("code", "Lines of code", "The inspector counts a project's lines by language, in the files git keeps.")]),
+    ("Around the desktop", &[("monitor", "No window at login", "A dock that asks Maia about itself at login no longer opens a window.")]),
 ];
 
 pub fn pages(kind: Kind) -> &'static [Page] {
