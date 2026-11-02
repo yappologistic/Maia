@@ -97,6 +97,23 @@ pub struct PathDropState {
     pub info: std::collections::HashMap<PathBuf, fsx::Entry>,
     pub anchor: Option<Pos2>,
     focus: bool,
+    /// The folder still being read on a worker (a slow or dead mount keeps it there).
+    load: Option<std::sync::mpsc::Receiver<DropList>>,
+    /// The entries the query leaves, by index, and the query they are for.
+    shown: Option<(String, Vec<usize>)>,
+    /// The list's scroll offset and height, to keep the chosen row in view.
+    view: (f32, f32),
+}
+
+type DropList = (Vec<PathBuf>, std::collections::HashMap<PathBuf, fsx::Entry>);
+
+impl PathDropState {
+    fn take(&mut self, (entries, info): DropList) {
+        self.sel = self.next.as_ref().and_then(|n| entries.iter().position(|e| e == n)).unwrap_or(0);
+        self.entries = entries;
+        self.info = info;
+        self.shown = None;
+    }
 }
 
 pub struct ConflictState {
@@ -614,10 +631,20 @@ impl Popup {
         Popup::RenameMenu { panel, pos }
     }
     pub fn path_dropdown(panel: u64, dir: PathBuf, next: Option<PathBuf>) -> Popup {
-        let entries = subdirs(&dir);
-        let info = entries.iter().take(5000).filter_map(|p| fsx::Entry::from_path(p).map(|e| (p.clone(), e))).collect();
-        let sel = next.as_ref().and_then(|n| entries.iter().position(|e| e == n)).unwrap_or(0);
-        Popup::PathDropdown(PathDropState { panel, dir, next, query: String::new(), sel, entries, info, anchor: None, focus: true })
+        let (tx, rx) = std::sync::mpsc::channel();
+        let at = dir.clone();
+        std::thread::spawn(move || {
+            let entries = subdirs(&at);
+            let info = entries.iter().take(5000).filter_map(|p| fsx::Entry::from_path(p).map(|e| (p.clone(), e))).collect();
+            let _ = tx.send((entries, info));
+        });
+        let mut st = PathDropState { panel, dir, next, query: String::new(), sel: 0, entries: vec![], info: Default::default(), anchor: None, focus: true, load: None, shown: None, view: (0.0, 0.0) };
+        // A folder on a working disk is read before the dropdown's first frame.
+        match rx.recv_timeout(Duration::from_millis(40)) {
+            Ok(l) => st.take(l),
+            Err(_) => st.load = Some(rx),
+        }
+        Popup::PathDropdown(st)
     }
 
     pub fn is_capturing(&self) -> bool {
@@ -6460,12 +6487,35 @@ fn path_dropdown(app: &mut App, ctx: &egui::Context, st: &mut PathDropState) -> 
             }
         }
     }
-    let q = fuzzy::Query::new(&st.query);
-    let shown: Vec<PathBuf> = st.entries.iter().filter(|p| q.is_empty() || fuzzy::score(&q, &p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default()).is_some()).cloned().collect();
+    let loading = match st.load.as_ref().map(|rx| rx.try_recv()) {
+        Some(Ok(l)) => {
+            st.load = None;
+            st.take(l);
+            false
+        }
+        Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
+            ctx.request_repaint_after(Duration::from_millis(30));
+            true
+        }
+        Some(Err(_)) => {
+            st.load = None;
+            false
+        }
+        None => false,
+    };
+    // Filtered once per query, not every frame: a folder can hold ten thousand names.
+    if st.shown.as_ref().is_none_or(|(q, _)| *q != st.query) {
+        let q = fuzzy::Query::new(&st.query);
+        let keep = st.entries.iter().enumerate().filter(|(_, p)| q.is_empty() || fuzzy::score(&q, &p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default()).is_some()).map(|(i, _)| i).collect();
+        st.shown = Some((st.query.clone(), keep));
+    }
+    // Out of the state while the frame uses it, put back at the end.
+    let (shown_for, shown) = st.shown.take().unwrap_or_default();
+    let before = st.sel;
     step(&mut st.sel, shown.len(), &k, |_| false);
     let mut go: Option<(PathBuf, bool)> = None;
     if k.enter || k.ctrl_enter {
-        if let Some(p) = shown.get(st.sel) {
+        if let Some(p) = shown.get(st.sel).and_then(|&i| st.entries.get(i)) {
             go = Some((p.clone(), k.ctrl_enter));
         }
     }
@@ -6491,8 +6541,17 @@ fn path_dropdown(app: &mut App, ctx: &egui::Context, st: &mut PathDropState) -> 
         let xr = ui.min_rect().x_range();
         ui.painter().line_segment([pos2(xr.min - 5.0, yy), pos2(xr.max + 5.0, yy)], Stroke::new(1.0, pal.border));
         ui.add_space(4.0);
-        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-            for (i, p) in shown.iter().enumerate() {
+        // Only the rows in view are laid out; keys move the view to keep the chosen one in it.
+        let row_full = 24.0 + ui.spacing().item_spacing.y;
+        let mut sa = egui::ScrollArea::vertical().id_salt("pathdrop-list").max_height(360.0);
+        if st.sel != before && st.view.1 > 0.0 {
+            let top = st.sel as f32 * row_full;
+            let off = if top < st.view.0 { top } else if top + 24.0 > st.view.0 + st.view.1 { top + 24.0 - st.view.1 } else { st.view.0 };
+            sa = sa.vertical_scroll_offset(off.max(0.0));
+        }
+        let out = sa.show_rows(ui, 24.0, shown.len(), |ui, range| {
+            for i in range {
+                let Some(p) = shown.get(i).and_then(|&j| st.entries.get(j)) else { continue };
                 let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 let highlighted = Some(p) == st.next.as_ref();
                 let sel = i == st.sel;
@@ -6509,9 +6568,6 @@ fn path_dropdown(app: &mut App, ctx: &egui::Context, st: &mut PathDropState) -> 
                     let g = crate::listing::elided(ui, &name, FontId::proportional(12.5), (r.width() - 38.0).max(20.0), col);
                     ui.painter().galley(pos2(r.left() + 30.0, r.center().y - g.size().y / 2.0), g, col);
                 });
-                if i == st.sel && (k.up || k.down) {
-                    resp.scroll_to_me(None);
-                }
                 if resp.clicked() {
                     go = Some((p.clone(), false));
                 }
@@ -6519,11 +6575,13 @@ fn path_dropdown(app: &mut App, ctx: &egui::Context, st: &mut PathDropState) -> 
                     go = Some((p.clone(), true));
                 }
             }
-            if shown.is_empty() {
-                ui.label(egui::RichText::new("Empty folder").color(pal.text_dim));
-            }
         });
+        st.view = (out.state.offset().y, out.inner_rect.height());
+        if shown.is_empty() && !loading {
+            ui.label(egui::RichText::new("Empty folder").color(pal.text_dim));
+        }
     });
+    st.shown = Some((shown_for, shown));
     if close {
         return false;
     }

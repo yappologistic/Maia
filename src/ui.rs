@@ -1471,6 +1471,7 @@ impl App {
             if (!tab::is_place(p) || !last) && x + sep_w <= rect.right() + 0.5 {
                 let sr = Rect::from_min_size(pos2(x, rect.top()), vec2(sep_w, rect.height()));
                 let sresp = ui.interact(sr, Id::new(("crumb_sep", id, i)), Sense::click());
+                note_control(ui, sr, "crumb chevron");
                 if sresp.hovered() && !dropped {
                     ui.painter().rect_filled(sr.shrink2(vec2(0.0, 2.0)), CornerRadius::same(4), crate::kit::touch(&pal));
                 }

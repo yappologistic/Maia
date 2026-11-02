@@ -3673,6 +3673,53 @@ mod journeys {
         report("popups", &s);
     }
 
+    /// The path bar's folder dropdown on a folder of thousands: it opens at once, keeps
+    /// every frame short while open (only the rows in view are laid out), filters, and
+    /// keeps the row the keys choose in view.
+    #[test]
+    fn path_dropdown_on_a_big_folder() {
+        if !sandboxed() {
+            return;
+        }
+        let home = fixture("bigdrop");
+        let big = home.join("Thousands");
+        std::fs::create_dir_all(big.join("inner")).unwrap();
+        for i in 0..6000 {
+            std::fs::write(big.join(format!("file {i:05}.txt")), "").unwrap();
+        }
+        let mut s = Sim::new(&big.join("inner"), vec2(1280.0, 800.0));
+        s.settle();
+        // The chevron after "Thousands" drops down what it holds.
+        let chevrons: Vec<Rect> = crate::ui::CONTROLS.with(|c| c.borrow().iter().filter(|(_, _, w)| *w == "crumb chevron").map(|(_, r, _)| *r).collect());
+        let Some(r) = chevrons.iter().rev().nth(1).copied() else { s.fail("no crumb chevron before the folder shown") };
+        s.frame_ms.clear();
+        s.act(&format!("click {:.0} {:.0}", r.center().x, r.center().y));
+        s.idle(2);
+        let got = match &s.app.popup {
+            Popup::PathDropdown(st) => format!("{} with {}", st.dir.display(), st.entries.len()),
+            p => p.kind_name().to_string(),
+        };
+        assert!(matches!(&s.app.popup, Popup::PathDropdown(st) if st.dir == big && st.entries.len() == 6001), "the dropdown lists Thousands: {got}");
+        assert!(s.texts.iter().any(|(_, t)| t == "inner"), "the folder the path goes on into is listed");
+        s.idle(20);
+        for _ in 0..40 {
+            s.act("key ArrowDown");
+        }
+        let sel = match &s.app.popup {
+            Popup::PathDropdown(st) => st.entries[st.sel].file_name().unwrap().to_string_lossy().into_owned(),
+            _ => s.fail("the dropdown closed"),
+        };
+        assert!(s.texts.iter().any(|(_, t)| *t == sel), "the chosen row {sel:?} is in view");
+        s.act("text 05999");
+        s.idle(3);
+        assert!(s.texts.iter().any(|(_, t)| t == "file 05999.txt"), "the filter finds the last file");
+        look(&mut s, "big folder dropdown");
+        let (_, _, max) = s.timing();
+        assert!(max < SLOW_MS, "slowest frame with the dropdown open {max:.1} ms");
+        s.act("key Escape");
+        report("big dropdown", &s);
+    }
+
     /// Two to four panels side by side and stacked, small and large, in every view.
     #[test]
     fn split_layouts_render_cleanly() {
