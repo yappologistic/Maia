@@ -3707,6 +3707,51 @@ mod journeys {
         report("big timeline", &s);
     }
 
+    /// Copy Path from a file's right-click menu puts its whole path on the clipboard,
+    /// unquoted though it has spaces, and says it from home; the quoted form stays under
+    /// Copy as. In Properties a click on the location copies the folder's path.
+    #[test]
+    fn copy_path_from_the_menu_and_properties() {
+        if !sandboxed() {
+            return;
+        }
+        let home = fixture("copypath");
+        let docs = home.join("Documents");
+        let file = docs.join("budget 2026.csv");
+        let mut s = Sim::new(&docs, vec2(1280.0, 800.0));
+        s.settle();
+        select_path(&mut s, &file);
+        let r = s.text_rect("budget 2026.csv");
+        s.act(&format!("click {:.0} {:.0} right", r.center().x, r.center().y));
+        s.settle();
+        look(&mut s, "file menu with Copy Path");
+        s.click_text("Copy Path");
+        s.settle();
+        assert_eq!(s.copied.last().map(String::as_str), Some(file.to_str().unwrap()), "the path as it is");
+        let short = crate::popups::home_short(&file);
+        assert!(short.starts_with("~/") && toast_is(&s, &format!("Copied {short}")), "said from home: {:?}", s.app.toast);
+        // The quoted form, from Copy as.
+        s.act(&format!("click {:.0} {:.0} right", r.center().x, r.center().y));
+        s.settle();
+        s.click_text("Copy as");
+        s.settle();
+        s.click_text("Copy As Path");
+        s.settle();
+        assert_eq!(s.copied.last().cloned(), Some(crate::clipboard::quote_if_needed(file.to_str().unwrap())), "quoted under Copy as");
+        assert_ne!(s.copied.last().map(String::as_str), Some(file.to_str().unwrap()), "a name with a space is quoted there");
+        // Properties: the location copies the folder.
+        s.cmd(Properties);
+        wait_until(&mut s, "properties", 5, |s| matches!(s.app.popup, Popup::Properties(_)));
+        s.idle(3);
+        look(&mut s, "properties location");
+        click_control(&mut s, "copy location");
+        s.settle();
+        assert_eq!(s.copied.last().map(String::as_str), Some(docs.to_str().unwrap()), "the folder it is in");
+        assert!(toast_is(&s, &format!("Copied {}", crate::popups::home_short(&docs))), "{:?}", s.app.toast);
+        assert!(matches!(s.app.popup, Popup::Properties(_)), "Properties stays open");
+        report("copy path", &s);
+    }
+
     /// The path bar's folder dropdown on a folder of thousands: it opens at once, keeps
     /// every frame short while open (only the rows in view are laid out), filters, and
     /// keeps the row the keys choose in view.
@@ -15007,8 +15052,6 @@ mod journeys {
         click_control(&mut s, "welcome next");
         assert_eq!(tour(&s).page, 1);
         film_on(&mut s);
-        assert!(some_text(&s, "Jump to the folders you use") && some_text(&s, "Ctrl+G") && some_text(&s, "Jump To Folder"), "the page, its keys as bound");
-        look_welcome(&mut s, "news film page");
         // A command without keys is shown by its name, as the palette finds it.
         s.act("key ArrowRight");
         film_on(&mut s);

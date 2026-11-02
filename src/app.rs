@@ -3128,7 +3128,13 @@ impl App {
                     .collect::<Vec<_>>()
                     .join("\n");
                 ctx.copy_text(s.clone());
-                self.toast(format!("Copied {}", if paths.len() == 1 { s } else { format!("{} paths", paths.len()) }));
+                // Said from home, as the path bar writes it: the clipboard has it whole.
+                let said = match (cmd, paths.as_slice()) {
+                    (Cmd::CopyName, [_]) => s,
+                    (_, [p]) => crate::popups::home_short(p),
+                    _ => format!("{} paths", paths.len()),
+                };
+                self.toast(format!("Copied {said}"));
             }
             Cmd::Trash => {
                 let paths = self.tab().targets();

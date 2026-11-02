@@ -5817,9 +5817,8 @@ fn properties(app: &mut App, ctx: &egui::Context, st: &mut PropState) -> bool {
                     crate::ui::note_control(ui, r.rect, "copy location");
                     if r.clicked() {
                         if let Some(d) = p.parent() {
-                            let s = d.display().to_string();
-                            ui.ctx().copy_text(s.clone());
-                            copied = Some(s);
+                            ui.ctx().copy_text(d.display().to_string());
+                            copied = Some(home_short(d));
                         }
                     }
                 });
