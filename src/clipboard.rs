@@ -232,9 +232,10 @@ pub fn get_files() -> Option<(Vec<PathBuf>, bool)> {
     })
 }
 
-/// Quote a path for shells only when needed.
+/// Quote a path for shells only when needed. `=` joins them: alone as a command's first
+/// word, an unquoted `x=y` would be an assignment, not a file.
 pub fn quote_if_needed(s: &str) -> String {
-    if s.chars().any(|c| c.is_whitespace() || "'\"$`\\!*?&;|<>()[]{}#~".contains(c)) {
+    if s.chars().any(|c| c.is_whitespace() || "'\"$`\\!*?&;|<>()[]{}#~=".contains(c)) {
         format!("'{}'", s.replace('\'', "'\\''"))
     } else {
         s.to_string()

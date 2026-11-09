@@ -581,6 +581,14 @@ pub fn parse_slt(text: &str) -> Vec<Item> {
 }
 
 fn extract7(archive: &Path, members: &[PathBuf], dir: &Path, pw: Option<&str>, go: &mut dyn FnMut(Command, Option<&str>) -> Result<(), String>) -> Result<(), String> {
+    // A link member is how an archive writes through a folder shortcut: old p7zip
+    // (16.x, still shipped) follows it out of the destination folder. bsdtar checks
+    // every member it writes; here the listing is the only guard, so links refuse.
+    if let Ok(all) = list(archive) {
+        if all.iter().any(|i| i.link) {
+            return Err("This archive holds links; a newer 7-Zip is needed to extract it safely".into());
+        }
+    }
     let mut c = tool(seven()?);
     let mut o = std::ffi::OsString::from("-o");
     o.push(dir);

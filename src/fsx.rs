@@ -1,6 +1,8 @@
 //! Filesystem access: fast directory listing, recursive walking, mounts, formatting.
 
+use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -428,7 +430,7 @@ pub fn mounts_in(table: &Path) -> Vec<Mount> {
     out
 }
 
-fn unescape_mount(s: &str) -> String {
+pub(crate) fn unescape_mount(s: &str) -> String {
     // /proc/mounts escapes space, tab, newline, backslash as octal.
     s.replace("\\040", " ").replace("\\011", "\t").replace("\\012", "\n").replace("\\134", "\\")
 }
@@ -541,24 +543,54 @@ pub fn open_plain(p: &Path) -> Option<std::fs::File> {
 
 /// Unique destination name: "name (1).ext", "name (2).ext", ...
 pub fn unique_dest(dir: &Path, name: &str) -> PathBuf {
+    unique_dest_os(dir, OsStr::new(name))
+}
+
+/// `unique_dest` from the name's own bytes, so a name that isn't UTF-8 keeps them.
+pub fn unique_dest_os(dir: &Path, name: &OsStr) -> PathBuf {
     let cand = dir.join(name);
     if fs::symlink_metadata(&cand).is_err() {
         return cand;
     }
     let p = Path::new(name);
-    let (stem, ext) = match (p.file_stem(), p.extension()) {
-        (Some(s), Some(e)) if !name.starts_with('.') || name.matches('.').count() > 1 => {
-            (s.to_string_lossy().into_owned(), format!(".{}", e.to_string_lossy()))
-        }
-        _ => (name.to_string(), String::new()),
+    let (stem, ext): (&OsStr, OsString) = match (p.file_stem(), p.extension()) {
+        (Some(s), Some(e)) if !name.as_bytes().starts_with(b".") || name.as_bytes().iter().filter(|b| **b == b'.').count() > 1 => (s, dotted(e)),
+        _ => (name, OsString::new()),
     };
-    for i in 1.. {
-        let c = dir.join(format!("{stem} ({i}){ext}"));
+    for i in 1..100_000u32 {
+        let c = dir.join(numbered(stem, &ext, i));
         if fs::symlink_metadata(&c).is_err() {
             return c;
         }
     }
-    unreachable!()
+    // Every "name (i)" there is, is taken: the clock, which does not repeat itself,
+    // finishes the job.
+    let t = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    for i in 0..1000u64 {
+        let mut b = stem.as_bytes().to_vec();
+        b.extend_from_slice(format!("-{}", t + i as u128).as_bytes());
+        b.extend_from_slice(ext.as_bytes());
+        let c = dir.join(OsString::from_vec(b));
+        if fs::symlink_metadata(&c).is_err() {
+            return c;
+        }
+    }
+    dir.join(numbered(stem, &ext, std::process::id()))
+}
+
+/// The extension with its dot back on, from raw bytes ("txt" → ".txt").
+fn dotted(e: &OsStr) -> OsString {
+    let mut v = b".".to_vec();
+    v.extend_from_slice(e.as_bytes());
+    OsString::from_vec(v)
+}
+
+/// `numbered("name", ".ext", 3)` is "name (3).ext", from the raw bytes.
+fn numbered(stem: &OsStr, ext: &OsStr, i: u32) -> OsString {
+    let mut b = stem.as_bytes().to_vec();
+    b.extend_from_slice(format!(" ({i})").as_bytes());
+    b.extend_from_slice(ext.as_bytes());
+    OsString::from_vec(b)
 }
 
 /// What kind of storage `path` lives on: network shares by mount type, spinning disks by
@@ -590,7 +622,7 @@ fn classify_drive(path: &Path, dev: u64) -> crate::config::DriveKind {
     for l in mounts.lines() {
         let mut it = l.split_whitespace();
         let (Some(_), Some(mp), Some(ty)) = (it.next(), it.next(), it.next()) else { continue };
-        let mp = mp.replace("\\040", " ");
+        let mp = unescape_mount(mp);
         if canon.starts_with(&mp) && best.as_ref().map(|b| mp.len() > b.0).unwrap_or(true) {
             best = Some((mp.len(), ty.to_string()));
         }

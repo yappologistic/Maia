@@ -6,6 +6,85 @@ background file operations.
 
 ![Maia: a project's source files beside its git history](docs/maia.webp)
 
+> **This fork** carries the 0.7.0 source with 15 fixes from a full code review:
+> a data-loss bug in the stack view, an overwrite that could destroy a file,
+> four fixes for names that aren't UTF-8, five security fixes and five
+> resilience fixes. [FIXES.md](FIXES.md) has every file and every reason; the
+> [What's fixed](#whats-fixed) section below is the short version.
+
+## What's fixed
+
+Every change is small and surgical: no feature changed shape, no behaviour moved.
+`cargo check` is clean and `cargo test --features testkit -- --skip sim::`
+passes the same 325 tests as before.
+
+**Data safety**
+
+- **Stack view: a drop landed on a card behind the one aimed at** (issue #19).
+  The cards overlap almost completely, but the drop was taken by raw rectangle
+  containment in paint order, so a dragged folder could land in a folder several
+  cards deep without a warning. The one card on top of the pile — the one the
+  pointer is really over — takes the drop and the highlight now.
+  (`src/stack.rs`, `src/listing.rs`)
+- **Replacing a file could destroy it when the trash couldn't take it.** An
+  overwrite sends the old file to the trash; when the trash refused (say, no
+  trash folder on that mount), the old file was removed permanently, outside
+  undo. It is renamed beside its old spot instead, and if even that fails it
+  goes back where it was. (`src/ops.rs`)
+- **The listing could go stale while a rename editor was open.** A folder
+  change arriving then was consumed and dropped; it goes back in line and is
+  applied the moment the editor closes. (`src/app.rs`, `src/watch.rs`)
+- **inotify queue overflow was silently ignored**, losing changes for good;
+  every watched folder re-lists when the kernel runs out of event space.
+  (`src/watch.rs`)
+- **A pathological `unique_dest` could loop forever**; the "name (1)" search
+  is capped, and past the cap the clock names the file. (`src/fsx.rs`)
+
+**Names that aren't UTF-8**
+
+- Copies with "Keep both" landed under a replacement-character name; the final
+  name now comes from the source's own bytes end to end. (`src/fsx.rs`,
+  `src/ops.rs`)
+- A trashed file kept a mangled name while it sat in the trash; it keeps its
+  raw bytes now. (`src/trashcan.rs`)
+- Batch rename rewrote a non-UTF-8 name as its lossy stand-in; such files are
+  left alone. (`src/batchname.rs`)
+- Trash search misread mount points with tabs, newlines or backslashes:
+  `/proc/mounts` escapes four characters as octal and only the space was
+  unescaped. All four are now. (`src/trashcan.rs`, `src/fsx.rs`)
+
+**Security**
+
+- The self-update's checksum file omitted the .deb (`sha256sum maia-*` misses
+  `maia_0.7.0_amd64.deb`), so a deb update could never pass its check.
+  (`.github/workflows/release.yml`)
+- Root commands were resolved through the user's PATH, so a hostile `cp` on
+  PATH would run as root with the user's own password; programs are looked up
+  in the system directories only. (`src/admin.rs`)
+- Android phones (MTP) went missing on package installs (issue #20): the .deb
+  only *suggested* gvfs and the .rpm said nothing, and MTP and network places
+  reach Maia through gvfs. The packages ask for `gvfs-backends` and
+  `gvfs-fuse` (and the rpm for `gvfsd-fuse`/`gvfsd-mtp`) now.
+  (`tools/package.sh`)
+- The single-instance socket took "open this path" commands from anyone: it is
+  chmod 0600 and every connection is checked against `SO_PEERCRED`.
+  (`src/single.rs`)
+- Extraction through old p7zip (16.x) could follow an archive's folder link out
+  of the destination (the CVE-2018-5991 class); archives containing links
+  refuse the 7z tool and ask for a newer 7-Zip instead — `bsdtar` still works.
+  (`src/archive.rs`)
+
+**Resilience**
+
+- Five locked reads on a job's progress panicked on a poisoned mutex and would
+  abort the whole program; they recover like the rest of the code does.
+  (`src/app.rs`, `src/ui.rs`, `src/watch.rs`)
+- A path ending in `=` is quoted for custom actions' shells, where alone as the
+  first word an unquoted `x=y` would parse as an assignment. (`src/clipboard.rs`)
+
+Exact details — the mechanism of every bug and the reason for every choice,
+including the things looked at and deliberately left — are in [FIXES.md](FIXES.md).
+
 <p align="center">
   <a href="https://buymeacoffee.com/e_gurl">
     <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Support Maia on Buy Me a Coffee" width="217" height="60">

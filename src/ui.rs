@@ -1934,7 +1934,7 @@ impl App {
                 for (k, j) in self.jobs.iter_mut().enumerate().filter(|_| !listed) {
                     egui::Frame::popup(ui.style()).fill(pal.raised).corner_radius(CornerRadius::same(10)).inner_margin(10.0).show(ui, |ui| {
                         ui.set_width(320.0);
-                        let mut p = j.progress.lock().unwrap();
+                        let mut p = j.progress.lock().unwrap_or_else(|e| e.into_inner());
                         let done = p.finished;
                         // Its disk is busy with another job: it starts when that one ends.
                         let waiting = if done { None } else { p.waiting.clone() };
@@ -2048,7 +2048,7 @@ impl App {
                             let same = p.same;
                             drop(p);
                             crate::transfers::clash_box(ui, j, &c, same, &pal);
-                            p = j.progress.lock().unwrap();
+                            p = j.progress.lock().unwrap_or_else(|e| e.into_inner());
                         }
                         if !p.errors.is_empty() {
                             let n = p.errors.len();

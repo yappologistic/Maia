@@ -4,6 +4,8 @@
 
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
@@ -70,7 +72,13 @@ pub fn forward(sock: &Path, r: &Request) -> bool {
 /// a crash and is replaced. None when another Maia already listens there.
 pub fn claim_at(sock: &Path) -> Option<UnixListener> {
     match UnixListener::bind(sock) {
-        Ok(l) => Some(l),
+        Ok(l) => {
+            // Only this user's own processes should reach it, wherever it sits (the /tmp
+            // fallback when XDG_RUNTIME_DIR is missing): the kernel's peer check is
+            // backed up by the file mode.
+            let _ = std::fs::set_permissions(sock, std::fs::Permissions::from_mode(0o600));
+            Some(l)
+        }
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
             if UnixStream::connect(sock).is_ok() {
                 return None;
@@ -79,6 +87,16 @@ pub fn claim_at(sock: &Path) -> Option<UnixListener> {
             UnixListener::bind(sock).ok()
         }
         Err(_) => None,
+    }
+}
+
+/// Whether the process on the other end of `s` is this user's own (SO_PEERCRED).
+fn same_peer(s: &UnixStream) -> bool {
+    unsafe {
+        let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
+        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        libc::getsockopt(s.as_raw_fd(), libc::SOL_SOCKET, libc::SO_PEERCRED, &mut cred as *mut libc::ucred as *mut libc::c_void, &mut len) == 0
+            && cred.uid == libc::getuid()
     }
 }
 
@@ -120,6 +138,11 @@ pub fn serve(listener: UnixListener, tx: Sender<Request>, wake: impl Fn() + Send
     std::thread::spawn(move || {
         for conn in listener.incoming() {
             let Ok(mut s) = conn else { continue };
+            // A socket other users could connect to (the /tmp fallback) takes nothing
+            // from them: the kernel says who is on the other end.
+            if !same_peer(&s) {
+                continue;
+            }
             let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
             let mut msg = vec![];
             // A client that never finishes its message must not hold the next one up.

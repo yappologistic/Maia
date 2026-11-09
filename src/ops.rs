@@ -1,5 +1,7 @@
 //! Background file operations with progress reporting.
 
+use std::ffi::{OsStr, OsString};
+use std::os::unix::ffi::OsStrExt;
 use std::fs;
 use std::io::{Read, Write};
 use std::collections::HashMap;
@@ -7,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::fsx::unique_dest;
+use crate::fsx::{unique_dest, unique_dest_os};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Conflict {
@@ -833,20 +835,22 @@ impl Dest {
 }
 
 fn resolve_dest(src: &Path, dest_dir: &Path, conflict: &Conflict, p: &Mutex<Progress>) -> Option<Dest> {
-    let name = match conflict {
-        Conflict::Rename(n) => n.clone(),
-        _ => name_of(src),
+    // The name it will land under, from the source's own bytes so a name that isn't
+    // UTF-8 keeps them (a typed Rename is text, and that is used as it is).
+    let name: OsString = match conflict {
+        Conflict::Rename(n) => n.clone().into(),
+        _ => src.file_name().map(|n| n.to_os_string()).unwrap_or_else(|| name_of(src).into()),
     };
     let target = dest_dir.join(&name);
     let exists = fs::symlink_metadata(&target).is_ok();
     // Copying a file onto itself always duplicates.
     if !exists || target == src {
-        return Some(Dest { to: if exists { unique_dest(dest_dir, &name) } else { target }, replace: None });
+        return Some(Dest { to: if exists { unique_dest_os(dest_dir, &name) } else { target }, replace: None });
     }
     let modified = |f: &Path| fs::metadata(f).and_then(|m| m.modified()).ok();
     let newer = || crate::compare::newer(modified(src), modified(&target));
     match conflict {
-        Conflict::KeepBoth | Conflict::Rename(_) | Conflict::Ask => Some(Dest { to: unique_dest(dest_dir, &name), replace: None }),
+        Conflict::KeepBoth | Conflict::Rename(_) | Conflict::Ask => Some(Dest { to: unique_dest_os(dest_dir, &name), replace: None }),
         Conflict::Newer if !newer() => {
             p.lock().unwrap().done_items += 1;
             None
@@ -856,7 +860,9 @@ fn resolve_dest(src: &Path, dest_dir: &Path, conflict: &Conflict, p: &Mutex<Prog
             None
         }
         Conflict::Merge if target.is_dir() && src.is_dir() => Some(Dest { to: target, replace: None }),
-        Conflict::Merge | Conflict::Overwrite | Conflict::Newer => Some(Dest { to: unique_dest(dest_dir, &format!(".{name}.maia-part")), replace: Some(target) }),
+        // The part's name is only a stop on the way (swap_in renames it to `target`),
+        // so text stand-ins are fine here.
+        Conflict::Merge | Conflict::Overwrite | Conflict::Newer => Some(Dest { to: unique_dest(dest_dir, &format!(".{}.maia-part", name.to_string_lossy())), replace: Some(target) }),
     }
 }
 
@@ -941,12 +947,34 @@ pub fn clash_note(there: Option<std::time::SystemTime>, coming: Option<std::time
 }
 
 /// Put a finished part in place of what it replaces: the old one to the trash, where it
-/// can be had back (removed only when the trash can't take it), then the part renamed.
+/// can be had back. When the trash can't take it (no trash folder on that mount, say),
+/// the old one is renamed beside its old spot under a hidden name instead, so replacing
+/// a file never destroys it. Then the part renamed.
 fn swap_in(part: &Path, target: &Path) -> std::io::Result<()> {
-    if crate::trashcan::delete(target).is_err() {
-        remove_tree(target)?;
+    if crate::trashcan::delete(target).is_ok() {
+        return fs::rename(part, target);
     }
-    fs::rename(part, target)
+    let kept = keep_replaced(target)?;
+    fs::rename(part, target).map_err(|e| {
+        // The part couldn't take the old one's place after all: back it goes, so nothing
+        // is left half-done.
+        let _ = fs::rename(&kept, target);
+        e
+    })
+}
+
+/// Where the file a swap replaces waits when the trash can't take it: a hidden name
+/// beside its old spot, ".name.maia-old", ".name.maia-old (1)", ... , from its own
+/// bytes so the name keeps whatever it had.
+fn keep_replaced(target: &Path) -> std::io::Result<PathBuf> {
+    let dir = target.parent().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no folder to keep the replaced file in"))?.to_path_buf();
+    let name = target.file_name().unwrap_or_else(|| OsStr::new("file"));
+    let mut b = b".".to_vec();
+    b.extend_from_slice(name.as_bytes());
+    b.extend_from_slice(b".maia-old");
+    let kept = unique_dest_os(&dir, OsStr::from_bytes(&b));
+    fs::rename(target, &kept)?;
+    Ok(kept)
 }
 
 /// Is `p` the same as or inside `dir`, also through symlinks (compared by real path)?

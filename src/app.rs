@@ -1572,17 +1572,26 @@ impl App {
         }
         let mut want = HashSet::new();
         let mut any_loading = false;
+        let mut deferred: Vec<PathBuf> = vec![];
         for p in self.panels.values_mut() {
             let insp_path = p.inspector.as_ref().and_then(|i| i.folder_path.clone());
             for (ti, t) in p.tabs.iter_mut().enumerate() {
-                if changed_dirs.iter().any(|d| *d == t.path) && !t.flatten && t.rename.is_none() {
-                    t.reload();
+                if changed_dirs.iter().any(|d| *d == t.path) && !t.flatten {
+                    // The listing must not jump under an open rename editor: the change
+                    // goes back in line, to be acted on once it is closed.
+                    if t.rename.is_none() {
+                        t.reload();
+                    } else {
+                        deferred.push(t.path.clone());
+                    }
                 }
                 let sub: Vec<PathBuf> = changed_dirs.iter().filter(|d| t.expanded.contains(*d)).cloned().collect();
                 if t.rename.is_none() {
                     for d in sub {
                         t.load_children(&d);
                     }
+                } else {
+                    deferred.extend(sub);
                 }
                 crate::contentsearch::pump(t, self.cfg.show_hidden);
                 if t.poll() {
@@ -1624,6 +1633,9 @@ impl App {
             if let Some(ip) = insp_path {
                 want.insert(ip);
             }
+        }
+        for d in &deferred {
+            self.watch.rearm(d);
         }
         // Changes started from the branch and commit menus: said once done, and read again.
         for (root, title, op, r) in crate::gitwork::finished() {
@@ -1753,9 +1765,9 @@ impl App {
         // card let go when nothing went wrong (the toast says it instead).
         let mut said: Option<(String, Option<u64>)> = None;
         for j in &mut self.jobs {
-            if j.finished_at.is_none() && j.progress.lock().unwrap().finished {
+            if j.finished_at.is_none() && j.progress.lock().unwrap_or_else(|e| e.into_inner()).finished {
                 j.finished_at = Some(Instant::now());
-                let p = j.progress.lock().unwrap();
+                let p = j.progress.lock().unwrap_or_else(|e| e.into_inner());
                 let before = self.undo.generation;
                 changes.push(ops::Changed::of(&j.kind, &p));
                 if let Some((archive, wrong)) = &p.password {
@@ -1823,7 +1835,7 @@ impl App {
         }
         self.jobs.retain(|j| match j.finished_at {
             Some(t) => {
-                let errs = !j.progress.lock().unwrap().errors.is_empty();
+                let errs = !j.progress.lock().unwrap_or_else(|e| e.into_inner()).errors.is_empty();
                 (errs && t.elapsed() < Duration::from_secs(30)) || t.elapsed() < Duration::from_millis(1800)
             }
             None => true,

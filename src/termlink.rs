@@ -67,6 +67,8 @@ pub fn at(line: &str, i: usize) -> Option<(usize, usize, Target)> {
 }
 
 /// The path of a `file://host/path` address (as OSC 7 and `ls --hyperlink` write them).
+/// Any host is taken: a remote shell's working directory is meaningful in its own
+/// terminal; the path is resolved on disk before anything opens it.
 pub fn file_uri(u: &str) -> Option<String> {
     let rest = u.strip_prefix("file://")?;
     Some(crate::vt::percent_decode(&rest[rest.find('/')?..]))

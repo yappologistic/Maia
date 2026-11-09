@@ -225,6 +225,22 @@ pub fn draw(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env) {
         }
     }
 
+    // Where a drop should land: the card on top of the others under the pointer, the one
+    // the user aims at. The faces overlap heavily (they sit a share of their side apart),
+    // so taking the release the way the row is painted (back to front, first match wins)
+    // would hand the drop to a card several places behind the one aimed at — folders
+    // moving into the wrong folder. Only that one card gets the drop now.
+    let drop_hit = env.drag.as_ref().and_then(|d| match d {
+        crate::app::Drag::Files { paths, .. } => {
+            let pp = ctx.pointer_hover_pos()?;
+            (first..=last).find(|&i| {
+                let e = &t.entries[t.view[i as usize] as usize];
+                listing::droppable(e, paths) && card(anchor0 + offset(i as f32 - pos, side), side).face.contains(pp)
+            })
+        }
+        _ => None,
+    });
+
     // Back to front, so each card covers the ones behind it.
     for i in (first..=last).rev() {
         let idx = t.view[i as usize];
@@ -242,7 +258,8 @@ pub fn draw(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env) {
         }
         let e = t.entries[idx as usize].clone();
         let selected = t.selected.contains(&idx);
-        let drop = listing::drop_target(ui, c.face, &e, env);
+        // Only the card the pointer is really over takes the drop; the rest skip it.
+        let drop = drop_hit == Some(i) && listing::drop_target(ui, c.face, &e, env);
         listing::handle_item(ui, &resp, idx, t, env);
         if p.abs() < 0.5 {
             t.cursor_screen_pos = Some(c.face.center_bottom());
