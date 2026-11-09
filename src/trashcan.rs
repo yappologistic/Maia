@@ -2,8 +2,10 @@
 //! Home trash at $XDG_DATA_HOME/Trash; other filesystems use $topdir/.Trash/$uid
 //! (when valid) or $topdir/.Trash-$uid.
 
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::Write;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -78,6 +80,13 @@ fn decode(s: &str) -> PathBuf {
     crate::clipboard::percent_decoded(s)
 }
 
+/// `tailed("name", ".2")` is "name.2", from the raw bytes.
+fn tailed(name: &OsStr, tail: &str) -> OsString {
+    let mut b = name.as_bytes().to_vec();
+    b.extend_from_slice(tail.as_bytes());
+    OsString::from_vec(b)
+}
+
 /// Move `p` into the trash.
 pub fn delete(p: &Path) -> std::io::Result<()> {
     let abs = if p.is_absolute() { p.to_path_buf() } else { std::env::current_dir()?.join(p) };
@@ -86,11 +95,15 @@ pub fn delete(p: &Path) -> std::io::Result<()> {
     fs::create_dir_all(&files)?;
     fs::create_dir_all(&info)?;
     let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
-    let base = abs.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
+    // The name it waits under in files/, from its own bytes: a name that isn't UTF-8
+    // comes back from the trash as it went in (the .trashinfo keeps the original).
+    let base = abs.file_name().map(|n| n.to_os_string()).unwrap_or_else(|| OsString::from("file"));
     // Reserve a unique name atomically via the .trashinfo file.
     for n in 1u32.. {
-        let name = if n == 1 { base.clone() } else { format!("{base}.{n}") };
-        let info_path = info.join(format!("{name}.trashinfo"));
+        let name = if n == 1 { base.clone() } else { tailed(&base, &format!(".{n}")) };
+        let mut ib = name.as_bytes().to_vec();
+        ib.extend_from_slice(b".trashinfo");
+        let info_path = info.join(OsString::from_vec(ib));
         let target = files.join(&name);
         if fs::symlink_metadata(&target).is_ok() {
             continue;
@@ -121,7 +134,7 @@ pub(crate) fn trash_dirs() -> Vec<PathBuf> {
     // Every mount point (including tmpfs and removable media) may hold a topdir trash.
     let mounts = fs::read_to_string("/proc/self/mounts").unwrap_or_default();
     for mp in mounts.lines().filter_map(|l| l.split_whitespace().nth(1)) {
-        let mp = PathBuf::from(mp.replace("\\040", " "));
+        let mp = PathBuf::from(crate::fsx::unescape_mount(mp));
         for d in [mp.join(".Trash").join(uid().to_string()), mp.join(format!(".Trash-{}", uid()))] {
             if d.join("info").is_dir() && !v.contains(&d) {
                 v.push(d);

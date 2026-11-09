@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -46,10 +46,23 @@ impl Watch {
                         let name_bytes = &buf[off + hdr..off + hdr + ev.len as usize];
                         let name = name_bytes.split(|b| *b == 0).next().unwrap_or(&[]);
                         off += hdr + ev.len as usize;
+                        if ev.mask & libc::IN_Q_OVERFLOW != 0 {
+                            // The kernel dropped events: which folder changed can't be
+                            // known, so every watched one is to be looked at again.
+                            let dirs: Vec<PathBuf> = wds2.lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect();
+                            for dir in dirs {
+                                if tx.send((dir, None)).is_err() {
+                                    unsafe { libc::close(fd) };
+                                    return;
+                                }
+                            }
+                            ctx.request_repaint_after(Duration::from_millis(120));
+                            continue;
+                        }
                         if ev.mask & libc::IN_IGNORED != 0 {
                             continue;
                         }
-                        let Some(dir) = wds2.lock().unwrap().get(&ev.wd).cloned() else { continue };
+                        let Some(dir) = wds2.lock().unwrap_or_else(|e| e.into_inner()).get(&ev.wd).cloned() else { continue };
                         let file = if name.is_empty() { None } else { Some(dir.join(std::ffi::OsStr::from_bytes(name))) };
                         if tx.send((dir, file)).is_err() {
                             unsafe { libc::close(fd) };
@@ -72,7 +85,7 @@ impl Watch {
         for p in gone {
             if let Some(wd) = self.by_path.remove(&p) {
                 unsafe { libc::inotify_rm_watch(self.fd, wd) };
-                self.wds.lock().unwrap().remove(&wd);
+                self.wds.lock().unwrap_or_else(|e| e.into_inner()).remove(&wd);
             }
         }
         for p in want {
@@ -83,7 +96,7 @@ impl Watch {
             let wd = unsafe { libc::inotify_add_watch(self.fd, c.as_ptr(), MASK) };
             if wd >= 0 {
                 self.by_path.insert(p.clone(), wd);
-                self.wds.lock().unwrap().insert(wd, p.clone());
+                self.wds.lock().unwrap_or_else(|e| e.into_inner()).insert(wd, p.clone());
             }
         }
     }
@@ -106,6 +119,13 @@ impl Watch {
 
     pub fn has_pending(&self) -> bool {
         !self.dirty.is_empty()
+    }
+
+    /// Put `dir` back in line for a reload: its change was reported but couldn't be
+    /// acted on just then (a rename editor was open over the listing), so it must not
+    /// be lost to the folder going stale.
+    pub fn rearm(&mut self, dir: &Path) {
+        self.dirty.entry(dir.to_path_buf()).or_insert_with(Instant::now);
     }
 }
 

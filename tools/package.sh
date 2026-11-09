@@ -86,8 +86,8 @@ Architecture: $DEB
 Maintainer: yappologistic <yappologistic@users.noreply.github.com>
 Installed-Size: $KB
 Depends: libc6 (>= 2.35), libegl1, libxkbcommon0
-Recommends: libwayland-client0, libx11-6, xdg-utils, libarchive-tools, git
-Suggests: ffmpeg, poppler-utils, imagemagick, 7zip | p7zip-full, udisks2, gvfs, libreoffice-core
+Recommends: libwayland-client0, libx11-6, xdg-utils, libarchive-tools, git, gvfs-backends, gvfs-fuse
+Suggests: ffmpeg, poppler-utils, imagemagick, 7zip | p7zip-full, udisks2, libreoffice-core
 Section: utils
 Priority: optional
 Homepage: https://github.com/yappologistic/Maia
@@ -122,7 +122,7 @@ License: GPL-3.0-or-later
 URL: https://github.com/yappologistic/Maia
 AutoReqProv: no
 Requires: libc.so.6$L, libEGL.so.1$L, libxkbcommon.so.0$L
-Recommends: /usr/bin/xdg-open, /usr/bin/bsdtar, /usr/bin/git
+Recommends: /usr/bin/xdg-open, /usr/bin/bsdtar, /usr/bin/git, /usr/libexec/gvfsd-fuse, /usr/libexec/gvfsd-mtp
 Suggests: /usr/bin/ffmpeg, /usr/bin/pdftoppm, /usr/bin/udisksctl
 
 %description

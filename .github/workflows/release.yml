@@ -117,5 +117,7 @@ jobs:
           # checkout leaves the tag lightweight, which would give the commit's message.
           git fetch --force origin "+refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
           cp assets/THIRD-PARTY-NOTICES.txt out/
-          (cd out && sha256sum maia-* Maia-* | grep -v '\.sha256$' > SHA256SUMS && cat SHA256SUMS)
+          # `maia_*` is the deb, which `maia-*` (the binary, rpm, tarball) doesn't match;
+          # the updater reads every package's checksum from this file.
+          (cd out && sha256sum maia-* maia_* Maia-* | grep -v '\.sha256$' > SHA256SUMS && cat SHA256SUMS)
           gh release create "$GITHUB_REF_NAME" --verify-tag --title "Maia ${GITHUB_REF_NAME#v}" --notes-from-tag out/*

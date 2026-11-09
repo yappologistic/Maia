@@ -197,7 +197,12 @@ impl State {
     /// The renames to make: the items whose name changes, with their new names.
     pub fn plan(&self) -> Vec<(PathBuf, String)> {
         let Ok(new) = &self.new else { return vec![] };
-        self.items.iter().zip(new).filter(|((p, _), n)| p.file_name().is_some_and(|o| o.to_string_lossy() != n.as_str())).map(|((p, _), n)| (p.clone(), n.clone())).collect()
+        self.items.iter().zip(new).filter(|((p, _), n)| {
+            // A name that isn't UTF-8 has no exact text to pattern over: renaming it
+            // would write the lossy stand-in over its real bytes, so it is left alone.
+            let Some(o) = p.file_name() else { return false };
+            o.to_str().is_some_and(|o| o != n.as_str())
+        }).map(|((p, _), n)| (p.clone(), n.clone())).collect()
     }
 
     /// Whether the music tags a pattern names are still being read.

@@ -75,9 +75,17 @@ impl Task {
     }
 }
 
-/// `/usr/bin/cp` and the like: the first match on PATH.
+/// `/usr/bin/cp` and the like: the first match in the system program directories, never
+/// the user's PATH — pkexec runs the program as root, and a `cp` sitting in a folder
+/// named on PATH would be run with it.
 pub fn program(name: &str) -> PathBuf {
-    std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join(name)).find(|f| f.is_file())).unwrap_or_else(|| PathBuf::from(name))
+    for d in ["/usr/bin", "/bin", "/usr/sbin", "/sbin"] {
+        let p = std::path::Path::new(d).join(name);
+        if p.is_file() {
+            return p;
+        }
+    }
+    PathBuf::from(name)
 }
 
 /// A refusal that administrator rights would get past (not a read-only disk).

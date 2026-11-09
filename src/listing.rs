@@ -877,12 +877,7 @@ fn tree_chevron(ui: &Ui, r: Rect, id: Id, expanded: bool, pal: &Palette) -> bool
 pub(crate) fn drop_target(ui: &Ui, rect: Rect, e: &Entry, env: &mut Env) -> bool {
     let Some(Drag::Files { paths, .. }) = env.drag.as_ref() else { return false };
     let Some(pp) = ui.ctx().pointer_hover_pos() else { return false };
-    // An unmounted drive has no folder to drop into yet.
-    if !rect.contains(pp) || paths.contains(&e.path) || tab::drive_dev(&e.path).is_some() {
-        return false;
-    }
-    let runnable = !e.is_dir && (e.is_executable() || e.ext() == "desktop");
-    if !e.is_dir && !runnable {
+    if !rect.contains(pp) || !droppable(e, paths) {
         return false;
     }
     if ui.input(|i| i.pointer.any_released()) {
@@ -895,6 +890,13 @@ pub(crate) fn drop_target(ui: &Ui, rect: Rect, e: &Entry, env: &mut Env) -> bool
         *env.drag = None;
     }
     true
+}
+
+/// Whether files being dragged may land on `e` at all: not on one of the dragged files
+/// themselves, not on an unmounted drive (it has no folder to drop into yet), and only
+/// a folder or an open-with-able file.
+pub(crate) fn droppable(e: &Entry, paths: &[PathBuf]) -> bool {
+    !paths.contains(&e.path) && tab::drive_dev(&e.path).is_none() && (e.is_dir || e.is_executable() || e.ext() == "desktop")
 }
 
 fn paint_item_bg(p: &egui::Painter, r: Rect, selected: bool, cursor: bool, hovered: bool, drop: bool, env: &Env, rad: u8) {
