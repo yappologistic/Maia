@@ -14932,7 +14932,7 @@ mod journeys {
         // Only where nothing reads a HEIC: a desktop thumbnailer for it (glycin's, say)
         // makes it a picture like any other.
         if crate::thumbcache::thumbnailer_for(&crate::mime::mime_db().for_name("photo.heic", false, false)).is_none() {
-            wait_until(&mut s, "the install note", 5, |s| some_text(s, "Install ImageMagick to see HEIC photos"));
+            wait_until(&mut s, "the install note", 5, |s| some_text(s, "Showing HEIC photos needs ImageMagick"));
             look(&mut s, "a HEIC without ImageMagick");
         } else {
             eprintln!("animated pictures: a thumbnailer here reads HEIC, so the install note is not shown");
