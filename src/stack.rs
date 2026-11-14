@@ -225,6 +225,12 @@ pub fn draw(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env) {
         }
     }
 
+    // The card the pointer is over: the first in the row whose face holds it, as the
+    // cards nearer the front are drawn over the ones behind. The faces overlap almost
+    // whole, so only this one may take a drop, and when it is one of the files being
+    // dragged nothing does: a drop never reaches through a card to one behind it.
+    let on_top = ctx.pointer_hover_pos().and_then(|pp| (first..=last).find(|&i| card(anchor0 + offset(i as f32 - pos, side), side).face.contains(pp)));
+
     // Back to front, so each card covers the ones behind it.
     for i in (first..=last).rev() {
         let idx = t.view[i as usize];
@@ -232,6 +238,7 @@ pub fn draw(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env) {
         let mut c = card(anchor0 + offset(p, side), side);
         let id = Id::new(("stack card", t.id, idx));
         let resp = ui.interact(c.face, id, Sense::click_and_drag());
+        let hit = c.face;
         // A card pointed at rises a little out of the row.
         let lift = ctx.animate_bool_with_time(id, resp.hovered() && p.abs() > 0.5, if anim { 0.12 } else { 0.0 });
         if lift > 0.0 {
@@ -242,7 +249,7 @@ pub fn draw(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env) {
         }
         let e = t.entries[idx as usize].clone();
         let selected = t.selected.contains(&idx);
-        let drop = listing::drop_target(ui, c.face, &e, env);
+        let drop = on_top == Some(i) && listing::drop_target(ui, hit, &e, env);
         listing::handle_item(ui, &resp, idx, t, env);
         if p.abs() < 0.5 {
             t.cursor_screen_pos = Some(c.face.center_bottom());

@@ -819,13 +819,39 @@ pub(crate) fn handle_item(ui: &Ui, resp: &Response, idx: u32, t: &mut Tab, env: 
         let pos = resp.interact_pointer_pos().unwrap_or(resp.rect.left_bottom());
         env.actions.push(Action::CtxMenu { panel: env.panel_id, pos, background: false });
     }
-    let right = resp.drag_started_by(egui::PointerButton::Secondary);
-    if (resp.drag_started_by(egui::PointerButton::Primary) || right) && env.drag.is_none() && !tab::is_computer(&t.path) {
+    if let Some(right) = files_drag_begins(ui, resp)
+        && env.drag.is_none()
+        && !tab::is_computer(&t.path)
+    {
         if !t.selected.contains(&idx) {
             t.select_only(idx);
         }
         *env.drag = Some(Drag::Files { paths: t.selected_paths(), from_panel: env.panel_id, right });
     }
+}
+
+/// Whether dragging the files of the item `resp` belongs to starts now, and with which
+/// button (true: the right one). Only once the pointer has travelled further than a click
+/// may: egui also takes a press merely held past a click's time for a drag, and in the
+/// Stack view a press brings its card out, so the row slides under a pointer that never
+/// moved and the letting go would drop the file into whatever card came under it (issue
+/// #19). Once a press, so a drag let go of or called off doesn't start again under it.
+fn files_drag_begins(ui: &Ui, resp: &Response) -> Option<bool> {
+    let right = if resp.dragged_by(egui::PointerButton::Primary) {
+        false
+    } else if resp.dragged_by(egui::PointerButton::Secondary) {
+        true
+    } else {
+        return None;
+    };
+    let reach = ui.ctx().options(|o| o.input_options.max_click_dist);
+    let (moved, press) = ui.input(|i| (i.pointer.press_origin().zip(i.pointer.interact_pos()).is_some_and(|(a, b)| a.distance(b) > reach), i.pointer.press_start_time()));
+    let started = Id::new("files drag press");
+    if !moved || press.is_none() || ui.data(|d| d.get_temp::<f64>(started)) == press {
+        return None;
+    }
+    ui.data_mut(|d| d.insert_temp(started, press.unwrap_or_default()));
+    Some(right)
 }
 
 /// Selection checkbox for an item: shown on hover, and on selected items during a

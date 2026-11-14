@@ -14133,6 +14133,91 @@ mod journeys {
         report("stack", &s);
     }
 
+    /// Clicking folders in the Stack view moves none of them (issue #19). The cards stand
+    /// almost on top of each other, and a press held past a click's time, or one that
+    /// slips a few points, is a drag: let go over the card it started on, it used to land
+    /// in a folder far behind that card in the row, moved there without a word.
+    #[test]
+    fn stack_clicks_move_nothing() {
+        if !sandboxed() {
+            return;
+        }
+        let home = fixture("stack-clicks");
+        let d = home.join("Home");
+        let names = ["Desktop", "Documents", "Downloads", "Music", "Pictures", "Public", "Templates", "Videos"];
+        for f in names {
+            std::fs::create_dir_all(d.join(f)).unwrap();
+        }
+        let mut s = Sim::new(&d, vec2(1280.0, 800.0));
+        s.cmd(Cmd::ViewStack);
+        s.idle(40);
+        let all_there = |s: &Sim, how: &str| {
+            for f in names {
+                if !d.join(f).is_dir() {
+                    s.fail(&format!("{how}: {f} was moved out of the folder"));
+                }
+            }
+        };
+        for k in 0..names.len() {
+            s.act("key Home");
+            for _ in 0..k {
+                s.act("key Right");
+            }
+            s.idle(40);
+            // Well inside the face of the card out of the row.
+            let p = s.tab().cursor_screen_pos.expect("the cursor's card is drawn") - vec2(0.0, 40.0);
+            s.act(&format!("down {:.0} {:.0}", p.x, p.y));
+            s.idle(60);
+            s.act(&format!("up {:.0} {:.0}", p.x, p.y));
+            s.settle();
+            all_there(&s, &format!("a slow click on card {k}"));
+            s.act(&format!("drag {:.0} {:.0} {:.0} {:.0}", p.x, p.y, p.x + 9.0, p.y + 4.0));
+            s.settle();
+            all_there(&s, &format!("a click that slipped on card {k}"));
+            // A card behind it, held: the press brings it out, so the row slides under
+            // the pointer while the button is still down.
+            let card = |s: &Sim, i: usize| s.ctx.read_response(egui::Id::new(("stack card", s.tab().id, s.tab().view[i]))).map(|r| r.rect);
+            // A point of a card's face that no card drawn over it covers (the ones before
+            // it in the row, and the one out of it), from the card behind or else in front.
+            let showing = |s: &Sim, j: usize| {
+                let r = card(s, j)?;
+                let covered = |q: Pos2| (0..j).chain([k]).filter(|&i| i != j).any(|i| card(s, i).is_some_and(|c| c.contains(q)));
+                (1..40).flat_map(|a| (1..40).map(move |b| (a, b))).map(|(a, b)| r.min + vec2(r.width() * a as f32 / 40.0, r.height() * b as f32 / 40.0)).find(|&q| !covered(q)).map(|q| (j, q))
+            };
+            let near = [k + 1, k.wrapping_sub(1), k + 2].into_iter().filter(|&j| j < names.len());
+            let Some((j, q)) = near.into_iter().find_map(|j| showing(&s, j)) else { s.fail(&format!("no card near {k} shows its face")) };
+            s.act(&format!("down {:.0} {:.0}", q.x, q.y));
+            s.idle(60);
+            s.act(&format!("up {:.0} {:.0}", q.x, q.y));
+            s.settle();
+            all_there(&s, &format!("a slow click on card {j}, behind card {k}"));
+        }
+        // A real drag still drops: the card out of the row, dragged onto a card behind it,
+        // lands in the one the pointer is over and in no other.
+        s.act("key Home");
+        s.idle(40);
+        let card = |s: &Sim, i: usize| s.ctx.read_response(egui::Id::new(("stack card", s.tab().id, s.tab().view[i]))).map(|r| r.rect);
+        let from = s.tab().cursor_screen_pos.expect("the cursor's card is drawn") - vec2(0.0, 40.0);
+        let r = card(&s, 2).expect("the third card is drawn");
+        let to = (1..40).flat_map(|a| (1..40).map(move |b| (a, b))).map(|(a, b)| r.min + vec2(r.width() * a as f32 / 40.0, r.height() * b as f32 / 40.0)).find(|&q| ![0, 1].iter().any(|&i| card(&s, i).is_some_and(|c| c.contains(q)))).expect("the third card shows its face");
+        let (moved, into) = (names[0], s.tab().entries[s.tab().view[2] as usize].path.clone());
+        s.act(&format!("drag {:.0} {:.0} {:.0} {:.0}", from.x, from.y, to.x, to.y));
+        s.settle();
+        for _ in 0..200 {
+            if into.join(moved).is_dir() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            s.idle(1);
+        }
+        if !into.join(moved).is_dir() {
+            s.fail(&format!("{moved} dragged onto {} did not land in it", into.display()));
+        }
+        let elsewhere = names.iter().filter(|&&f| f != moved && d.join(f) != into && d.join(f).join(moved).exists()).count();
+        assert_eq!(elsewhere, 0, "{moved} landed in no folder but {}", into.display());
+        report("stack-clicks", &s);
+    }
+
     fn space(s: &Sim) -> &crate::spaceuse::State {
         match &s.app.popup {
             Popup::SpaceUsed(st) => st,
