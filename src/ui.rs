@@ -49,9 +49,18 @@ pub fn search_row_in(ui: &mut Ui, text: &mut String, hint: &str, font: FontId, g
     let field = Rect::from_min_max(pos2(row.left() + 24.0, row.top()), pos2(row.right() - if close { 26.0 } else { 4.0 }, row.bottom()));
     let out = ui
         .scope_builder(UiBuilder::new().max_rect(field), |ui| {
-            egui::TextEdit::singleline(text).hint_text(egui::RichText::new(hint).font(font.clone()).color(pal.text_dim)).font(font.clone()).frame(bare_edit()).vertical_align(egui::Align::Center).desired_width(field.width()).show(ui)
+            egui::TextEdit::singleline(text).font(font.clone()).frame(bare_edit()).vertical_align(egui::Align::Center).desired_width(field.width()).show(ui)
         })
         .inner;
+    // The hint, painted where the typed text goes: egui places its own hint by another
+    // rule, a pixel or so off the text with some fonts, so the words jumped as typing
+    // began and the glyph beside them sat off their middle.
+    if text.is_empty() {
+        let g = crate::listing::elided(ui, hint, font.clone(), (field.right() - out.galley_pos.x).max(0.0), pal.text_dim);
+        ui.painter().with_clip_rect(field.intersect(ui.clip_rect())).galley(out.galley_pos, g, pal.text_dim);
+    }
+    #[cfg(feature = "screen-reader")]
+    ui.ctx().accesskit_node_builder(out.response.id, |b| b.set_placeholder(hint.to_string()));
     let baseline = probe.rows.first().and_then(|r| r.glyphs.first().map(|g| r.pos.y + g.pos.y)).unwrap_or(font.size * 0.8);
     let mid = out.galley_pos.y + baseline - font.size * 0.35;
     paint_glyph(ui.painter(), Rect::from_center_size(pos2(row.left() + 11.0, mid), Vec2::splat(glyph_side)), glyph, pal.text_dim);
