@@ -4065,6 +4065,61 @@ mod journeys {
         report("refused rename", &s);
     }
 
+    /// Renaming a name longer than its field (issue #22): End, the arrows and a click
+    /// slide the name along so the caret stays in sight, an edit at the end lands there,
+    /// and Home brings the start back. In the details view, the icons and the Stack's
+    /// title alike.
+    #[test]
+    fn rename_a_long_name_scrolls_to_the_caret() {
+        if !sandboxed() {
+            return;
+        }
+        let home = fixture("longrename");
+        let d = home.join("Videos");
+        std::fs::create_dir_all(&d).unwrap();
+        let name = "The.Amazing.World.of.Gumball.S06E38.The.Very.Long.Episode.Title.Goes.On.And.On.1080p.WEB-DL.DDP5.1.H.264.mkv";
+        let f = d.join(name);
+        std::fs::write(&f, b"").unwrap();
+        let mut s = Sim::new(&d, vec2(900.0, 640.0));
+        let field = |s: &Sim| s.tab().rename.as_ref().map(|r| (r.fields[0].scroll, r.fields[0].caret)).unwrap_or_else(|| s.fail("the rename field is not open"));
+        for (view, shot) in [(None, "details"), (Some(Cmd::ViewList), "list"), (Some(Cmd::ViewLarge), "icons"), (Some(Cmd::ViewStack), "stack")] {
+            if let Some(v) = view {
+                s.cmd(v);
+                s.idle(30);
+            }
+            select_path(&mut s, &f);
+            s.act("key F2");
+            s.idle(2);
+            s.act("key End");
+            s.idle(2);
+            let (scroll, caret) = field(&s);
+            assert_eq!(caret, name.chars().count(), "{shot}: End takes the caret to the end");
+            assert!(scroll > 0.0, "{shot}: the name slides along to show its end (scroll {scroll})");
+            s.shot(&format!("long-rename-{shot}-end"));
+            // Left over a few letters: the name stays where it is.
+            for _ in 0..3 {
+                s.act("key Left");
+            }
+            assert_eq!(field(&s).0, scroll, "{shot}: a step back within sight moves nothing");
+            s.act("key Home");
+            s.idle(2);
+            assert_eq!(field(&s).0, 0.0, "{shot}: Home brings the start back");
+            s.act("key Escape");
+            s.idle(2);
+        }
+        // An edit at the very end, typed where it can be seen.
+        s.cmd(Cmd::ViewDetails);
+        s.idle(30);
+        select_path(&mut s, &f);
+        s.act("key F2");
+        s.act("key End");
+        s.act("text .old");
+        s.act("key Enter");
+        s.settle();
+        assert!(d.join(format!("{name}.old")).exists(), "the end of a long name can be edited");
+        report("long rename", &s);
+    }
+
     /// "Show in folder" from another app (the requests the session bus hands over): each
     /// folder opens in a new tab with the file asked for selected, two files in one
     /// folder make one tab, Properties opens for the third method, and a path that's gone
