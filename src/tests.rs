@@ -2366,6 +2366,9 @@ fn phones_plugged_in_without_gvfs() {
     dev("1-3:1.0", &[("bInterfaceClass", "ff"), ("interface", "MTP")]);
     dev("1-4", &[("manufacturer", "Google"), ("product", "Pixel 7"), ("serial", "2A091FDH9"), ("busnum", "1"), ("devnum", "8")]);
     dev("1-4:1.0", &[("bInterfaceClass", "ff"), ("interface", "MTP")]);
+    // And a third Pixel 7 whose serial is the first's and more, past an underscore.
+    dev("1-5", &[("manufacturer", "Google"), ("product", "Pixel 7"), ("serial", "2A091FDH_9"), ("busnum", "1"), ("devnum", "9")]);
+    dev("1-5:1.0", &[("bInterfaceClass", "ff"), ("interface", "MTP")]);
     // A camera in PTP mode: the still image class, whose product names the maker too.
     dev("3-1", &[("manufacturer", "Canon"), ("product", "Canon Digital Camera"), ("busnum", "3"), ("devnum", "4")]);
     dev("3-1:1.0", &[("bInterfaceClass", "06")]);
@@ -2383,7 +2386,7 @@ fn phones_plugged_in_without_gvfs() {
         assert!(p.device && !p.mounted && p.path.is_none() && is_usb_only(&p.uri));
         (p.uri, p.name)
     }).collect();
-    assert_eq!(got, [("usb-mtp://1-2".to_string(), "Google Pixel 7".to_string()), ("usb-mtp://1-3".into(), "Samsung Galaxy S21".into()), ("usb-mtp://1-4".into(), "Google Pixel 7".into()), ("usb-ptp://3-1".into(), "Canon Digital Camera".into()), ("usb-ptp://3-4".into(), "Phone".into())]);
+    assert_eq!(got, [("usb-mtp://1-2".to_string(), "Google Pixel 7".to_string()), ("usb-mtp://1-3".into(), "Samsung Galaxy S21".into()), ("usb-mtp://1-4".into(), "Google Pixel 7".into()), ("usb-mtp://1-5".into(), "Google Pixel 7".into()), ("usb-ptp://3-1".into(), "Canon Digital Camera".into()), ("usb-ptp://3-4".into(), "Phone".into())]);
     // Each says what opening it needs: a phone GVFS's MTP part, a camera its gphoto2 part.
     assert_eq!(usb_needs("usb-mtp://1-2"), PHONE_NEEDS);
     assert_eq!(usb_needs("usb-ptp://3-1"), CAMERA_NEEDS);
@@ -2393,16 +2396,17 @@ fn phones_plugged_in_without_gvfs() {
     // or by model, so one phone it opens leaves the other phone it can't in sight.
     let gvfs = |uri: &str| vec![Place { name: "x".into(), uri: uri.into(), device: true, mounted: false, path: None }];
     let kept = |g: Vec<Place>| usb_unlisted(&g, usb_devices_in(&d)).into_iter().map(|p| p.uri).collect::<Vec<_>>();
-    assert_eq!(kept(gvfs("mtp://Google_Pixel_7_2A091FDH/")), ["usb-mtp://1-3", "usb-mtp://1-4", "usb-ptp://3-1", "usb-ptp://3-4"], "the other phones stay, the other Pixel 7 too");
-    assert_eq!(kept(gvfs("mtp://Google_Pixel_7_2A091FDH9/")), ["usb-mtp://1-2", "usb-mtp://1-3", "usb-ptp://3-1", "usb-ptp://3-4"], "a serial that begins another's names only its own");
-    assert_eq!(kept(gvfs("mtp://Google_Pixel_7/")), ["usb-mtp://1-3", "usb-ptp://3-1", "usb-ptp://3-4"], "named by its model alone: either Pixel 7");
-    assert_eq!(kept(gvfs("mtp://Google_Pixel_70_X/")).len(), 5, "another model whose name begins with it");
-    assert_eq!(kept(gvfs("gphoto2://[usb:003,004]/")), ["usb-mtp://1-2", "usb-mtp://1-3", "usb-mtp://1-4", "usb-ptp://3-4"], "the other camera stays");
+    assert_eq!(kept(gvfs("mtp://Google_Pixel_7_2A091FDH/")), ["usb-mtp://1-3", "usb-mtp://1-4", "usb-mtp://1-5", "usb-ptp://3-1", "usb-ptp://3-4"], "the other phones stay, the other Pixel 7s too");
+    assert_eq!(kept(gvfs("mtp://Google_Pixel_7_2A091FDH9/")), ["usb-mtp://1-2", "usb-mtp://1-3", "usb-mtp://1-5", "usb-ptp://3-1", "usb-ptp://3-4"], "a serial that begins another's names only its own");
+    assert_eq!(kept(gvfs("mtp://Google_Pixel_7_2A091FDH_9/")), ["usb-mtp://1-2", "usb-mtp://1-3", "usb-mtp://1-4", "usb-ptp://3-1", "usb-ptp://3-4"], "the longest serial in the address names the one meant");
+    assert_eq!(kept(gvfs("mtp://Google_Pixel_7/")), ["usb-mtp://1-3", "usb-ptp://3-1", "usb-ptp://3-4"], "named by its model alone: any Pixel 7");
+    assert_eq!(kept(gvfs("mtp://Google_Pixel_70_X/")).len(), 6, "another model whose name begins with it");
+    assert_eq!(kept(gvfs("gphoto2://[usb:003,004]/")), ["usb-mtp://1-2", "usb-mtp://1-3", "usb-mtp://1-4", "usb-mtp://1-5", "usb-ptp://3-4"], "the other camera stays");
     // A camera addressed by name, with no serial to match: it and the other camera with
     // nothing to tell them apart count as listed, rather than show twice.
-    assert_eq!(kept(gvfs("gphoto2://Canon_EOS/")), ["usb-mtp://1-2", "usb-mtp://1-3", "usb-mtp://1-4"]);
-    assert_eq!(kept(vec![]).len(), 5, "GVFS lists none: all of them");
-    assert_eq!(kept(gvfs("smb://nas/media/")).len(), 5, "a share says nothing of devices");
+    assert_eq!(kept(gvfs("gphoto2://Canon_EOS/")), ["usb-mtp://1-2", "usb-mtp://1-3", "usb-mtp://1-4", "usb-mtp://1-5"]);
+    assert_eq!(kept(vec![]).len(), 6, "GVFS lists none: all of them");
+    assert_eq!(kept(gvfs("smb://nas/media/")).len(), 6, "a share says nothing of devices");
     assert!(usb_devices_in(&d.join("missing")).is_empty(), "no USB bus to read, no phones");
     assert!(!is_usb_only("mtp://Google_Pixel_7/"));
     assert_eq!(tool_in(PHONE_NEEDS), Some("gvfs-mtp"));
