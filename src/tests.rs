@@ -2052,6 +2052,8 @@ fn second_launch_hands_its_folders_to_the_first() {
     assert!(!forward_to(&sock, &[PathBuf::from("/x")]), "nobody listening: start normally");
     let l = claim_at(&sock).expect("first launch listens");
     assert!(claim_at(&sock).is_none(), "a second one does not take over");
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(std::fs::metadata(&sock).unwrap().permissions().mode() & 0o777, 0o600, "only this user may reach it");
     let (tx, rx) = std::sync::mpsc::channel();
     serve(l, tx, || {});
     let odd = PathBuf::from("/tmp/two\nlines – é/日本 #1");
