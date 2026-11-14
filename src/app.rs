@@ -1575,14 +1575,28 @@ impl App {
         for p in self.panels.values_mut() {
             let insp_path = p.inspector.as_ref().and_then(|i| i.folder_path.clone());
             for (ti, t) in p.tabs.iter_mut().enumerate() {
-                if changed_dirs.iter().any(|d| *d == t.path) && !t.flatten && t.rename.is_none() {
+                let mut mine: Vec<PathBuf> = changed_dirs.iter().filter(|d| (**d == t.path && !t.flatten) || t.expanded.contains(*d)).cloned().collect();
+                // The listing can't move under an open rename editor: what changed then is
+                // read once it closes, not lost.
+                if t.rename.is_some() {
+                    for d in mine.drain(..) {
+                        if !t.changed_while_renaming.contains(&d) {
+                            t.changed_while_renaming.push(d);
+                        }
+                    }
+                } else {
+                    for d in std::mem::take(&mut t.changed_while_renaming) {
+                        if !mine.contains(&d) {
+                            mine.push(d);
+                        }
+                    }
+                }
+                if mine.contains(&t.path) && !t.flatten {
                     t.reload();
                 }
-                let sub: Vec<PathBuf> = changed_dirs.iter().filter(|d| t.expanded.contains(*d)).cloned().collect();
-                if t.rename.is_none() {
-                    for d in sub {
-                        t.load_children(&d);
-                    }
+                mine.retain(|d| t.expanded.contains(d));
+                for d in mine {
+                    t.load_children(&d);
                 }
                 crate::contentsearch::pump(t, self.cfg.show_hidden);
                 if t.poll() {
