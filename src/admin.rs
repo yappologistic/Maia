@@ -104,7 +104,16 @@ pub fn run(t: &Tools, task: &Task) -> Result<(), String> {
 /// One command as root through pkexec, its program by absolute path. Waits for the
 /// password dialog; the error is the command's last line, or that access was refused.
 pub fn run_argv(t: &Tools, argv: &[OsString]) -> Result<(), String> {
-    let mut c = std::process::Command::new(t.program("pkexec"));
+    // Neither pkexec nor what it runs is ever looked up on PATH: one not in the system's
+    // folders is not run at all.
+    let pkexec = t.program("pkexec");
+    if !pkexec.is_absolute() {
+        return Err("Administrator access needs pkexec".into());
+    }
+    if let Some(p) = argv.first().filter(|p| !Path::new(p).is_absolute()) {
+        return Err(format!("{} is not among the system's programs", p.to_string_lossy()));
+    }
+    let mut c = std::process::Command::new(pkexec);
     c.args(argv).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
     let out = c.output().map_err(|e| format!("pkexec: {e}"))?;
     match out.status.code() {
