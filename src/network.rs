@@ -263,7 +263,11 @@ pub struct UsbDevice {
 /// beside the place that opens it.
 pub fn usb_unlisted(gvfs: &[Place], usb: Vec<UsbDevice>) -> Vec<Place> {
     let kind_of = |u: &UsbDevice| if u.place.uri.starts_with(USB_PTP) { "gphoto2://" } else { "mtp://" };
-    let has = |id: &str, p: &Place| id.len() >= 4 && p.uri.contains(id);
+    // Whole identifiers only: serial "2A09" is not in "2A091", model "Pixel_7" not in "Pixel_70".
+    let has = |id: &str, p: &Place| {
+        let edge = |c: Option<char>| !c.is_some_and(|c| c.is_ascii_alphanumeric());
+        id.len() >= 4 && p.uri.match_indices(id).any(|(i, _)| edge(p.uri[..i].chars().next_back()) && edge(p.uri[i + id.len()..].chars().next()))
+    };
     // A place that names a device by serial or by bus and device stands for that device
     // alone; only a place that names none so lets a model stand for every device of it
     // (two of one model are told apart by serial, never by model).
