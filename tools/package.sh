@@ -3,7 +3,7 @@
 #   maia-VERSION-linux-ARCH.tar.gz   the program, launcher entry, icon and an install.sh
 #   maia_VERSION_DEBARCH.deb         Debian, Ubuntu, Mint, Pop!_OS and the like
 #   maia-VERSION-1.ARCH.rpm          Fedora, openSUSE, RHEL and the like (needs rpmbuild)
-#   maia-VERSION-1-ARCH.pkg.tar.zst  Arch Linux and the like (needs zstd)
+#   maia-VERSION-1-ARCH.pkg.tar.zst  Arch Linux and the like (needs zstd and bsdtar)
 #   Maia-VERSION-ARCH.AppImage       runs anywhere with FUSE (needs appimagetool)
 # Usage: tools/package.sh VERSION ARCH [OUT]   ARCH is x86_64 or aarch64.
 # A format whose tool is missing is skipped with a note; CI has them all.
@@ -154,10 +154,12 @@ else
 fi
 
 # ---------------------------------------------------------------- Arch
-# A pacman package is a tar of the tree and a .PKGINFO; pacman -U takes it as is.
-if command -v zstd >/dev/null; then
+# A pacman package is a tar of the tree, a .PKGINFO and the .MTREE that pacman -Qkk
+# checks the installed files against (written as makepkg writes it).
+if command -v zstd >/dev/null && command -v bsdtar >/dev/null; then
   R=$W/arch
   tree "$R/usr"
+  portal_files "$R/usr"
   SZ=$(du -sb "$R/usr" | cut -f1)
   cat > "$R/.PKGINFO" <<EOF
 pkgname = maia
@@ -183,13 +185,16 @@ optdepend = imagemagick: convert pictures
 optdepend = poppler: PDF previews
 optdepend = udisks2: mount and format drives
 optdepend = gvfs: network places
+optdepend = gvfs-mtp: phones
 optdepend = libreoffice-fresh: Office document previews
 EOF
-  (cd "$R" && tar --owner=0 --group=0 --numeric-owner --sort=name -cf - .PKGINFO usr) \
+  (cd "$R" && LANG=C bsdtar -czf .MTREE --format=mtree --uid 0 --gid 0 \
+    --options='!all,use-set,type,uid,gid,mode,time,size,md5,sha256,link' .PKGINFO usr)
+  (cd "$R" && tar --owner=0 --group=0 --numeric-owner --sort=name -cf - .MTREE .PKGINFO usr) \
     | zstd -q -19 -o "$OUT/maia-$V-1-$A.pkg.tar.zst"
   echo "pacman: maia-$V-1-$A.pkg.tar.zst"
 else
-  echo "pacman: skipped (no zstd)"
+  echo "pacman: skipped (no zstd or bsdtar)"
 fi
 
 # ---------------------------------------------------------------- AppImage
