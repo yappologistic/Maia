@@ -9202,6 +9202,54 @@ mod journeys {
     /// the share with the right one; an FTP address typed into Go To connects as a guest;
     /// an unknown host says so; recent servers fill the address; Disconnect moves the tab
     /// off the share first.
+    /// A phone plugged in that GVFS can't open (issue #20): with no gio, it still shows
+    /// under Network by its maker and model, and a click says opening phones needs
+    /// gvfs-mtp, with how to install it. Where GVFS lists the phone itself, only its entry
+    /// shows.
+    #[test]
+    fn a_phone_gvfs_cannot_open_says_what_it_needs() {
+        if !sandboxed() {
+            return;
+        }
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                crate::drives::FAKE.with(|f| *f.borrow_mut() = None);
+            }
+        }
+        let _reset = Reset;
+        let plug = |d: &Path| {
+            for (dir, files) in [("usb/1-2", vec![("manufacturer", "Google"), ("product", "Pixel 7")]), ("usb/1-2:1.0", vec![("bInterfaceClass", "ff"), ("interface", "MTP")])] {
+                std::fs::create_dir_all(d.join(dir)).unwrap();
+                for (f, v) in files {
+                    std::fs::write(d.join(dir).join(f), format!("{v}\n")).unwrap();
+                }
+            }
+        };
+        let d = root().join("usbphone-tools");
+        plug(&d);
+        crate::drives::FAKE.with(|f| *f.borrow_mut() = Some(d.clone()));
+        let home = fixture("usbphone");
+        let mut s = Sim::new(&home, vec2(1280.0, 800.0));
+        wait_until(&mut s, "the phone in the sidebar", 10, |s| sidebar_text(s, "Google Pixel 7").is_some());
+        look(&mut s, "a phone GVFS can't open");
+        let r = sidebar_text(&s, "Google Pixel 7").unwrap();
+        s.act(&format!("click {:.0} {:.0}", r.center().x, r.center().y));
+        s.idle(2);
+        assert_eq!(s.app.toast.as_ref().map(|t| t.0.as_str()), Some(crate::network::PHONE_NEEDS), "the click says what opening it needs");
+        assert_eq!(s.app.toast_tool, Some("gvfs-mtp"), "with how to install it");
+        assert_eq!(s.tab().path, home, "and goes nowhere");
+        drop(s);
+        // GVFS lists it: its own entry, and no second one from the bus.
+        let n = fake_network("usbphone-gvfs");
+        plug(&n);
+        crate::drives::FAKE.with(|f| *f.borrow_mut() = Some(n.clone()));
+        let mut s = Sim::new(&home, vec2(1280.0, 800.0));
+        wait_until(&mut s, "GVFS's phone in the sidebar", 10, |s| sidebar_text(s, "Pixel 7").is_some());
+        assert!(sidebar_text(&s, "Google Pixel 7").is_none(), "the phone shows once");
+        report("usb phone", &s);
+    }
+
     #[test]
     fn network_places_connect_browse_disconnect() {
         if !sandboxed() {
