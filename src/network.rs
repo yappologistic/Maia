@@ -274,7 +274,12 @@ pub fn usb_unlisted(gvfs: &[Place], usb: Vec<UsbDevice>) -> Vec<Place> {
     let mut listed = vec![false; usb.len()];
     for p in gvfs {
         let of_kind: Vec<usize> = (0..usb.len()).filter(|&i| p.uri.starts_with(kind_of(&usb[i]))).collect();
-        let exact: Vec<usize> = of_kind.iter().copied().filter(|&i| has(&usb[i].serial, p) || has(&usb[i].bus_dev, p)).collect();
+        // How exactly a device is named here: by the longest of its serial and bus and
+        // device that the address holds. Where several are, the longest names the one meant
+        // ("2A091FDH" and "2A091FDH_9" both in ".._2A091FDH_9/": the second).
+        let named = |i: usize| [&usb[i].serial, &usb[i].bus_dev].into_iter().filter(|id| has(id, p)).map(|id| id.len()).max().unwrap_or(0);
+        let best = of_kind.iter().map(|&i| named(i)).max().unwrap_or(0);
+        let exact: Vec<usize> = of_kind.iter().copied().filter(|&i| best > 0 && named(i) == best).collect();
         let by = if exact.is_empty() { of_kind.into_iter().filter(|&i| has(&usb[i].model, p)).collect() } else { exact };
         for i in by {
             listed[i] = true;
