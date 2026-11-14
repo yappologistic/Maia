@@ -4120,6 +4120,45 @@ mod journeys {
         report("long rename", &s);
     }
 
+    /// A file made by another program while a rename editor is open: the listing holds
+    /// still under the editor, and shows the file once it closes, whether the rename is
+    /// called off or made, without waiting for another change to the folder.
+    #[test]
+    fn changes_while_renaming_show_after() {
+        if !sandboxed() {
+            return;
+        }
+        let home = fixture("renamewatch");
+        let d = home.join("Inbox");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("a.txt"), b"a").unwrap();
+        let mut s = Sim::new(&d, vec2(1000.0, 700.0));
+        let listed = |s: &Sim, n: &str| s.tab().entries.iter().any(|e| e.path == d.join(n));
+        let wait_for = |s: &mut Sim, n: &str| {
+            for _ in 0..300 {
+                if listed(s, n) {
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                s.idle(1);
+            }
+            false
+        };
+        for (n, end) in [("b.txt", "key Escape"), ("c.txt", "key Enter")] {
+            select_path(&mut s, &d.join("a.txt"));
+            s.act("key F2");
+            std::fs::write(d.join(n), b"new").unwrap();
+            for _ in 0..40 {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                s.idle(1);
+            }
+            assert!(s.tab().rename.is_some() && !listed(&s, n), "{n}: the listing holds still under the editor");
+            s.act(end);
+            assert!(wait_for(&mut s, n), "{n}: shown once the editor closes ({end})");
+        }
+        report("changes while renaming", &s);
+    }
+
     /// "Show in folder" from another app (the requests the session bus hands over): each
     /// folder opens in a new tab with the file asked for selected, two files in one
     /// folder make one tab, Properties opens for the third method, and a path that's gone

@@ -129,6 +129,10 @@ pub struct Tab {
     last_rebuild_ms: f32,
     pub collapsed_groups: HashSet<String>,
     pub rename: Option<Rename>,
+    /// Folders shown here (the tab's own, or one unfolded in it) that changed while a
+    /// rename editor was open: read again once it closes, as the listing can't move
+    /// under the editor.
+    pub changed_while_renaming: Vec<PathBuf>,
     /// Counts for the footer: (visible folders, total folders, visible files, total files).
     pub counts: (usize, usize, usize, usize),
     /// Bytes in the files shown (folders' own sizes arrive later, from the stats).
@@ -265,6 +269,7 @@ impl Tab {
             last_rebuild_ms: 0.0,
             collapsed_groups: HashSet::new(),
             rename: None,
+            changed_while_renaming: vec![],
             counts: (0, 0, 0, 0),
             shown_bytes: 0,
             hidden_count: 0,
