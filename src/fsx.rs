@@ -428,7 +428,7 @@ pub fn mounts_in(table: &Path) -> Vec<Mount> {
     out
 }
 
-fn unescape_mount(s: &str) -> String {
+pub(crate) fn unescape_mount(s: &str) -> String {
     // /proc/mounts escapes space, tab, newline, backslash as octal.
     s.replace("\\040", " ").replace("\\011", "\t").replace("\\012", "\n").replace("\\134", "\\")
 }
@@ -595,7 +595,7 @@ fn classify_drive(path: &Path, dev: u64) -> crate::config::DriveKind {
     for l in mounts.lines() {
         let mut it = l.split_whitespace();
         let (Some(_), Some(mp), Some(ty)) = (it.next(), it.next(), it.next()) else { continue };
-        let mp = mp.replace("\\040", " ");
+        let mp = unescape_mount(mp);
         if canon.starts_with(&mp) && best.as_ref().map(|b| mp.len() > b.0).unwrap_or(true) {
             best = Some((mp.len(), ty.to_string()));
         }
