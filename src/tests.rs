@@ -201,6 +201,45 @@ fn wait_job(j: &ops::Job) {
     }
 }
 
+/// Names that aren't UTF-8 copy and move under their own bytes: into a fresh folder, as a
+/// "Keep both" copy beside the one already there ("caf\xe9 (1).txt"), onto itself (a
+/// duplicate), and moved in to replace one by the same name.
+#[test]
+fn copies_keep_names_that_are_not_utf8() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let ctx = egui::Context::default();
+    let d = tmpdir("ops-bytes");
+    let (src, dst) = (d.join("src"), d.join("dst"));
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::create_dir_all(&dst).unwrap();
+    let raw = |b: &[u8]| OsStr::from_bytes(b).to_os_string();
+    let f = src.join(raw(b"caf\xe9.txt"));
+    std::fs::write(&f, "latin-1").unwrap();
+    let names = |dir: &Path| {
+        let mut v: Vec<Vec<u8>> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().as_bytes().to_vec()).collect();
+        v.sort();
+        v
+    };
+    let run = |n: u64, kind: OpKind| {
+        let j = ops::spawn(n, kind, ctx.clone());
+        wait_job(&j);
+        assert!(j.progress.lock().unwrap().errors.is_empty(), "{:?}", j.progress.lock().unwrap().errors);
+    };
+    run(1, OpKind::Copy { srcs: vec![f.clone()], dest: dst.clone(), decide: HashMap::new() });
+    assert_eq!(names(&dst), [b"caf\xe9.txt".to_vec()], "copied under its own name");
+    run(2, OpKind::Copy { srcs: vec![f.clone()], dest: dst.clone(), decide: HashMap::new() });
+    assert_eq!(names(&dst), [b"caf\xe9 (1).txt".to_vec(), b"caf\xe9.txt".to_vec()], "kept both, numbered from its own bytes");
+    run(3, OpKind::Copy { srcs: vec![f.clone()], dest: src.clone(), decide: HashMap::new() });
+    assert_eq!(names(&src), [b"caf\xe9 (1).txt".to_vec(), b"caf\xe9.txt".to_vec()], "a copy onto itself duplicates it");
+    let mut decide = HashMap::new();
+    decide.insert(f.clone(), Conflict::Overwrite);
+    run(4, OpKind::Move { srcs: vec![f.clone()], dest: dst.clone(), decide });
+    assert_eq!(names(&dst), [b"caf\xe9 (1).txt".to_vec(), b"caf\xe9.txt".to_vec()], "moved in over the one by its name");
+    assert!(!f.exists());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 #[test]
 fn copy_move_merge_and_conflicts() {
     let ctx = egui::Context::default();

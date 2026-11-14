@@ -833,9 +833,10 @@ impl Dest {
 }
 
 fn resolve_dest(src: &Path, dest_dir: &Path, conflict: &Conflict, p: &Mutex<Progress>) -> Option<Dest> {
-    let name = match conflict {
-        Conflict::Rename(n) => n.clone(),
-        _ => name_of(src),
+    // The source's own name, bytes and all: one that isn't UTF-8 lands as it was.
+    let name: std::ffi::OsString = match conflict {
+        Conflict::Rename(n) => n.into(),
+        _ => src.file_name().map(|n| n.to_os_string()).unwrap_or_default(),
     };
     let target = dest_dir.join(&name);
     let exists = fs::symlink_metadata(&target).is_ok();
@@ -856,7 +857,7 @@ fn resolve_dest(src: &Path, dest_dir: &Path, conflict: &Conflict, p: &Mutex<Prog
             None
         }
         Conflict::Merge if target.is_dir() && src.is_dir() => Some(Dest { to: target, replace: None }),
-        Conflict::Merge | Conflict::Overwrite | Conflict::Newer => Some(Dest { to: unique_dest(dest_dir, &format!(".{name}.maia-part")), replace: Some(target) }),
+        Conflict::Merge | Conflict::Overwrite | Conflict::Newer => Some(Dest { to: unique_dest(dest_dir, format!(".{}.maia-part", name.to_string_lossy())), replace: Some(target) }),
     }
 }
 
