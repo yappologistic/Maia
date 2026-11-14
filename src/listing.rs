@@ -981,12 +981,14 @@ pub(crate) fn rename_field(ui: &mut Ui, rect: Rect, idx: u32, t: &mut Tab, env: 
     }
     // A name wider than its box slides along it, keeping the caret in sight with a few
     // letters of room beside it (issue #22): never past either end of the name.
-    let room = (box_r.width() - 2.0).max(1.0);
+    // Measured on the part of the box in sight: a column wider than its panel is clipped.
+    let seen = Some(box_r.intersect(ui.clip_rect())).filter(|r| r.is_positive()).unwrap_or(box_r);
+    let room = (seen.width() - 2.0).max(1.0);
     let most = (galley.size().x + 2.0 - room).max(0.0);
     let xc = galley.pos_from_cursor(egui::text::CCursor::new(f.caret)).min.x;
     let edge = (room * 0.2).min(3.0 * font.size);
     let scroll = f.scroll.clamp((xc + edge - room).min(most), (xc - edge).max(0.0)).clamp(0.0, most);
-    let origin = pos2(box_r.left() - scroll, box_r.center().y - galley.size().y / 2.0);
+    let origin = pos2(seen.left() - scroll, box_r.center().y - galley.size().y / 2.0);
     let clip = ui.clip_rect();
     let painter = ui.painter().with_clip_rect(box_r.intersect(clip));
     let (a, b) = f.selection();
