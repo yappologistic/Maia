@@ -262,20 +262,35 @@ pub struct UsbDevice {
 /// once GVFS lists a device of its kind: shown twice, it would say it can't be opened
 /// beside the place that opens it.
 pub fn usb_unlisted(gvfs: &[Place], usb: Vec<UsbDevice>) -> Vec<Place> {
+    let kind_of = |u: &UsbDevice| if u.place.uri.starts_with(USB_PTP) { "gphoto2://" } else { "mtp://" };
+    let has = |id: &str, p: &Place| id.len() >= 4 && p.uri.contains(id);
+    // A place that names a device by serial or by bus and device stands for that device
+    // alone; only a place that names none so lets a model stand for every device of it
+    // (two of one model are told apart by serial, never by model).
+    let mut listed = vec![false; usb.len()];
+    for p in gvfs {
+        let of_kind: Vec<usize> = (0..usb.len()).filter(|&i| p.uri.starts_with(kind_of(&usb[i]))).collect();
+        let exact: Vec<usize> = of_kind.iter().copied().filter(|&i| has(&usb[i].serial, p) || has(&usb[i].bus_dev, p)).collect();
+        let by = if exact.is_empty() { of_kind.into_iter().filter(|&i| has(&usb[i].model, p)).collect() } else { exact };
+        for i in by {
+            listed[i] = true;
+        }
+    }
     usb.into_iter()
-        .filter(|u| {
-            let scheme = if u.place.uri.starts_with(USB_PTP) { "gphoto2://" } else { "mtp://" };
-            let mut kind = gvfs.iter().filter(|p| p.uri.starts_with(scheme)).peekable();
+        .zip(listed)
+        .filter(|(u, listed)| {
+            let mut kind = gvfs.iter().filter(|p| p.uri.starts_with(kind_of(u))).peekable();
+            if *listed {
+                return false;
+            }
             if kind.peek().is_none() {
                 return true;
             }
-            let ids: Vec<&str> = [u.serial.as_str(), u.bus_dev.as_str(), u.model.as_str()].into_iter().filter(|s| s.len() >= 4).collect();
-            let by_id = kind.clone().any(|p| ids.iter().any(|id| p.uri.contains(id)));
-            // Told apart when GVFS addresses its devices by what we read; else by kind.
-            let addressed = u.serial.len() >= 4 || kind.any(|p| p.uri.contains("usb:"));
-            if addressed { !by_id } else { false }
+            // Unmatched, and told apart when GVFS could have named it by what we read;
+            // else it may be one GVFS names by name, and counts as listed.
+            u.serial.len() >= 4 || kind.any(|p| p.uri.contains("usb:"))
         })
-        .map(|u| u.place)
+        .map(|(u, _)| u.place)
         .collect()
 }
 
