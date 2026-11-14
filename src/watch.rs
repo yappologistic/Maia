@@ -46,12 +46,8 @@ impl Watch {
                         let name_bytes = &buf[off + hdr..off + hdr + ev.len as usize];
                         let name = name_bytes.split(|b| *b == 0).next().unwrap_or(&[]);
                         off += hdr + ev.len as usize;
-                        if ev.mask & libc::IN_IGNORED != 0 {
-                            continue;
-                        }
-                        let Some(dir) = wds2.lock().unwrap().get(&ev.wd).cloned() else { continue };
-                        let file = if name.is_empty() { None } else { Some(dir.join(std::ffi::OsStr::from_bytes(name))) };
-                        if tx.send((dir, file)).is_err() {
+                        let changed = changes(ev.mask, ev.wd, name, &wds2.lock().unwrap_or_else(|e| e.into_inner()));
+                        if changed.into_iter().any(|c| tx.send(c).is_err()) {
                             unsafe { libc::close(fd) };
                             return;
                         }
@@ -107,6 +103,21 @@ impl Watch {
     pub fn has_pending(&self) -> bool {
         !self.dirty.is_empty()
     }
+}
+
+/// What one inotify event says changed: its folder (`wds` maps watches to folders) and the
+/// file in it, if it names one. When the kernel's queue overflowed it dropped events, and
+/// which folders they were for can't be known: every watched folder is to be read again.
+pub fn changes(mask: u32, wd: i32, name: &[u8], wds: &HashMap<i32, PathBuf>) -> Vec<(PathBuf, Option<PathBuf>)> {
+    if mask & libc::IN_Q_OVERFLOW != 0 {
+        return wds.values().map(|d| (d.clone(), None)).collect();
+    }
+    if mask & libc::IN_IGNORED != 0 {
+        return vec![];
+    }
+    let Some(dir) = wds.get(&wd) else { return vec![] };
+    let file = (!name.is_empty()).then(|| dir.join(std::ffi::OsStr::from_bytes(name)));
+    vec![(dir.clone(), file)]
 }
 
 impl Drop for Watch {
