@@ -2386,6 +2386,21 @@ fn mount_points_unescape_all_four() {
     assert_eq!(m.iter().map(|m| m.point.clone()).collect::<Vec<_>>(), [std::path::PathBuf::from("/mnt/a\\b c")]);
 }
 
+/// What an inotify event says changed: its folder and file; nothing for a watch that is
+/// gone; and, when the kernel's queue overflowed and dropped events, every folder watched.
+#[test]
+fn folder_events_and_a_full_queue() {
+    use crate::watch::changes;
+    let wds: HashMap<i32, PathBuf> = [(1, PathBuf::from("/a")), (2, PathBuf::from("/b"))].into_iter().collect();
+    assert_eq!(changes(libc::IN_CREATE, 1, b"x.txt", &wds), [(PathBuf::from("/a"), Some(PathBuf::from("/a/x.txt")))]);
+    assert_eq!(changes(libc::IN_ATTRIB, 2, b"", &wds), [(PathBuf::from("/b"), None)]);
+    assert!(changes(libc::IN_CREATE, 9, b"x", &wds).is_empty(), "a watch no longer known");
+    assert!(changes(libc::IN_IGNORED, 1, b"", &wds).is_empty());
+    let mut all: Vec<_> = changes(libc::IN_Q_OVERFLOW, -1, b"", &wds).into_iter().map(|(d, f)| (d, f.is_none())).collect();
+    all.sort();
+    assert_eq!(all, [(PathBuf::from("/a"), true), (PathBuf::from("/b"), true)], "an overflow reads every folder again");
+}
+
 #[test]
 fn network_places_parse_from_gio() {
     use crate::network::{is_uri, label, normalize, parse_mounts};
