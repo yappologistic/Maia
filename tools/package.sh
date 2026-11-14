@@ -192,7 +192,7 @@ EOF
   (cd "$R" && LANG=C bsdtar -czf .MTREE --format=mtree --uid 0 --gid 0 \
     --options='!all,use-set,type,uid,gid,mode,time,size,md5,sha256,link' .PKGINFO usr)
   (cd "$R" && tar --owner=0 --group=0 --numeric-owner --sort=name -cf - .MTREE .PKGINFO usr) \
-    | zstd -q -19 -o "$OUT/maia-$V-1-$A.pkg.tar.zst"
+    | zstd -q -f -19 -o "$OUT/maia-$V-1-$A.pkg.tar.zst"
   echo "pacman: maia-$V-1-$A.pkg.tar.zst"
 else
   echo "pacman: skipped (no zstd or bsdtar)"
