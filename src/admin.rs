@@ -3,7 +3,7 @@
 //! never runs as root; only the single coreutils command that was refused does.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use crate::drives::Tools;
@@ -75,9 +75,14 @@ impl Task {
     }
 }
 
-/// `/usr/bin/cp` and the like: the first match on PATH.
+/// Where the programs run as root are looked for: the system's own folders, never the
+/// user's PATH. pkexec runs what it is given as root, and a `cp` put in a folder early on
+/// PATH (~/.local/bin, say) would otherwise be run as root with the user's password.
+pub const SYSTEM_BIN: &[&str] = &["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+
+/// `/usr/bin/cp` and the like: the first match in the system's folders.
 pub fn program(name: &str) -> PathBuf {
-    std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join(name)).find(|f| f.is_file())).unwrap_or_else(|| PathBuf::from(name))
+    SYSTEM_BIN.iter().map(|d| Path::new(d).join(name)).find(|f| f.is_file()).unwrap_or_else(|| PathBuf::from(name))
 }
 
 /// A refusal that administrator rights would get past (not a read-only disk).

@@ -2413,6 +2413,10 @@ fn administrator_commands_are_exact() {
     assert_eq!(&s(Task::Delete { paths: vec!["/srv/x".into()] }.argv())[1..], ["-rf", "--", "/srv/x"]);
     assert_eq!(&s(Task::Rename { from: "/etc/a".into(), to: "/etc/b".into() }.argv())[1..], ["-T", "--", "/etc/a", "/etc/b"]);
     assert!(s(Task::NewFolder("/opt/n".into()).argv())[0].ends_with("/mkdir"));
+    // Root's programs come from the system's folders, whatever PATH puts first.
+    let cp = crate::admin::program("cp");
+    assert!(crate::admin::SYSTEM_BIN.iter().any(|d| cp.parent() == Some(Path::new(d))), "cp from a system folder: {}", cp.display());
+    assert_eq!(crate::admin::program("no-such-tool-here"), Path::new("no-such-tool-here"));
     assert!(denied(&std::io::Error::from_raw_os_error(libc::EACCES)) && denied(&std::io::Error::from_raw_os_error(libc::EPERM)));
     assert!(!denied(&std::io::Error::from_raw_os_error(libc::EROFS)), "a read-only disk isn't a permission problem");
 }
