@@ -26,6 +26,7 @@ const TOOLS: &[(&str, [Option<&str>; 4])] = &[
     ("ffmpeg", [Some("ffmpeg"), Some("ffmpeg"), Some("ffmpeg-free"), Some("ffmpeg")]),
     ("ffprobe", [Some("ffmpeg"), Some("ffmpeg"), Some("ffmpeg-free"), Some("ffmpeg")]),
     ("gdbus", [Some("glib2"), Some("libglib2.0-bin"), Some("glib2"), Some("glib2-tools")]),
+    ("gvfs-gphoto2", [Some("gvfs-gphoto2"), Some("gvfs-backends"), Some("gvfs-gphoto2"), Some("gvfs-backends")]),
     ("gvfs-mtp", [Some("gvfs-mtp"), Some("gvfs-backends"), Some("gvfs-mtp"), Some("gvfs-backends")]),
     ("heif-dec", [Some("libheif"), Some("libheif-examples"), Some("libheif-tools"), None]),
     ("ImageMagick", [Some("imagemagick"), Some("imagemagick"), Some("ImageMagick"), Some("ImageMagick")]),

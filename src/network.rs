@@ -227,10 +227,31 @@ pub fn unmount(t: &Tools, uri: &str) -> Result<(), String> {
 /// What a phone that only shows as plugged in says when it is clicked: GVFS's MTP part,
 /// which opens phones, isn't installed (KDE Plasma doesn't install it; Dolphin uses its own).
 pub const PHONE_NEEDS: &str = "Opening phones needs gvfs-mtp";
+/// And a camera (picture transfer): GVFS's gphoto2 part opens those, a package apart on
+/// some systems.
+pub const CAMERA_NEEDS: &str = "Opening cameras needs gvfs-gphoto2";
 
-/// The place a phone stands for while GVFS can't see it: "usb://1-2", a device on the bus.
+/// The places a device stands for while GVFS can't see it, by the way it transfers:
+/// "usb-mtp://1-2" a phone, "usb-ptp://3-1" a camera, each a device on the bus.
+const USB_MTP: &str = "usb-mtp://";
+const USB_PTP: &str = "usb-ptp://";
+
 pub fn is_usb_only(uri: &str) -> bool {
-    uri.starts_with("usb://")
+    uri.starts_with(USB_MTP) || uri.starts_with(USB_PTP)
+}
+
+/// What opening a device that only shows as plugged in needs.
+pub fn usb_needs(uri: &str) -> &'static str {
+    if uri.starts_with(USB_PTP) { CAMERA_NEEDS } else { PHONE_NEEDS }
+}
+
+/// The devices on the bus that GVFS doesn't list: a phone unless GVFS lists one over MTP,
+/// a camera unless it lists one over gphoto2. One listed kind says nothing of the other,
+/// as its MTP and gphoto2 parts are packages apart on some systems.
+pub fn usb_unlisted(gvfs: &[Place], usb: Vec<Place>) -> Vec<Place> {
+    let has = |scheme: &str| gvfs.iter().any(|p| p.uri.starts_with(scheme));
+    let (mtp, ptp) = (has("mtp://"), has("gphoto2://"));
+    usb.into_iter().filter(|p| !(p.uri.starts_with(USB_MTP) && mtp || p.uri.starts_with(USB_PTP) && ptp)).collect()
 }
 
 /// Phones and cameras plugged in over USB, from `sys` (/sys/bus/usb/devices): every device
@@ -240,19 +261,24 @@ pub fn is_usb_only(uri: &str) -> bool {
 /// so the phone shows up and can say what opening it needs.
 pub fn usb_devices_in(sys: &std::path::Path) -> Vec<Place> {
     let read = |p: PathBuf| std::fs::read_to_string(p).map(|s| s.trim().to_string()).unwrap_or_default();
-    let mut devs: Vec<String> = vec![];
+    // Each device and whether it speaks MTP (else only PTP): an MTP interface wins.
+    let mut devs: Vec<(String, bool)> = vec![];
     for e in std::fs::read_dir(sys).into_iter().flatten().flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
         // An interface is "1-2:1.0": its device is the part before the colon.
         let Some((dev, _)) = name.split_once(':') else { continue };
-        let transfer = read(e.path().join("bInterfaceClass")) == "06" || read(e.path().join("interface")).eq_ignore_ascii_case("MTP");
-        if transfer && !devs.iter().any(|d| d == dev) {
-            devs.push(dev.to_string());
+        let mtp = read(e.path().join("interface")).eq_ignore_ascii_case("MTP");
+        if !mtp && read(e.path().join("bInterfaceClass")) != "06" {
+            continue;
+        }
+        match devs.iter_mut().find(|d| d.0 == dev) {
+            Some(d) => d.1 |= mtp,
+            None => devs.push((dev.to_string(), mtp)),
         }
     }
     devs.sort();
     devs.into_iter()
-        .map(|dev| {
+        .map(|(dev, mtp)| {
             let words = [read(sys.join(&dev).join("manufacturer")), read(sys.join(&dev).join("product"))];
             let mut name = words.iter().filter(|w| !w.is_empty()).cloned().collect::<Vec<_>>().join(" ");
             // "Google Pixel 7" says it once; "Google Google Pixel 7" would twice.
@@ -264,7 +290,7 @@ pub fn usb_devices_in(sys: &std::path::Path) -> Vec<Place> {
             if name.is_empty() {
                 name = "Phone".into();
             }
-            Place { name, uri: format!("usb://{dev}"), device: true, mounted: false, path: None }
+            Place { name, uri: format!("{}{dev}", if mtp { USB_MTP } else { USB_PTP }), device: true, mounted: false, path: None }
         })
         .collect()
 }

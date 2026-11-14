@@ -125,7 +125,7 @@ License: GPL-3.0-or-later
 URL: https://github.com/yappologistic/Maia
 AutoReqProv: no
 Requires: libc.so.6$L, libEGL.so.1$L, libxkbcommon.so.0$L
-Recommends: /usr/bin/xdg-open, /usr/bin/bsdtar, /usr/bin/git, (gvfs-mtp or gvfs-backends), gvfs-fuse
+Recommends: /usr/bin/xdg-open, /usr/bin/bsdtar, /usr/bin/git, (gvfs-mtp or gvfs-backends), (gvfs-gphoto2 or gvfs-backends), gvfs-fuse
 Suggests: /usr/bin/ffmpeg, /usr/bin/pdftoppm, /usr/bin/udisksctl
 
 %description
@@ -186,6 +186,7 @@ optdepend = poppler: PDF previews
 optdepend = udisks2: mount and format drives
 optdepend = gvfs: network places
 optdepend = gvfs-mtp: phones
+optdepend = gvfs-gphoto2: cameras
 optdepend = libreoffice-fresh: Office document previews
 EOF
   (cd "$R" && LANG=C bsdtar -czf .MTREE --format=mtree --uid 0 --gid 0 \
