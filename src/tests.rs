@@ -8986,7 +8986,15 @@ fn file_manager1_answers_show_in_folder() {
         std::thread::sleep(Duration::from_millis(20));
     }
     let addr = format!("unix:path={}", sock.display());
-    let mut bus = Bus::connect(&addr).expect("connected and authenticated");
+    // The daemon makes its socket's file a moment before it listens on it: connect until
+    // it answers, within the same five seconds.
+    let mut bus = loop {
+        match Bus::connect(&addr) {
+            Some(b) => break b,
+            None if start.elapsed() < Duration::from_secs(5) => std::thread::sleep(Duration::from_millis(20)),
+            None => panic!("connected and authenticated"),
+        }
+    };
     assert!(bus.own(NAME), "the name is Maia's");
     assert!(!Bus::connect(&addr).unwrap().own(NAME), "and no one else's while it holds it");
     let (tx, rx) = std::sync::mpsc::channel();
