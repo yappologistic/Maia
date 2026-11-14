@@ -2337,7 +2337,7 @@ fn aliases_set_change_clear_and_refuse_duplicates() {
 /// and the toast knows the package on each family.
 #[test]
 fn phones_plugged_in_without_gvfs() {
-    use crate::network::{PHONE_NEEDS, is_usb_only, usb_devices_in};
+    use crate::network::{CAMERA_NEEDS, PHONE_NEEDS, Place, is_usb_only, usb_devices_in, usb_needs, usb_unlisted};
     use crate::needs::{Family, command, tool_in};
     let d = tmpdir("usb-phones");
     let dev = |name: &str, files: &[(&str, &str)]| {
@@ -2366,7 +2366,20 @@ fn phones_plugged_in_without_gvfs() {
         assert!(p.device && !p.mounted && p.path.is_none() && is_usb_only(&p.uri));
         (p.uri, p.name)
     }).collect();
-    assert_eq!(got, [("usb://1-2".to_string(), "Google Pixel 7".to_string()), ("usb://3-1".into(), "Canon Digital Camera".into()), ("usb://3-4".into(), "Phone".into())]);
+    assert_eq!(got, [("usb-mtp://1-2".to_string(), "Google Pixel 7".to_string()), ("usb-ptp://3-1".into(), "Canon Digital Camera".into()), ("usb-ptp://3-4".into(), "Phone".into())]);
+    // Each says what opening it needs: a phone GVFS's MTP part, a camera its gphoto2 part.
+    assert_eq!(usb_needs("usb-mtp://1-2"), PHONE_NEEDS);
+    assert_eq!(usb_needs("usb-ptp://3-1"), CAMERA_NEEDS);
+    assert_eq!(tool_in(CAMERA_NEEDS), Some("gvfs-gphoto2"));
+    assert_eq!(command("gvfs-gphoto2", Family::Fedora).as_deref(), Some("sudo dnf install gvfs-gphoto2"));
+    // What GVFS lists of one kind hides only that kind: a camera over gphoto2 leaves the
+    // phone it can't open in sight, and a phone over MTP leaves the camera.
+    let gvfs = |uri: &str| vec![Place { name: "x".into(), uri: uri.into(), device: true, mounted: false, path: None }];
+    let kept = |g: Vec<Place>| usb_unlisted(&g, usb_devices_in(&d)).into_iter().map(|p| p.uri).collect::<Vec<_>>();
+    assert_eq!(kept(gvfs("gphoto2://Canon_EOS/")), ["usb-mtp://1-2"]);
+    assert_eq!(kept(gvfs("mtp://Google_Pixel_7/")), ["usb-ptp://3-1", "usb-ptp://3-4"]);
+    assert_eq!(kept(vec![]).len(), 3, "GVFS lists none: all of them");
+    assert_eq!(kept(gvfs("smb://nas/media/")).len(), 3, "a share says nothing of devices");
     assert!(usb_devices_in(&d.join("missing")).is_empty(), "no USB bus to read, no phones");
     assert!(!is_usb_only("mtp://Google_Pixel_7/"));
     assert_eq!(tool_in(PHONE_NEEDS), Some("gvfs-mtp"));
