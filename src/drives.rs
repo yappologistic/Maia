@@ -55,6 +55,14 @@ impl Tools {
         }
     }
 
+    /// The USB devices' folder in sysfs, or the fakes' `usb`.
+    pub fn usb_devices(&self) -> PathBuf {
+        match &self.dir {
+            Some(d) => d.join("usb"),
+            None => PathBuf::from("/sys/bus/usb/devices"),
+        }
+    }
+
     /// A file under /etc, or under the fakes' folder.
     pub fn etc(&self, rel: &str) -> PathBuf {
         match &self.dir {

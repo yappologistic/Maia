@@ -222,8 +222,8 @@ pub fn refresh(app: &App, ctx: &egui::Context) {
             let mut net = tools.as_ref().filter(|t| t.has("gio")).map(crate::network::places).unwrap_or_default();
             // Phones plugged in that GVFS doesn't list (its MTP part isn't installed) still
             // show, to say what opening them needs instead of not being there at all.
-            if !net.iter().any(|p| p.device) {
-                net.extend(crate::network::usb_devices_in(Path::new("/sys/bus/usb/devices")));
+            if let Some(t) = tools.as_ref().filter(|_| !net.iter().any(|p| p.device)) {
+                net.extend(crate::network::usb_devices_in(&t.usb_devices()));
             }
             let mounts = fsx::mounts_in(&table)
                 .into_iter()
