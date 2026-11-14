@@ -380,7 +380,7 @@ fn run(kind: &OpKind, p: &Mutex<Progress>, cancel: &Gate, ctx: &egui::Context) {
                 }
                 // Over something: written beside it and swapped in once whole.
                 let over = fs::symlink_metadata(d).is_ok();
-                let to = if over { unique_dest(d.parent().unwrap_or(d), &format!(".{}.maia-part", name_of(d))) } else { d.clone() };
+                let to = if over { unique_dest(d.parent().unwrap_or(d), part_name(d.file_name().unwrap_or_default())) } else { d.clone() };
                 match checked(cancel, p, &to, copy_tree(s, &to, p, cancel, ctx, false, Label::Fresh)).and_then(|_| if over { swap_in(&to, d) } else { Ok(()) }) {
                     Ok(()) => {
                         let mut g = p.lock().unwrap();
@@ -813,6 +813,18 @@ fn extract(archive: &Path, members: &[PathBuf], dest: &Path, p: &Mutex<Progress>
     let _ = fs::remove_dir_all(&stage);
 }
 
+/// The hidden name a replacement is written under before it is swapped in: ".name.maia-part",
+/// from the name's own bytes and short enough for a folder to hold, room left for
+/// unique_dest's " (n)" (a name's text stand-in can be three times its bytes).
+fn part_name(name: &std::ffi::OsStr) -> std::ffi::OsString {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let b = name.as_bytes();
+    let mut v = b".".to_vec();
+    v.extend_from_slice(&b[..b.len().min(200)]);
+    v.extend_from_slice(b".maia-part");
+    std::ffi::OsString::from_vec(v)
+}
+
 fn name_of(p: &Path) -> String {
     p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
@@ -857,7 +869,7 @@ fn resolve_dest(src: &Path, dest_dir: &Path, conflict: &Conflict, p: &Mutex<Prog
             None
         }
         Conflict::Merge if target.is_dir() && src.is_dir() => Some(Dest { to: target, replace: None }),
-        Conflict::Merge | Conflict::Overwrite | Conflict::Newer => Some(Dest { to: unique_dest(dest_dir, format!(".{}.maia-part", name.to_string_lossy())), replace: Some(target) }),
+        Conflict::Merge | Conflict::Overwrite | Conflict::Newer => Some(Dest { to: unique_dest(dest_dir, part_name(&name)), replace: Some(target) }),
     }
 }
 
@@ -1052,7 +1064,7 @@ fn copy_tree(
                     // the trash and gives the copy its name. Never renamed straight over it:
                     // the read-back check only comes once the whole job is copied, and a copy
                     // it rejects then must still leave the old file somewhere to get back.
-                    let part = unique_dest(dst, &format!(".{}.maia-part", de.file_name().to_string_lossy()));
+                    let part = unique_dest(dst, part_name(&de.file_name()));
                     let made = copy_tree(&de.path(), &part, p, cancel, ctx, false, label);
                     if let Err(e) = made.and_then(|_| swap_in(&part, &child)) {
                         let _ = remove_tree(&part);

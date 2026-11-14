@@ -237,6 +237,17 @@ fn copies_keep_names_that_are_not_utf8() {
     run(4, OpKind::Move { srcs: vec![f.clone()], dest: dst.clone(), decide });
     assert_eq!(names(&dst), [b"caf\xe9 (1).txt".to_vec(), b"caf\xe9.txt".to_vec()], "moved in over the one by its name");
     assert!(!f.exists());
+    // A long name of bytes no text can hold replaced: its hidden part is named from the
+    // bytes, short enough for the folder (its text stand-in would be three times longer).
+    let mut long = vec![0xffu8; 100];
+    long.extend_from_slice(b".txt");
+    let (lf, lt) = (src.join(raw(&long)), dst.join(raw(&long)));
+    std::fs::write(&lf, "new").unwrap();
+    std::fs::write(&lt, "old").unwrap();
+    let mut decide = HashMap::new();
+    decide.insert(lf.clone(), Conflict::Overwrite);
+    run(5, OpKind::Copy { srcs: vec![lf.clone()], dest: dst.clone(), decide });
+    assert_eq!(std::fs::read_to_string(&lt).unwrap(), "new", "replaced under its own long name");
     let _ = std::fs::remove_dir_all(&d);
 }
 
@@ -2447,6 +2458,15 @@ fn administrator_commands_are_exact() {
     let cp = crate::admin::program("cp");
     assert!(crate::admin::SYSTEM_BIN.iter().any(|d| cp.parent() == Some(Path::new(d))), "cp from a system folder: {}", cp.display());
     assert_eq!(crate::admin::program("no-such-tool-here"), Path::new("no-such-tool-here"));
+    // A program found in none of them is not run through pkexec at all (PATH would find it).
+    let fake = tmpdir("admin-path");
+    crate::drives::FAKE.with(|f| *f.borrow_mut() = Some(fake.clone()));
+    let t = crate::drives::Tools::current().unwrap();
+    crate::drives::FAKE.with(|f| *f.borrow_mut() = None);
+    let refused = crate::admin::run_argv(&t, &["cp".into(), "/a".into(), "/b".into()]);
+    assert!(refused.is_err_and(|e| e.contains("cp")), "a bare name is refused");
+    assert!(!fake.join("log").exists());
+    let _ = std::fs::remove_dir_all(&fake);
     assert!(denied(&std::io::Error::from_raw_os_error(libc::EACCES)) && denied(&std::io::Error::from_raw_os_error(libc::EPERM)));
     assert!(!denied(&std::io::Error::from_raw_os_error(libc::EROFS)), "a read-only disk isn't a permission problem");
 }
