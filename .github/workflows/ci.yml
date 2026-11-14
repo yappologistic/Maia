@@ -32,9 +32,10 @@ jobs:
           printf '[Thumbnailer Entry]\nTryExec=pdf-thumbnail\nExec=pdf-thumbnail %%s %%i %%o\nMimeType=application/pdf;\n' | sudo tee /usr/share/thumbnailers/pdf.thumbnailer >/dev/null
           printf '[Thumbnailer Entry]\nTryExec=ffmpeg\nExec=ffmpeg -loglevel quiet -y -i %%i -an -frames:v 1 -vf scale=%%s:-2 -f image2 -c:v png %%o\nMimeType=audio/mpeg;audio/flac;audio/ogg;audio/mp4;\n' \
             | sudo tee /usr/share/thumbnailers/ffmpeg-audio.thumbnailer >/dev/null
-          # Ubuntu's ImageMagick 6 has no magick command; the app and tests call it so.
+          # Ubuntu's ImageMagick 6 has no magick command; the app and tests call it so,
+          # also as `magick identify` and the like, which are commands of their own there.
           if ! command -v magick; then
-            printf '#!/bin/sh\nexec convert "$@"\n' | sudo tee /usr/local/bin/magick >/dev/null
+            printf '#!/bin/sh\ncase "$1" in identify|mogrify|composite|compare|montage|stream) t=$1; shift; exec "$t" "$@" ;; esac\nexec convert "$@"\n' | sudo tee /usr/local/bin/magick >/dev/null
             sudo chmod +x /usr/local/bin/magick
           fi
           git config --global user.name CI
