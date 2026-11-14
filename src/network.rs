@@ -245,13 +245,38 @@ pub fn usb_needs(uri: &str) -> &'static str {
     if uri.starts_with(USB_PTP) { CAMERA_NEEDS } else { PHONE_NEEDS }
 }
 
-/// The devices on the bus that GVFS doesn't list: a phone unless GVFS lists one over MTP,
-/// a camera unless it lists one over gphoto2. One listed kind says nothing of the other,
-/// as its MTP and gphoto2 parts are packages apart on some systems.
-pub fn usb_unlisted(gvfs: &[Place], usb: Vec<Place>) -> Vec<Place> {
-    let has = |scheme: &str| gvfs.iter().any(|p| p.uri.starts_with(scheme));
-    let (mtp, ptp) = (has("mtp://"), has("gphoto2://"));
-    usb.into_iter().filter(|p| !(p.uri.starts_with(USB_MTP) && mtp || p.uri.starts_with(USB_PTP) && ptp)).collect()
+/// A phone or camera on the bus, with what tells it apart in GVFS's own addresses: its
+/// serial number (in an MTP address, "mtp://Google_Pixel_7_2A09/") and its bus and device
+/// numbers ("usb:003,004", as gphoto2 addresses a camera), and its model.
+pub struct UsbDevice {
+    pub place: Place,
+    pub serial: String,
+    pub bus_dev: String,
+    /// Its model as GVFS writes it in an address, spaces as underscores ("Pixel_7").
+    pub model: String,
+}
+
+/// The devices on the bus that GVFS doesn't list, each matched to GVFS's places of its
+/// kind by its serial number, its bus and device numbers or its model. One with nothing
+/// to tell it apart (no serial, while GVFS addresses its kind by name) counts as listed
+/// once GVFS lists a device of its kind: shown twice, it would say it can't be opened
+/// beside the place that opens it.
+pub fn usb_unlisted(gvfs: &[Place], usb: Vec<UsbDevice>) -> Vec<Place> {
+    usb.into_iter()
+        .filter(|u| {
+            let scheme = if u.place.uri.starts_with(USB_PTP) { "gphoto2://" } else { "mtp://" };
+            let mut kind = gvfs.iter().filter(|p| p.uri.starts_with(scheme)).peekable();
+            if kind.peek().is_none() {
+                return true;
+            }
+            let ids: Vec<&str> = [u.serial.as_str(), u.bus_dev.as_str(), u.model.as_str()].into_iter().filter(|s| s.len() >= 4).collect();
+            let by_id = kind.clone().any(|p| ids.iter().any(|id| p.uri.contains(id)));
+            // Told apart when GVFS addresses its devices by what we read; else by kind.
+            let addressed = u.serial.len() >= 4 || kind.any(|p| p.uri.contains("usb:"));
+            if addressed { !by_id } else { false }
+        })
+        .map(|u| u.place)
+        .collect()
 }
 
 /// Phones and cameras plugged in over USB, from `sys` (/sys/bus/usb/devices): every device
@@ -259,7 +284,7 @@ pub fn usb_unlisted(gvfs: &[Place], usb: Vec<Place>) -> Vec<Place> {
 /// that can't be opened, named by their maker and model. GVFS lists the same devices
 /// itself when its MTP and gphoto2 parts are installed; these stand in when it doesn't,
 /// so the phone shows up and can say what opening it needs.
-pub fn usb_devices_in(sys: &std::path::Path) -> Vec<Place> {
+pub fn usb_devices_in(sys: &std::path::Path) -> Vec<UsbDevice> {
     let read = |p: PathBuf| std::fs::read_to_string(p).map(|s| s.trim().to_string()).unwrap_or_default();
     // Each device and whether it speaks MTP (else only PTP): an MTP interface wins.
     let mut devs: Vec<(String, bool)> = vec![];
@@ -290,7 +315,14 @@ pub fn usb_devices_in(sys: &std::path::Path) -> Vec<Place> {
             if name.is_empty() {
                 name = "Phone".into();
             }
-            Place { name, uri: format!("{}{dev}", if mtp { USB_MTP } else { USB_PTP }), device: true, mounted: false, path: None }
+            let num = |f: &str| read(sys.join(&dev).join(f)).parse::<u32>().ok();
+            let bus_dev = match (num("busnum"), num("devnum")) {
+                (Some(b), Some(d)) => format!("usb:{b:03},{d:03}"),
+                _ => String::new(),
+            };
+            let place = Place { name, uri: format!("{}{dev}", if mtp { USB_MTP } else { USB_PTP }), device: true, mounted: false, path: None };
+            let model = read(sys.join(&dev).join("product")).replace(' ', "_");
+            UsbDevice { place, serial: read(sys.join(&dev).join("serial")), bus_dev, model }
         })
         .collect()
 }
