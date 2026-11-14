@@ -104,6 +104,11 @@ Maia writes a line to `~/.local/state/maia/crash.log` when it crashes or cannot
 start, and shows a notification if it fails before the window opens. Run it from a
 terminal to see the same messages. Include that log when you report a problem.
 
+Phones, cameras and network shares open through GVFS. A phone that shows in the
+sidebar but says it needs gvfs-mtp wants GVFS's MTP part (KDE Plasma doesn't install
+it): `gvfs-mtp` on Arch and Fedora, `gvfs-backends` on Debian, Ubuntu and openSUSE.
+Unlock the phone and choose File transfer when it asks what the USB connection is for.
+
 ## Development
 
 ```bash
