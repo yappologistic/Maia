@@ -184,7 +184,7 @@ fn check(paths: Vec<PathBuf>, tx: &Sender<Msg>, ctx: &egui::Context) {
     let mounts: Vec<PathBuf> = std::fs::read_to_string("/proc/self/mountinfo")
         .unwrap_or_default()
         .lines()
-        .filter_map(|l| l.split(' ').nth(4).map(|m| PathBuf::from(m.replace("\\040", " "))))
+        .filter_map(|l| l.split(' ').nth(4).map(|m| PathBuf::from(crate::fsx::unescape_mount(m))))
         .collect();
     let mut by: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
     for p in paths {

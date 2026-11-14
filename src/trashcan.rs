@@ -121,7 +121,7 @@ pub(crate) fn trash_dirs() -> Vec<PathBuf> {
     // Every mount point (including tmpfs and removable media) may hold a topdir trash.
     let mounts = fs::read_to_string("/proc/self/mounts").unwrap_or_default();
     for mp in mounts.lines().filter_map(|l| l.split_whitespace().nth(1)) {
-        let mp = PathBuf::from(mp.replace("\\040", " "));
+        let mp = PathBuf::from(crate::fsx::unescape_mount(mp));
         for d in [mp.join(".Trash").join(uid().to_string()), mp.join(format!(".Trash-{}", uid()))] {
             if d.join("info").is_dir() && !v.contains(&d) {
                 v.push(d);

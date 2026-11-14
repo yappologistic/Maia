@@ -2374,6 +2374,16 @@ fn phones_plugged_in_without_gvfs() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// Mount points as the kernel writes them: space, tab, newline and backslash as octal,
+/// read back the same wherever a mount table is read.
+#[test]
+fn mount_points_unescape_all_four() {
+    assert_eq!(crate::fsx::unescape_mount("/run/media/me/My\\040Disk\\011a\\012b\\134c"), "/run/media/me/My Disk\ta\nb\\c");
+    assert_eq!(crate::fsx::unescape_mount("/plain"), "/plain");
+    let m = crate::versions::parse_mountinfo("36 35 98:0 / /mnt/a\\134b\\040c rw,noatime master:1 - ext4 /dev/sdb1 rw\n");
+    assert_eq!(m.iter().map(|m| m.point.clone()).collect::<Vec<_>>(), [std::path::PathBuf::from("/mnt/a\\b c")]);
+}
+
 #[test]
 fn network_places_parse_from_gio() {
     use crate::network::{is_uri, label, normalize, parse_mounts};

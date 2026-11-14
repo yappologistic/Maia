@@ -35,7 +35,7 @@ pub struct Mount {
 }
 
 pub fn parse_mountinfo(text: &str) -> Vec<Mount> {
-    let unescape = |s: &str| PathBuf::from(s.replace("\\040", " ").replace("\\011", "\t").replace("\\012", "\n").replace("\\134", "\\"));
+    let unescape = |s: &str| PathBuf::from(crate::fsx::unescape_mount(s));
     text.lines()
         .filter_map(|l| {
             let (left, right) = l.split_once(" - ")?;
