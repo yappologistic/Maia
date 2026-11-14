@@ -13,6 +13,9 @@ pub struct Field {
     pub text: Vec<char>,
     pub anchor: usize,
     pub caret: usize,
+    /// How far the name is slid left in its box, in points: a name wider than the box
+    /// scrolls along it so the caret stays in sight.
+    pub scroll: f32,
 }
 
 impl Field {
@@ -112,7 +115,7 @@ impl Rename {
         let fields = items
             .into_iter()
             .map(|(idx, path, name)| {
-                let mut f = Field { idx, path, text: name.chars().collect(), orig: name, anchor: 0, caret: 0 };
+                let mut f = Field { idx, path, text: name.chars().collect(), orig: name, anchor: 0, caret: 0, scroll: 0.0 };
                 f.caret = f.stem_end();
                 f
             })
