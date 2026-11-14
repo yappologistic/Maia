@@ -2290,6 +2290,51 @@ fn aliases_set_change_clear_and_refuse_duplicates() {
     assert_eq!(set_alias(&mut ud, Cmd::GoTo, "zz"), Ok(()));
 }
 
+/// Phones plugged in over USB (issue #20): a device with an MTP or a PTP interface is a
+/// phone place, named once by its maker and model, whatever else is on the bus; a
+/// keyboard and a USB stick are not. Clicked, it says GVFS's MTP part is what opens it,
+/// and the toast knows the package on each family.
+#[test]
+fn phones_plugged_in_without_gvfs() {
+    use crate::network::{PHONE_NEEDS, is_usb_only, usb_devices_in};
+    use crate::needs::{Family, command, tool_in};
+    let d = tmpdir("usb-phones");
+    let dev = |name: &str, files: &[(&str, &str)]| {
+        std::fs::create_dir_all(d.join(name)).unwrap();
+        for (f, v) in files {
+            std::fs::write(d.join(name).join(f), format!("{v}\n")).unwrap();
+        }
+    };
+    // An Android phone in file transfer mode: MTP on a vendor-specific interface.
+    dev("1-2", &[("manufacturer", "Google"), ("product", "Pixel 7")]);
+    dev("1-2:1.0", &[("bInterfaceClass", "ff"), ("interface", "MTP")]);
+    dev("1-2:1.1", &[("bInterfaceClass", "ff"), ("interface", "ADB Interface")]);
+    // A camera in PTP mode: the still image class, whose product names the maker too.
+    dev("3-1", &[("manufacturer", "Canon"), ("product", "Canon Digital Camera")]);
+    dev("3-1:1.0", &[("bInterfaceClass", "06")]);
+    // A phone that says nothing about itself.
+    dev("3-4", &[]);
+    dev("3-4:1.0", &[("bInterfaceClass", "06")]);
+    // A keyboard and a stick.
+    dev("2-1", &[("manufacturer", "Logitech"), ("product", "USB Keyboard")]);
+    dev("2-1:1.0", &[("bInterfaceClass", "03")]);
+    dev("2-3", &[("manufacturer", "SanDisk"), ("product", "Cruzer")]);
+    dev("2-3:1.0", &[("bInterfaceClass", "08")]);
+    dev("usb1", &[("product", "xHCI Host Controller")]);
+    let got: Vec<(String, String)> = usb_devices_in(&d).into_iter().map(|p| {
+        assert!(p.device && !p.mounted && p.path.is_none() && is_usb_only(&p.uri));
+        (p.uri, p.name)
+    }).collect();
+    assert_eq!(got, [("usb://1-2".to_string(), "Google Pixel 7".to_string()), ("usb://3-1".into(), "Canon Digital Camera".into()), ("usb://3-4".into(), "Phone".into())]);
+    assert!(usb_devices_in(&d.join("missing")).is_empty(), "no USB bus to read, no phones");
+    assert!(!is_usb_only("mtp://Google_Pixel_7/"));
+    assert_eq!(tool_in(PHONE_NEEDS), Some("gvfs-mtp"));
+    assert_eq!(command("gvfs-mtp", Family::Arch).as_deref(), Some("sudo pacman -S gvfs-mtp"));
+    assert_eq!(command("gvfs-mtp", Family::Debian).as_deref(), Some("sudo apt install gvfs-backends"));
+    assert_eq!(command("gvfs-mtp", Family::Fedora).as_deref(), Some("sudo dnf install gvfs-mtp"));
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 #[test]
 fn network_places_parse_from_gio() {
     use crate::network::{is_uri, label, normalize, parse_mounts};

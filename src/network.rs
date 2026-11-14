@@ -224,6 +224,51 @@ pub fn unmount(t: &Tools, uri: &str) -> Result<(), String> {
     gio(t, &["mount", "-u", uri]).map(|_| ())
 }
 
+/// What a phone that only shows as plugged in says when it is clicked: GVFS's MTP part,
+/// which opens phones, isn't installed (KDE Plasma doesn't install it; Dolphin uses its own).
+pub const PHONE_NEEDS: &str = "Opening phones needs gvfs-mtp";
+
+/// The place a phone stands for while GVFS can't see it: "usb://1-2", a device on the bus.
+pub fn is_usb_only(uri: &str) -> bool {
+    uri.starts_with("usb://")
+}
+
+/// Phones and cameras plugged in over USB, from `sys` (/sys/bus/usb/devices): every device
+/// with a media transfer (MTP) or picture transfer (PTP, still image) interface, as places
+/// that can't be opened, named by their maker and model. GVFS lists the same devices
+/// itself when its MTP and gphoto2 parts are installed; these stand in when it doesn't,
+/// so the phone shows up and can say what opening it needs.
+pub fn usb_devices_in(sys: &std::path::Path) -> Vec<Place> {
+    let read = |p: PathBuf| std::fs::read_to_string(p).map(|s| s.trim().to_string()).unwrap_or_default();
+    let mut devs: Vec<String> = vec![];
+    for e in std::fs::read_dir(sys).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        // An interface is "1-2:1.0": its device is the part before the colon.
+        let Some((dev, _)) = name.split_once(':') else { continue };
+        let transfer = read(e.path().join("bInterfaceClass")) == "06" || read(e.path().join("interface")).eq_ignore_ascii_case("MTP");
+        if transfer && !devs.iter().any(|d| d == dev) {
+            devs.push(dev.to_string());
+        }
+    }
+    devs.sort();
+    devs.into_iter()
+        .map(|dev| {
+            let words = [read(sys.join(&dev).join("manufacturer")), read(sys.join(&dev).join("product"))];
+            let mut name = words.iter().filter(|w| !w.is_empty()).cloned().collect::<Vec<_>>().join(" ");
+            // "Google Pixel 7" says it once; "Google Google Pixel 7" would twice.
+            if let [m, p] = &words {
+                if !m.is_empty() && p.starts_with(m.as_str()) {
+                    name = p.clone();
+                }
+            }
+            if name.is_empty() {
+                name = "Phone".into();
+            }
+            Place { name, uri: format!("usb://{dev}"), device: true, mounted: false, path: None }
+        })
+        .collect()
+}
+
 /// A short name for a place: "media on nas", "me@host", or the device's own name.
 pub fn label(uri: &str) -> String {
     let Some((scheme, rest)) = uri.split_once("://") else { return uri.to_string() };

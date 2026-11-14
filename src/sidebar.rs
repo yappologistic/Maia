@@ -219,7 +219,12 @@ pub fn refresh(app: &App, ctx: &egui::Context) {
         std::thread::spawn(move || {
             let (recent_in, marks_in) = inputs;
             let drives = tools.as_ref().map(crate::drives::list).unwrap_or_default();
-            let net = tools.as_ref().filter(|t| t.has("gio")).map(crate::network::places).unwrap_or_default();
+            let mut net = tools.as_ref().filter(|t| t.has("gio")).map(crate::network::places).unwrap_or_default();
+            // Phones plugged in that GVFS doesn't list (its MTP part isn't installed) still
+            // show, to say what opening them needs instead of not being there at all.
+            if !net.iter().any(|p| p.device) {
+                net.extend(crate::network::usb_devices_in(Path::new("/sys/bus/usb/devices")));
+            }
             let mounts = fsx::mounts_in(&table)
                 .into_iter()
                 .map(|m| {
@@ -756,12 +761,15 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                     }
                     let _ = b.on_hover_text(format!("Disconnect {name}"));
                 }
+                let usb_only = crate::network::is_usb_only(&place.uri);
                 let resp = resp.on_hover_text(match &place.path {
                     Some(p) => format!("{}\n{}", place.uri, p.display()),
+                    None if usb_only => format!("Plugged in over USB\n{}", crate::network::PHONE_NEEDS),
                     None => format!("{}\nClick to connect", place.uri),
                 });
                 match (&place.path, resp.clicked() || resp.middle_clicked()) {
                     (Some(p), _) => nav(&mut actions, &resp, p),
+                    (None, true) if usb_only => app.toast(crate::network::PHONE_NEEDS),
                     (None, true) => app.connect(place.uri.clone(), crate::network::Login { user: String::new(), password: String::new(), anonymous: false }, Some((active, mods.ctrl || resp.middle_clicked()))),
                     _ => {}
                 }
