@@ -3819,7 +3819,7 @@ impl App {
             .filter_map(|it| {
                 let taken = std::fs::symlink_metadata(&it.original).is_ok();
                 let to = match (taken, it.original.parent(), it.original.file_name()) {
-                    (true, Some(dir), Some(name)) if !replace => fsx::unique_dest(dir, &name.to_string_lossy()),
+                    (true, Some(dir), Some(name)) if !replace => fsx::unique_dest(dir, name),
                     _ => it.original.clone(),
                 };
                 if taken && replace {

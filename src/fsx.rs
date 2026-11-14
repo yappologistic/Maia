@@ -539,21 +539,26 @@ pub fn open_plain(p: &Path) -> Option<std::fs::File> {
     f.metadata().ok()?.is_file().then_some(f)
 }
 
-/// Unique destination name: "name (1).ext", "name (2).ext", ...
-pub fn unique_dest(dir: &Path, name: &str) -> PathBuf {
+/// Unique destination name: "name (1).ext", "name (2).ext", ... From the name's own bytes,
+/// so one that isn't UTF-8 keeps them.
+pub fn unique_dest(dir: &Path, name: impl AsRef<std::ffi::OsStr>) -> PathBuf {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let name = name.as_ref();
     let cand = dir.join(name);
     if fs::symlink_metadata(&cand).is_err() {
         return cand;
     }
     let p = Path::new(name);
-    let (stem, ext) = match (p.file_stem(), p.extension()) {
-        (Some(s), Some(e)) if !name.starts_with('.') || name.matches('.').count() > 1 => {
-            (s.to_string_lossy().into_owned(), format!(".{}", e.to_string_lossy()))
-        }
-        _ => (name.to_string(), String::new()),
+    let b = name.as_bytes();
+    let (stem, ext): (&[u8], &[u8]) = match (p.file_stem(), p.extension()) {
+        (Some(s), Some(_)) if !b.starts_with(b".") || b.iter().filter(|&&c| c == b'.').count() > 1 => b.split_at(s.len()),
+        _ => (b, &[]),
     };
-    for i in 1.. {
-        let c = dir.join(format!("{stem} ({i}){ext}"));
+    for i in 1u64.. {
+        let mut n = stem.to_vec();
+        n.extend_from_slice(format!(" ({i})").as_bytes());
+        n.extend_from_slice(ext);
+        let c = dir.join(std::ffi::OsString::from_vec(n));
         if fs::symlink_metadata(&c).is_err() {
             return c;
         }
