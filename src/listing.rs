@@ -2153,8 +2153,9 @@ fn side_column(ui: &mut Ui, cr: Rect, col: &mut Tab, child: Option<u32>, env: &m
                     MiddleClick::OpenInNewTab => Action::NewTab { panel, path, select: None, focus: false },
                 });
             }
-            let right = resp.drag_started_by(egui::PointerButton::Secondary);
-            if (resp.drag_started_by(egui::PointerButton::Primary) || right) && env.drag.is_none() {
+            if let Some(right) = files_drag_begins(ui, &resp)
+                && env.drag.is_none()
+            {
                 *env.drag = Some(Drag::Files { paths: vec![e.path.clone()], from_panel: panel, right });
             }
         }
