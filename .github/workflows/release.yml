@@ -55,7 +55,7 @@ jobs:
 
       - name: Packaging tools
         run: |
-          sudo apt-get install -y --no-install-recommends rpm zstd desktop-file-utils
+          sudo apt-get install -y --no-install-recommends rpm zstd libarchive-tools desktop-file-utils
           # appimagetool 1.9.0, checked against the copy it was tried with.
           case "${{ matrix.arch }}" in
             x86_64) sum=46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1 ;;
