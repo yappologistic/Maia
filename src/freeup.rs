@@ -238,8 +238,11 @@ impl Scan {
                     });
                 }
                 find(&root, &places, &st, &mut |f| {
-                    let _ = size_tx.send(f.path.clone());
+                    // Said found before it is sized: a quick size sent first would find no
+                    // row to land on and be dropped, leaving the row counting for ever.
+                    let path = f.path.clone();
                     let _ = tx.send(Msg::Found(f));
+                    let _ = size_tx.send(path);
                     ctx.request_repaint();
                 });
                 drop(size_tx);
