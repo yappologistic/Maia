@@ -75,10 +75,11 @@ impl Task {
     }
 }
 
-/// Where the programs run as root are looked for: the system's own folders, never the
-/// user's PATH. pkexec runs what it is given as root, and a `cp` put in a folder early on
-/// PATH (~/.local/bin, say) would otherwise be run as root with the user's password.
-pub const SYSTEM_BIN: &[&str] = &["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+/// Where pkexec and the programs it runs as root are looked for: the system's own folders,
+/// never the user's PATH. A `cp` or a `pkexec` put in a folder early on PATH (~/.local/bin,
+/// say) would otherwise be run in their place, as root or with the user's password. NixOS
+/// and Guix keep pkexec's setuid copy and the system's programs under /run.
+pub const SYSTEM_BIN: &[&str] = &["/usr/bin", "/bin", "/usr/sbin", "/sbin", "/run/wrappers/bin", "/run/setuid-programs", "/run/current-system/sw/bin", "/run/current-system/profile/bin"];
 
 /// `/usr/bin/cp` and the like: the first match in the system's folders.
 pub fn program(name: &str) -> PathBuf {
@@ -103,7 +104,7 @@ pub fn run(t: &Tools, task: &Task) -> Result<(), String> {
 /// One command as root through pkexec, its program by absolute path. Waits for the
 /// password dialog; the error is the command's last line, or that access was refused.
 pub fn run_argv(t: &Tools, argv: &[OsString]) -> Result<(), String> {
-    let mut c = t.cmd("pkexec");
+    let mut c = std::process::Command::new(t.program("pkexec"));
     c.args(argv).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
     let out = c.output().map_err(|e| format!("pkexec: {e}"))?;
     match out.status.code() {
