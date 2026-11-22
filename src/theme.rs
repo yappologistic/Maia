@@ -4002,6 +4002,14 @@ pub fn apply(ctx: &egui::Context, p: &Palette, font_size: f32, spacing: f32, ani
         w.corner_radius = rad(R_SM);
     }
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, p.border);
+    // Text fields are sunken wells: the card's colour a step towards the canvas inside a
+    // hairline, which brightens under the pointer and turns to the accent while typing
+    // goes there (egui strokes a focused field with the selection's stroke).
+    if !p.strong {
+        v.text_edit_bg_color = Some(p.card().lerp_to_gamma(p.canvas, if p.dark { 0.45 } else { 0.3 }));
+        v.widgets.inactive.bg_stroke = Stroke::new(1.0, p.hairline);
+        v.widgets.hovered.bg_stroke = Stroke::new(1.0, p.hairline_active());
+    }
     v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, p.text);
     v.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
     // Slider rails, checkboxes and text fields sit on raised popups; keep them darker.
@@ -4010,7 +4018,9 @@ pub fn apply(ctx: &egui::Context, p: &Palette, font_size: f32, spacing: f32, ani
     v.widgets.inactive.fg_stroke = Stroke::new(1.0, p.text);
     v.widgets.hovered.weak_bg_fill = p.hover;
     v.widgets.hovered.bg_fill = p.hover;
-    v.widgets.hovered.bg_stroke = Stroke::NONE;
+    if p.strong {
+        v.widgets.hovered.bg_stroke = Stroke::NONE;
+    }
     v.widgets.active.weak_bg_fill = p.selected;
     v.widgets.active.bg_fill = p.selected;
     v.widgets.open.weak_bg_fill = p.hover;
