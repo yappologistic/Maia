@@ -861,7 +861,12 @@ pub(crate) fn come_in(ui: &mut Ui, t: f32) {
         return;
     }
     ui.multiply_opacity(0.35 + 0.65 * t);
-    ui.ctx().set_transform_layer(layer, egui::emath::TSTransform::from_translation(vec2(0.0, (4.0 * (1.0 - t)).round())));
+    let dy = (4.0 * (1.0 - t)).round();
+    ui.ctx().set_transform_layer(layer, egui::emath::TSTransform::from_translation(vec2(0.0, dy)));
+    // The clip moves with the layer: set back by as much, it stays the window, and nothing
+    // of the popup (its shadow, a menu at the window's foot) is drawn past the window's edge.
+    let screen = ui.ctx().content_rect();
+    ui.set_clip_rect(ui.clip_rect().intersect(screen.translate(vec2(0.0, -dy))));
 }
 
 /// The veil a dialog lays over the window, fading in with it (`t` its `entrance`). Painted
@@ -5472,7 +5477,9 @@ fn conflict(app: &mut App, ctx: &egui::Context, st: &mut ConflictState) -> bool 
     }
     let remaining = st.items.len() - st.idx;
     let thumbs = &mut app.thumbs;
-    centered(ctx, "conflict", 560.0, &pal, |ui| {
+    // Wide enough for its six buttons side by side: at 560 the way out, its key inside
+    // it, ran over Rename.
+    centered(ctx, "conflict", 600.0, &pal, |ui| {
         ui.spacing_mut().item_spacing.y = 6.0;
         let name = item.dst.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         dialog_title(ui, &format!("“{name}” already exists"), Some(&format!("in {}", home_short(&st.dest))), &pal);
