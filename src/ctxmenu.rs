@@ -743,14 +743,9 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
     let mut bar_click: Option<Cmd> = None;
     let moved = ctx.input(|i| i.pointer.delta() != Vec2::ZERO);
     let resp = egui::Area::new(Id::new("ctxmenu")).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(ctx, |ui| {
-        crate::frost::behind(ui, 10);
-        egui::Frame::NONE
-            .fill(crate::frost::fill(pal.raised))
-            .stroke(Stroke::new(1.0, pal.border))
-            .corner_radius(CornerRadius::same(10))
-            .inner_margin(egui::Margin::same(5))
-            .shadow(egui::epaint::Shadow { offset: [0, 6], blur: 22, spread: 0, color: egui::Color32::from_black_alpha(90) })
-            .show(ui, |ui| {
+        crate::popups::come_in(ui, crate::popups::entrance(ui.ctx(), Id::new("ctxmenu")));
+        crate::frost::behind(ui, crate::theme::R_LG);
+        crate::popups::float(ui, crate::popups::popup_frame(&pal).inner_margin(egui::Margin::same(5)), crate::theme::R_LG, crate::theme::Elevation::Menu, &pal, |ui| {
                 ui.set_width(w - 10.0);
                 {
                     let before = st.query.clone();
@@ -769,7 +764,7 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
                 {
                     let yy = ui.cursor().top() + 2.0;
                     let x = ui.min_rect().x_range();
-                    ui.painter().line_segment([pos2(x.min - 5.0, yy), pos2(x.max + 5.0, yy)], Stroke::new(1.0, pal.border));
+                    ui.painter().line_segment([pos2(x.min - 5.0, yy), pos2(x.max + 5.0, yy)], Stroke::new(1.0, pal.hairline));
                     ui.add_space(5.0);
                 }
                 if bar_on {
@@ -780,10 +775,25 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
                         let resp = ui.interact(cell, Id::new(("ctx bar", k)), if on { Sense::click() } else { Sense::hover() });
                         crate::ui::note_control(ui, cell, "menu action");
                         let keyed = st.bar_at == Some(k);
-                        if keyed {
-                            ui.painter().rect_filled(cell, CornerRadius::same(6), crate::kit::lift(&pal));
-                        } else if on && resp.hovered() {
-                            ui.painter().rect_filled(cell, CornerRadius::same(6), crate::kit::touch(&pal));
+                        // Each action a small rounded well: lifted and lit while chosen or
+                        // pointed at, the bin's tinted with the danger red.
+                        let well = cell.shrink2(vec2(2.0, 0.0));
+                        let wr = crate::theme::corner(crate::theme::R_MD);
+                        let hot = on && resp.hovered();
+                        let danger = c == Cmd::Trash && on && (hot || keyed) && !pal.strong;
+                        let face = if danger {
+                            pal.card().lerp_to_gamma(pal.danger, if pal.dark { 0.2 } else { 0.12 })
+                        } else if keyed {
+                            crate::kit::lift(&pal)
+                        } else if hot {
+                            crate::kit::touch(&pal).lerp_to_gamma(pal.text, 0.03)
+                        } else {
+                            pal.card()
+                        };
+                        let rim = if danger { pal.danger.gamma_multiply(0.45) } else { pal.card_line() };
+                        ui.painter().rect(well, wr, face, Stroke::new(1.0, rim), egui::StrokeKind::Inside);
+                        if keyed || hot {
+                            crate::kit::lit_line(ui.painter(), well, wr, &pal);
                         }
                         let icon = match c {
                             Cmd::Cut => "scissors",
@@ -821,7 +831,7 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
                     }
                     let yy = ui.cursor().top() + 2.0;
                     let x = ui.min_rect().x_range();
-                    ui.painter().line_segment([pos2(x.min + 1.0, yy), pos2(x.max - 1.0, yy)], Stroke::new(1.0, pal.border));
+                    ui.painter().line_segment([pos2(x.min - 5.0, yy), pos2(x.max + 5.0, yy)], Stroke::new(1.0, pal.hairline));
                     ui.add_space(5.0);
                 }
                 // The area holding the menu remembers its last size, which would cap a
@@ -894,14 +904,14 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
                         let dimc = if loud { pal.on_sel_dim() } else { pal.text_dim };
                         let mut rx = r.right() - 10.0;
                         if !it.children.is_empty() {
-                            // The chevron turns as the submenu opens, and a dashed rule sets
+                            // The chevron turns as the submenu opens, and a hairline sets
                             // what it holds apart from the rows around it.
                             let open = st.expanded.contains(&it.id);
                             let turn = crate::kit::slide(ui.ctx(), Id::new(("ctx turn", &it.id)), if open { 1.0 } else { 0.0 });
                             crate::kit::chevron(ui.painter(), pos2(rx - 4.0, r.center().y), turn, dimc);
                             if open {
                                 let y = r.bottom().round() + 0.5;
-                                crate::kit::dashed_rule(ui.painter(), pos2(x0 + 22.0, y), pos2(r.right() - 10.0, y), &pal);
+                                ui.painter().line_segment([pos2(x0 + 22.0, y), pos2(r.right() - 10.0, y)], Stroke::new(1.0, pal.hairline));
                             }
                         } else {
                             if let Act::Tag(_, true) = &it.act {

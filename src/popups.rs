@@ -782,12 +782,15 @@ pub(crate) const DIALOG_PAD: f32 = 20.0;
 pub(crate) const DIALOG_RADIUS: u8 = theme::R_XL;
 
 /// A menu's or the palette's frame, at the menus' elevation (`Palette::shadows`: lighter
-/// on a light theme, where the dark one's weight read as a smudge).
+/// on a light theme, where the dark one's weight read as a smudge). Its rim is the cards'
+/// hairline, its corners from the scale (square with Round corners off). A frame takes
+/// one shadow, the wide ambient one; `float` adds the tight one under it and the light
+/// along its top.
 pub(crate) fn popup_frame(pal: &Palette) -> egui::Frame {
     egui::Frame::NONE
         .fill(crate::frost::fill(pal.raised))
-        .stroke(Stroke::new(1.0, pal.border))
-        .corner_radius(CornerRadius::same(theme::R_LG))
+        .stroke(Stroke::new(1.0, popup_rim(pal)))
+        .corner_radius(theme::corner(theme::R_LG))
         .inner_margin(egui::Margin::same(8))
         .shadow(pal.shadows(theme::Elevation::Menu)[0])
 }
@@ -796,9 +799,83 @@ pub(crate) fn popup_frame(pal: &Palette) -> egui::Frame {
 /// than a menu's, as it stands further off the window.
 pub(crate) fn dialog_frame(pal: &Palette) -> egui::Frame {
     popup_frame(pal)
-        .corner_radius(CornerRadius::same(DIALOG_RADIUS))
+        .corner_radius(theme::corner(DIALOG_RADIUS))
         .inner_margin(egui::Margin::same(DIALOG_PAD as i8))
         .shadow(pal.shadows(theme::Elevation::Dialog)[0])
+}
+
+/// What floats over the window is rimmed a touch firmer than a card on it: the hairline
+/// alone was lost against a busy folder behind the frosted fill. A high-contrast theme's
+/// solid border as it is.
+pub(crate) fn popup_rim(pal: &Palette) -> Color32 {
+    if pal.strong { pal.border } else { theme::over(pal.hairline, pal.border.gamma_multiply(0.35)) }
+}
+
+/// `frame` shown as a floating surface at `e`: under it the tight contact shadow a frame
+/// can't carry (painted into a slot kept before the frame, once its size is known), over
+/// it the line of light along its top edge. `rad` is the frame's corner from the scale.
+pub(crate) fn float<R>(ui: &mut Ui, frame: egui::Frame, rad: u8, e: theme::Elevation, pal: &Palette, add: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<R> {
+    let slot = ui.painter().add(egui::Shape::Noop);
+    let r = frame.show(ui, add);
+    let (rect, cr) = (r.response.rect, theme::corner(rad));
+    let contact = pal.shadows(e)[1];
+    if contact.color.a() > 0 {
+        ui.painter().set(slot, contact.as_shape(rect, cr));
+    }
+    crate::kit::lit_line(ui.painter(), rect, cr, pal);
+    r
+}
+
+/// How long a popup takes to come in: a fade and a short rise, eased.
+const ENTER: f64 = 0.12;
+
+/// How far the popup in area `id` has come in, 0 to 1: from the first frame it is drawn
+/// after a frame without it. Whole at once with Animations off.
+pub(crate) fn entrance(ctx: &egui::Context, id: Id) -> f32 {
+    if !crate::kit::moving(ctx) {
+        return 1.0;
+    }
+    let now = ctx.input(|i| i.time);
+    let pass = ctx.cumulative_pass_nr();
+    let key = id.with("entrance");
+    let t0 = match ctx.data(|d| d.get_temp::<(u64, f64)>(key)) {
+        Some((last, t0)) if pass <= last + 1 => t0,
+        _ => now,
+    };
+    ctx.data_mut(|d| d.insert_temp(key, (pass, t0)));
+    let t = (now - t0) / ENTER;
+    if t < 1.0 {
+        ctx.request_repaint();
+    }
+    (1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)) as f32
+}
+
+/// First thing in a popup's area (before its `veil`), `t` its `entrance`: its contents fade in from a third
+/// (never unseen: what a popup holds is there to be read and clicked from its first
+/// frame) and the layer rises the last few points into place. The rise moves the layer's
+/// input with its pictures, so a click lands on what it was aimed at all the way in.
+pub(crate) fn come_in(ui: &mut Ui, t: f32) {
+    let layer = ui.layer_id();
+    if t >= 1.0 {
+        ui.ctx().set_transform_layer(layer, egui::emath::TSTransform::IDENTITY);
+        return;
+    }
+    ui.multiply_opacity(0.35 + 0.65 * t);
+    ui.ctx().set_transform_layer(layer, egui::emath::TSTransform::from_translation(vec2(0.0, (4.0 * (1.0 - t)).round())));
+}
+
+/// The veil a dialog lays over the window, fading in with it (`t` its `entrance`). Painted
+/// first in the dialog's own layer, under the frosted copy of what is behind it.
+pub(crate) fn veil(ui: &Ui, t: f32, pal: &Palette) {
+    let screen = ui.ctx().content_rect();
+    let c = pal.scrim().gamma_multiply(t.clamp(0.0, 1.0));
+    if c.a() > 0 {
+        // The layer rises as it comes in (`come_in`, called first): the veil is set back by
+        // as much, so it stays over the window exactly.
+        let back = ui.ctx().layer_transform_to_global(ui.layer_id()).map_or(Vec2::ZERO, |t| t.translation);
+        let r = screen.translate(-back);
+        ui.painter().with_clip_rect(r).rect_filled(r, CornerRadius::ZERO, c);
+    }
 }
 
 /// A path with the home folder written as ~.
@@ -970,18 +1047,28 @@ fn pill_button(ui: &mut Ui, label: &str, role: Role, enabled: bool, pal: &Palett
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     if ui.is_rect_visible(r) {
         let hot = enabled && (resp.hovered() || resp.has_focus());
+        let down = enabled && resp.is_pointer_button_down_on();
         let rad = crate::kit::radius(h, crate::kit::round());
+        // The main button is the accent, the one that destroys the danger red: each lit
+        // along its top and standing on a contact shadow, a step lighter while pointed at,
+        // a step darker while pressed. The others are the card's quiet capsule.
+        let solid = |c: Color32| if down { c.lerp_to_gamma(Color32::BLACK, 0.12) } else if hot { c.lerp_to_gamma(Color32::WHITE, 0.08) } else { c };
         let (fill, line, ink) = match (role, enabled) {
             (_, false) => (pal.card(), pal.card_line(), pal.text_dim.gamma_multiply(0.55)),
-            (Role::Main, _) => (if hot { pal.text } else { pal.text.gamma_multiply(0.9) }, Color32::TRANSPARENT, if pal.dark { pal.bg } else { pal.panel }),
-            (Role::Danger, _) => (if hot { pal.danger } else { pal.danger.gamma_multiply(0.9) }, Color32::TRANSPARENT, Color32::WHITE),
-            (Role::Other, _) => (if hot { crate::kit::lift(pal) } else { pal.card() }, pal.card_line(), pal.text),
+            (Role::Main, _) => (solid(pal.accent), Color32::TRANSPARENT, pal.on_accent()),
+            (Role::Danger, _) => (solid(pal.danger), Color32::TRANSPARENT, Color32::WHITE),
+            (Role::Other, _) => (if down { crate::kit::lift(pal).lerp_to_gamma(pal.text, 0.04) } else if hot { crate::kit::lift(pal) } else { pal.card() }, pal.card_line(), pal.text),
         };
-        // A high-contrast theme's main button keeps its own pair of colours.
-        let (fill, ink) = if pal.strong && role == Role::Main && enabled { (pal.accent, pal.on_accent()) } else { (fill, ink) };
+        let raised = enabled && role != Role::Other;
+        if raised && !pal.strong && !down {
+            ui.painter().add(egui::epaint::Shadow { offset: [0, 1], blur: 3, spread: 0, color: Color32::from_black_alpha(if pal.dark { 70 } else { 34 }) }.as_shape(r, rad));
+        }
         ui.painter().rect(r, rad, fill, Stroke::new(1.0, line), StrokeKind::Inside);
+        if raised {
+            crate::kit::sheen(ui.painter(), r, rad, pal);
+        }
         if resp.has_focus() {
-            ui.painter().rect_stroke(r.expand(2.0), crate::kit::radius(h + 4.0, crate::kit::round()), Stroke::new(1.5, pal.accent.gamma_multiply(0.8)), StrokeKind::Inside);
+            crate::kit::focus_ring(ui.painter(), r.expand(1.0), crate::kit::radius(h + 2.0, crate::kit::round()), pal);
         }
         let tx = r.center().x - (g.size().x + kw) / 2.0;
         ui.painter().galley_with_override_text_color(pos2(tx, (r.center().y - g.size().y / 2.0).round()), g.clone(), ink);
@@ -1062,9 +1149,11 @@ pub(crate) fn centered_footer<R, F>(ctx: &egui::Context, id: &str, width: f32, p
         .order(egui::Order::Foreground)
         .fixed_pos(pos2((screen.center().x - w / 2.0).round(), screen.top() + top))
         .show(ctx, |ui| {
+            let t = entrance(ui.ctx(), Id::new(id));
+            come_in(ui, t);
+            veil(ui, t, pal);
             crate::frost::behind(ui, DIALOG_RADIUS);
-            dialog_frame(pal)
-                .show(ui, |ui| {
+            float(ui, dialog_frame(pal), DIALOG_RADIUS, theme::Elevation::Dialog, pal, |ui| {
                     ui.set_width(inner);
                     let b = egui::ScrollArea::vertical().id_salt("dialog").max_height(room).auto_shrink([false, true]).show(ui, |ui| {
                         ui.set_width(inner);
@@ -1098,9 +1187,11 @@ pub(crate) fn centered_top<R>(ctx: &egui::Context, id: &str, width: f32, top: f3
         .order(egui::Order::Foreground)
         .fixed_pos(pos2((screen.center().x - w / 2.0).round(), screen.top() + top))
         .show(ctx, |ui| {
+            let t = entrance(ui.ctx(), Id::new(id));
+            come_in(ui, t);
+            veil(ui, t, pal);
             crate::frost::behind(ui, DIALOG_RADIUS);
-            dialog_frame(pal)
-                .show(ui, |ui| {
+            float(ui, dialog_frame(pal), DIALOG_RADIUS, theme::Elevation::Dialog, pal, |ui| {
                     ui.set_width(inner);
                     egui::ScrollArea::vertical().id_salt("dialog").max_height(room).min_scrolled_height(room).auto_shrink([false, true]).show(ui, |ui| {
                         ui.set_width(inner);
@@ -1127,10 +1218,9 @@ pub(crate) fn anchored_from<R>(ctx: &egui::Context, id: &str, pos: Pos2, pivot: 
     // remembers its last size and would cut a longer menu short (see ctxmenu.rs).
     let room = if pivot == Align2::LEFT_BOTTOM { pos.y - screen.top() - 26.0 } else { screen.height() - 16.0 - 10.0 }.max(60.0);
     let r = egui::Area::new(Id::new(id)).order(egui::Order::Foreground).pivot(pivot).fixed_pos(pos2(x, pos.y)).constrain_to(screen.shrink(6.0)).show(ctx, |ui| {
-        crate::frost::behind(ui, 10);
-        popup_frame(pal)
-            .inner_margin(egui::Margin::same(5))
-            .show(ui, |ui| {
+        come_in(ui, entrance(ui.ctx(), Id::new(id)));
+        crate::frost::behind(ui, theme::R_LG);
+        float(ui, popup_frame(pal).inner_margin(egui::Margin::same(5)), theme::R_LG, theme::Elevation::Menu, pal, |ui| {
                 ui.set_width(width - 10.0);
                 egui::ScrollArea::vertical().max_height(room).min_scrolled_height(room).auto_shrink([false, true]).show(ui, add).inner
             })
@@ -1303,11 +1393,11 @@ pub(crate) fn menu_heading(ui: &mut Ui, text: &str, pal: &Palette) {
     ui.painter().text(pos2(r.left() + 10.0, r.bottom() - 4.0), Align2::LEFT_BOTTOM, text, FontId::proportional(11.5), pal.text_dim);
 }
 
-/// Between a menu's groups: a dashed rule, a division inside one thing.
+/// Between a menu's groups: a hairline, inset from the menu's sides as its rows' words are.
 pub(crate) fn menu_sep(ui: &mut Ui, pal: &Palette) {
     ui.add_space(3.0);
     let y = ui.cursor().top().round() + 0.5;
-    crate::kit::dashed_rule(ui.painter(), pos2(ui.min_rect().left() + 8.0, y), pos2(ui.min_rect().right() - 8.0, y), pal);
+    ui.painter().line_segment([pos2(ui.min_rect().left() + 10.0, y), pos2(ui.min_rect().right() - 10.0, y)], Stroke::new(1.0, pal.hairline));
     ui.add_space(4.0);
 }
 
@@ -2245,8 +2335,11 @@ fn palette(app: &mut App, ctx: &egui::Context, st: &mut PaletteState) -> bool {
     let pos = pos2((screen.center().x - w / 2.0).round(), screen.top() + top);
     note_layer(Id::new("palette"));
     let area = egui::Area::new(Id::new("palette")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
-        crate::frost::behind(ui, 10);
-        popup_frame(&pal).show(ui, |ui| {
+        let t = entrance(ui.ctx(), Id::new("palette"));
+        come_in(ui, t);
+        veil(ui, t, &pal);
+        crate::frost::behind(ui, theme::R_LG);
+        float(ui, popup_frame(&pal), theme::R_LG, theme::Elevation::Menu, &pal, |ui| {
             let (_, inner) = ui.allocate_space(vec2(w - 16.0, h - 16.0));
             let top_down = egui::Layout::top_down(egui::Align::Min);
             let mut head = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(top_down));
@@ -3081,15 +3174,10 @@ pub(crate) fn switch(ui: &mut Ui, on: &mut bool, pal: &Palette) -> bool {
 
 /// Switch: a pill whose colour and knob side say it, with no mark on the knob.
 fn toggle(ui: &mut Ui, on: &mut bool, pal: &Palette) -> bool {
-    let (r, resp) = ui.allocate_exact_size(vec2(32.0, 16.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(32.0, 18.0), Sense::click());
     crate::ui::note_control(ui, r, "switch");
     let t = ui.ctx().animate_bool(resp.id, *on);
-    let lerp_c = |a: Color32, b: Color32| Color32::from_rgb(egui::lerp(a.r() as f32..=b.r() as f32, t) as u8, egui::lerp(a.g() as f32..=b.g() as f32, t) as u8, egui::lerp(a.b() as f32..=b.b() as f32, t) as u8);
-    let off_track = Color32::from_rgb(((pal.border.r() as u16 * 2 + pal.text_dim.r() as u16) / 3) as u8, ((pal.border.g() as u16 * 2 + pal.text_dim.g() as u16) / 3) as u8, ((pal.border.b() as u16 * 2 + pal.text_dim.b() as u16) / 3) as u8);
-    ui.painter().rect_filled(r, CornerRadius::same(8), lerp_c(off_track, pal.accent));
-    let x = egui::lerp(r.left() + 8.0..=r.right() - 8.0, t);
-    let c = pos2(x, r.center().y);
-    ui.painter().circle_filled(c, 6.0, lerp_c(pal.bg, Color32::from_rgb(0xe8, 0xf4, 0xfa)));
+    crate::kit::switch_face(ui.painter(), r, t, resp.hovered(), ui.is_enabled(), pal);
     if resp.clicked() {
         *on = !*on;
         return true;
@@ -3623,8 +3711,11 @@ fn options(app: &mut App, ctx: &egui::Context, st: &mut OptState) -> bool {
     let pos = pos2((screen.center().x - w / 2.0).round(), (screen.top() + ((screen.height() - h) / 2.0).clamp(12.0, 70.0)).round());
     note_layer(Id::new("options"));
     let area = egui::Area::new(Id::new("options")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+        let t = entrance(ui.ctx(), Id::new("options"));
+        come_in(ui, t);
+        veil(ui, t, &pal);
         crate::frost::behind(ui, DIALOG_RADIUS);
-        dialog_frame(&pal).show(ui, |ui| {
+        float(ui, dialog_frame(&pal), DIALOG_RADIUS, theme::Elevation::Dialog, &pal, |ui| {
             let (_, inner) = ui.allocate_space(vec2(w - 2.0 * DIALOG_PAD, h - 2.0 * DIALOG_PAD));
             let top_down = egui::Layout::top_down(egui::Align::Min);
             let mut head = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(top_down));
@@ -5019,8 +5110,11 @@ fn themes(app: &mut App, ctx: &egui::Context) -> bool {
     let pos = pos2((screen.center().x - w / 2.0).round(), (screen.top() + ((screen.height() - h) / 2.0).clamp(12.0, 70.0)).round());
     note_layer(Id::new("themes"));
     let area = egui::Area::new(Id::new("themes")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
+        let t = entrance(ui.ctx(), Id::new("themes"));
+        come_in(ui, t);
+        veil(ui, t, &pal);
         crate::frost::behind(ui, DIALOG_RADIUS);
-        dialog_frame(&pal).show(ui, |ui| {
+        float(ui, dialog_frame(&pal), DIALOG_RADIUS, theme::Elevation::Dialog, &pal, |ui| {
             let (_, inner) = ui.allocate_space(vec2(w - 2.0 * DIALOG_PAD, h - 2.0 * DIALOG_PAD));
             let top_down = egui::Layout::top_down(egui::Align::Min);
             // Header: the close button and the filter from the right; the search takes
