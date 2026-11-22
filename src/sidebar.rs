@@ -287,6 +287,14 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
         }
     });
     ui.allocate_rect(hdr, Sense::hover());
+    // Below the header, which sits on the canvas with the title strip, the sidebar is a
+    // card (see "surfaces" in theme.rs). What scrolls in it is cut a few points inside its
+    // top and foot, so a row half scrolled away never pokes past a rounded corner.
+    let card = Rect::from_min_max(pos2(full.left(), hdr.bottom()), full.max);
+    let rad = crate::theme::corner(crate::theme::R_LG);
+    crate::kit::card_surface(ui.painter(), card, rad, pal.sidebar, crate::theme::Elevation::Card, &pal);
+    let outer_clip = ui.clip_rect();
+    ui.set_clip_rect(card.shrink2(vec2(0.0, 3.0)).intersect(outer_clip));
     // A press in the sidebar gives it the keyboard's typing (see `App::handle_input`); a
     // press anywhere else takes it back.
     if ui.input(|i| i.pointer.any_pressed()) {
@@ -299,6 +307,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
     });
     let field_id = Id::new("sidebar filter");
     if want || !filter.is_empty() || ui.memory(|m| m.has_focus(field_id)) {
+        ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.add_space(8.0);
             let w = ui.available_width() - 8.0;
@@ -808,5 +817,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
         }
         ui.add_space(12.0);
     });
+    ui.set_clip_rect(outer_clip);
+    crate::kit::card_edge(ui.painter(), card, rad, 0.0, &pal);
     app.actions.extend(actions);
 }
