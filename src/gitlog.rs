@@ -2066,7 +2066,7 @@ fn graph(ui: &mut Ui, body: Rect, h: &mut History, env: &mut Env) {
             p.add(CubicBezierShape::from_points_stroke([a, pos2(a.x, a.y + k), pos2(b.x, b.y - k), b], false, Color32::TRANSPARENT, s));
         };
         // The pointer's row fades in and out as the list's rows do: one slot for the view.
-        let fade_id = ui.id().with("gitfade");
+        let fade_id = egui::Id::unique("git history hover fade");
         let fade = crate::listing::HoverFade::load(ui.ctx(), fade_id);
         let mut hovered_now = None;
         for i in first..last {

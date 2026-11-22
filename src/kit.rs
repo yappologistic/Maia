@@ -697,24 +697,6 @@ pub fn glyph_choice(ui: &mut Ui, id: Id, items: &[(crate::theme::Glyph, &str, &'
     out
 }
 
-/// A picked row in a list: `lift`, and while `mark` the accent's short bar at its left end
-/// (the panel with the keyboard; another panel's selection, or the way down to a folder,
-/// is lifted alone). `more` lifts it a step further: the keyboard's own row among several.
-pub fn picked(p: &egui::Painter, r: Rect, radius: u8, mark: bool, more: bool, pal: &Palette) {
-    let fill = if more && !pal.strong { lift(pal).lerp_to_gamma(pal.text, if pal.dark { 0.05 } else { 0.04 }) } else { lift(pal) };
-    p.rect_filled(r, crate::theme::corner(radius), fill);
-    if mark && !pal.strong {
-        let h = (r.height() - 14.0).clamp(8.0, 18.0);
-        let bar = if r.width() >= r.height() * 1.6 {
-            Rect::from_center_size(pos2(r.left() + 4.0, r.center().y), vec2(3.0, h))
-        } else {
-            // A tile: the bar lies along its foot.
-            Rect::from_center_size(pos2(r.center().x, r.bottom() - 4.0), vec2(h, 3.0))
-        };
-        p.rect_filled(bar, crate::theme::corner(2), pal.accent);
-    }
-}
-
 /// The keyboard's row when nothing is picked: a hairline round it, in the text's colour,
 /// faint (the accent is kept for what is picked).
 pub fn cursor_ring(p: &egui::Painter, r: Rect, radius: u8, pal: &Palette) {
@@ -854,13 +836,8 @@ pub fn ease_to(ui: &Ui, id: Id, on: bool) -> f32 {
     if moving(ui.ctx()) { ui.ctx().animate_bool_with_time(id, on, 0.12) } else if on { 1.0 } else { 0.0 }
 }
 
-/// A well's fill: the card it is cut into, a step towards the canvas under the card.
-pub fn well_fill(pal: &Palette) -> Color32 {
-    well_fill_on(pal.panel, pal)
-}
-
-/// A well's fill cut into `base` (a panel's card, a popup's): the same step towards the
-/// canvas wherever it is, so a field in a dialog is sunk as far as the toolbar's.
+/// A well's fill: the card it is cut into (a panel's, a popup's), a step towards the
+/// canvas under it, the same step wherever it is, so a field in a dialog is sunk as far as the toolbar's.
 pub fn well_fill_on(base: Color32, pal: &Palette) -> Color32 {
     if pal.strong {
         return pal.bg;
