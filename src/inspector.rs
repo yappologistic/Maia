@@ -1204,7 +1204,8 @@ pub fn inspector(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
     let log = target.as_ref().is_some_and(|e| is_log(&e.name));
     // ---------------------------------------------------------- header
     let hdr = Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + 30.0));
-    ui.painter().line_segment([hdr.left_bottom(), hdr.right_bottom()], Stroke::new(1.0, pal.border));
+    // A hairline under it, level with the list's column header beside the well.
+    ui.painter().line_segment([pos2(hdr.left() + 1.0, hdr.bottom() - 0.5), pos2(hdr.right() - 1.0, hdr.bottom() - 0.5)], Stroke::new(1.0, if pal.strong { pal.border } else { pal.hairline }));
     let mut close = false;
     let mut hui = ui.new_child(UiBuilder::new().max_rect(hdr.shrink2(vec2(8.0, 3.0))).layout(egui::Layout::right_to_left(egui::Align::Center)));
     hui.set_clip_rect(hdr.intersect(ui.clip_rect()));
@@ -1914,7 +1915,8 @@ fn edit_view(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
     let Some(ed) = ins.edit.as_mut() else { return };
     ui.painter().rect_filled(rect, CornerRadius::ZERO, pal.bg);
     let hdr = Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + 30.0));
-    ui.painter().line_segment([hdr.left_bottom(), hdr.right_bottom()], Stroke::new(1.0, pal.border));
+    // A hairline under it, level with the list's column header beside the well.
+    ui.painter().line_segment([pos2(hdr.left() + 1.0, hdr.bottom() - 0.5), pos2(hdr.right() - 1.0, hdr.bottom() - 0.5)], Stroke::new(1.0, if pal.strong { pal.border } else { pal.hairline }));
     let mut hui = ui.new_child(UiBuilder::new().max_rect(hdr.shrink2(vec2(6.0, 3.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
     hui.set_clip_rect(hdr.intersect(ui.clip_rect()));
     hui.spacing_mut().item_spacing.x = 2.0;
@@ -2304,6 +2306,43 @@ pub(crate) fn checkerboard(p: &egui::Painter, r: Rect, pal: &theme::Palette) {
     }
 }
 
+/// A checker behind a picture in `r` (seen through what is transparent in it), drawn only
+/// where `clip` shows it and rounded at `rad` like the picture over it.
+fn rounded_checker(p: &egui::Painter, r: Rect, clip: Rect, rad: CornerRadius, pal: &theme::Palette) {
+    let s = 10.0;
+    let (a, b) = if pal.dark { (Color32::from_gray(48), Color32::from_gray(64)) } else { (Color32::from_gray(225), Color32::from_gray(245)) };
+    p.rect_filled(r, rad, a);
+    let vis = r.intersect(clip);
+    if !vis.is_positive() {
+        return;
+    }
+    let (x0, x1) = (((vis.left() - r.left()) / s).floor() as i32, ((vis.right() - r.left()) / s).ceil() as i32);
+    let (y0, y1) = (((vis.top() - r.top()) / s).floor() as i32, ((vis.bottom() - r.top()) / s).ceil() as i32);
+    if (x1 - x0) * (y1 - y0) > 40_000 {
+        return;
+    }
+    let (nx, ny) = ((r.width() / s).ceil() as i32, (r.height() / s).ceil() as i32);
+    for y in y0..y1 {
+        for x in x0..x1 {
+            if (x + y) % 2 == 0 {
+                let cell = Rect::from_min_size(r.min + vec2(x as f32 * s, y as f32 * s), Vec2::splat(s)).intersect(r);
+                // A cell in one of the picture's corners takes that corner's curve.
+                let k = |on: bool, v: u8| if on { v } else { 0 };
+                let cr = CornerRadius { nw: k(x == 0 && y == 0, rad.nw), ne: k(x == nx - 1 && y == 0, rad.ne), sw: k(x == 0 && y == ny - 1, rad.sw), se: k(x == nx - 1 && y == ny - 1, rad.se) };
+                p.rect_filled(cell, cr, b);
+            }
+        }
+    }
+}
+
+/// A small chip floating over a preview (the zoom, the picture's colours): a translucent
+/// face from the corner scale with a hairline rim.
+fn chip_face(p: &egui::Painter, r: Rect, pal: &theme::Palette) {
+    let rad = theme::corner(theme::R_SM);
+    p.rect_filled(r, rad, pal.raised.gamma_multiply(0.92));
+    p.rect_stroke(r, rad, Stroke::new(1.0, if pal.strong { pal.border } else { pal.hairline }), StrokeKind::Inside);
+}
+
 fn image_view(ui: &mut Ui, body: Rect, e: &Entry, ins: &mut Inspector, env: &mut Env) {
     let pal = *env.pal;
     let ppp = ui.ctx().pixels_per_point();
@@ -2366,8 +2405,17 @@ fn image_view(ui: &mut Ui, body: Rect, e: &Entry, ins: &mut Inspector, env: &mut
     if let Some((glow, _)) = &colours {
         crate::colours::paint_glow(&painter, img_rect, glow, crate::colours::glow_strength(pal.panel));
     }
-    checkerboard(&painter, img_rect.intersect(clip), &pal);
-    painter.image(tex, img_rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+    // The picture framed as a small card: a soft shadow under it, a checker behind what is
+    // transparent in it, rounded corners and a hairline rim over its edge.
+    let rad = theme::corner(theme::R_SM);
+    if !pal.strong {
+        for sh in [egui::epaint::Shadow { offset: [0, 6], blur: 22, spread: 0, color: Color32::from_black_alpha(if pal.dark { 90 } else { 30 }) }, egui::epaint::Shadow { offset: [0, 1], blur: 3, spread: 0, color: Color32::from_black_alpha(if pal.dark { 80 } else { 26 }) }] {
+            painter.add(sh.as_shape(img_rect, rad));
+        }
+    }
+    rounded_checker(&painter, img_rect, clip, rad, &pal);
+    painter.add(egui::epaint::RectShape::filled(img_rect, rad, Color32::WHITE).with_texture(tex, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0))));
+    painter.rect_stroke(img_rect, rad, Stroke::new(1.0, if pal.strong { pal.border } else { pal.hairline }), StrokeKind::Inside);
     // Pixel grid at high magnification.
     let px = scale * ppp;
     if ins.pixel_grid && px >= 12.0 {
@@ -2409,10 +2457,10 @@ fn image_view(ui: &mut Ui, body: Rect, e: &Entry, ins: &mut Inspector, env: &mut
         Some(c) => c.hint(dims),
         None => format!("{} × {}  ·  {:.0}%", dims[0], dims[1], pct),
     };
-    let g = ui.painter().layout_no_wrap(label, FontId::proportional(11.5), pal.text_dim);
-    let r = Rect::from_min_size(pos2(body.right() - g.size().x - 18.0, body.bottom() - 24.0), g.size() + vec2(10.0, 6.0));
-    ui.painter().rect_filled(r, CornerRadius::same(4), pal.raised.gamma_multiply(0.9));
-    ui.painter().galley(r.min + vec2(5.0, 3.0), g, pal.text_dim);
+    let g = crate::listing::figures(ui, &label, FontId::proportional(11.5), 400.0, pal.text_dim, crate::kit::words_of(pal.text_dim));
+    let r = Rect::from_min_size(pos2(body.right() - g.size().x - 22.0, body.bottom() - 28.0), g.size() + vec2(14.0, 8.0));
+    chip_face(ui.painter(), r, &pal);
+    ui.painter().galley(r.min + vec2(7.0, 4.0), g, pal.text_dim);
     // Its colours in a pill of their own on the left, the same height: one a click copies.
     if let Some((_, palette)) = colours.filter(|(_, p)| !p.is_empty() && ins.crop.is_none()) {
         let d = (r.height() - 8.0).max(8.0);
@@ -2420,14 +2468,15 @@ fn image_view(ui: &mut Ui, body: Rect, e: &Entry, ins: &mut Inspector, env: &mut
         let n = palette.len();
         let pill = Rect::from_min_size(pos2(body.left() + 8.0, r.top()), vec2(n as f32 * (d + gap) - gap + 8.0, r.height()));
         if pill.right() + 8.0 < r.left() {
-            ui.painter().rect_filled(pill, CornerRadius::same(4), pal.raised.gamma_multiply(0.9));
+            chip_face(ui.painter(), pill, &pal);
             for (i, (c, share)) in palette.iter().enumerate() {
                 let sr = Rect::from_min_size(pos2(pill.left() + 4.0 + i as f32 * (d + gap), pill.center().y - d / 2.0), vec2(d, d));
                 let resp = ui.interact(sr.expand(1.5), Id::new(("swatch", env.panel_id, i)), Sense::click());
                 crate::ui::note_control(ui, sr, "picture colour");
                 let hovered = resp.hovered();
-                ui.painter().rect_filled(if hovered { sr.expand(1.5) } else { sr }, CornerRadius::same(3), *c);
-                ui.painter().rect_stroke(sr, CornerRadius::same(3), Stroke::new(1.0, pal.border.gamma_multiply(0.6)), StrokeKind::Inside);
+                let sr = if hovered { sr.expand(1.5) } else { sr };
+                ui.painter().rect_filled(sr, theme::corner(theme::R_XS), *c);
+                ui.painter().rect_stroke(sr, theme::corner(theme::R_XS), Stroke::new(1.0, if pal.strong { pal.border } else { pal.hairline }), StrokeKind::Inside);
                 let hex = crate::colours::hex(*c);
                 let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(format!("{hex} · {}% of the picture · click to copy", (share * 100.0).round().max(1.0)));
                 if resp.clicked() {
@@ -2992,6 +3041,14 @@ pub(crate) fn text_view_ex(ui: &mut Ui, body: Rect, lines: &[String], truncated:
         if let Some(h) = &blame_hit {
             crate::ui::note_control(ui, col, "blame gutter");
             let _ = h;
+        }
+        // The line numbers stand in a quiet gutter of their own, a hairline between them
+        // and the text.
+        if numbers && !pal.strong {
+            let gx = (r.left() + gutter - 5.0).round();
+            let (top, bot) = (r.top() + vp.min.y, r.top() + vp.max.y);
+            p.rect_filled(Rect::from_min_max(pos2(bx + blame_w, top), pos2(gx, bot)), CornerRadius::ZERO, pal.text.gamma_multiply(if pal.dark { 0.018 } else { 0.025 }));
+            p.line_segment([pos2(gx + 0.5, top), pos2(gx + 0.5, bot)], Stroke::new(1.0, pal.hairline));
         }
         let mut hovered_line = None;
         for i in first..last {
