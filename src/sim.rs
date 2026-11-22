@@ -11263,7 +11263,10 @@ mod journeys {
             shot(&mut s, "git-graph");
             click_in_inspector(&mut s, "Lay out the panels", "click");
             wait_until(&mut s, "files", 10, |s| history(s).is_some_and(|h| h.3.is_some()));
-            wait_until(&mut s, "pictures", 10, |s| probe(s).pictures >= 3 || probe(s).failed > 0);
+            // A narrow window has room for the first picture only: the logo's before and
+            // after are below the fold, under the cards' gutters.
+            let pictures = if w < 900.0 { 1 } else { 3 };
+            wait_until(&mut s, "pictures", 10, |s| probe(s).pictures >= pictures || probe(s).failed > 0);
             shot(&mut s, "git-commit");
             s.cmd(ToggleInspector);
             s.settle();

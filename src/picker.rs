@@ -693,8 +693,8 @@ pub fn bar(app: &mut App, ui: &mut Ui) {
     let pal = app.pal;
     let fs = app.cfg.font_size;
     let rect = ui.max_rect();
-    ui.painter().rect_filled(rect, CornerRadius::ZERO, pal.chrome);
-    ui.painter().line_segment([rect.left_top(), rect.right_top()], Stroke::new(1.0f32, pal.border));
+    // A card along the window's foot, under the sidebar's and the panels'.
+    crate::kit::card(ui.painter(), rect, crate::theme::corner(crate::theme::R_LG), pal.chrome, crate::theme::Elevation::Card, &pal);
     let inner = rect.shrink2(vec2(10.0, 0.0));
     let cy = inner.center().y;
     let h = (fs * 1.35 + 8.0 * app.cfg.spacing).round().min(rect.height() - 8.0);

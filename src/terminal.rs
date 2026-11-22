@@ -21,7 +21,6 @@ use crate::theme::{Glyph, Palette, paint_glyph};
 use crate::vt::{self, Cell, Term};
 
 /// The gap above the pane (as between split panels) and its header's height.
-const GAP: f32 = 3.0;
 const HEADER_H: f32 = 30.0;
 const MIN_H: f32 = 90.0;
 const DEFAULT_H: f32 = 240.0;
@@ -496,8 +495,9 @@ pub fn room(app: &App, full: Rect) -> f32 {
     if app.terminal.shells.is_empty() {
         return 0.0;
     }
-    let most = (full.height() - crate::panel::MIN_PANEL_H - GAP).max(MIN_H);
-    app.terminal.height.clamp(MIN_H, most).min(full.height() * 0.8) + GAP
+    let gap = crate::kit::gutter();
+    let most = (full.height() - crate::panel::MIN_PANEL_H - gap).max(MIN_H);
+    app.terminal.height.clamp(MIN_H, most).min(full.height() * 0.8) + gap
 }
 
 /// Follow the folder the active panel shows: with the shell at its prompt, it goes
@@ -747,7 +747,9 @@ fn color(code: u16, ansi: &[Color32; 16], default: Color32) -> Color32 {
 pub fn pane(app: &mut App, ui: &mut Ui, full: Rect, above: f32) {
     follow(app);
     reap(app);
-    let rect = Rect::from_min_max(pos2(full.left(), above + GAP), full.max);
+    // A card of its own under the panels', a gutter below them.
+    let gap = crate::kit::gutter();
+    let rect = Rect::from_min_max(pos2(full.left(), above + gap), full.max);
     let pal = app.pal;
     let (animations, round) = (app.cfg.animations, app.cfg.round_corners);
     let modal = !matches!(app.popup, crate::popups::Popup::None);
@@ -778,11 +780,11 @@ pub fn pane(app: &mut App, ui: &mut Ui, full: Rect, above: f32) {
     });
     // The divider.
     if open {
-        let handle = Rect::from_center_size(pos2(rect.center().x, rect.top() - GAP / 2.0), vec2(rect.width(), 6.0));
+        let handle = Rect::from_center_size(pos2(rect.center().x, rect.top() - gap / 2.0), vec2(rect.width(), 6.0));
         let resp = ui.interact(handle, Id::new("terminal divider"), Sense::drag());
         if resp.hovered() || resp.dragged() {
             ctx.set_cursor_icon(egui::CursorIcon::ResizeVertical);
-            ui.painter().rect_filled(handle.shrink(2.0), CornerRadius::same(1), pal.accent.gamma_multiply(0.6));
+            crate::ui::divider_grip(ui.painter(), handle, false, resp.dragged(), &pal);
         }
         if let Some(p) = resp.interact_pointer_pos().filter(|_| resp.dragged()) {
             pane.height = full.bottom() - p.y;
@@ -791,16 +793,20 @@ pub fn pane(app: &mut App, ui: &mut Ui, full: Rect, above: f32) {
             pane.height = DEFAULT_H;
         }
     }
-    let rad = if round { 8 } else { 0 };
+    let rad = if round { crate::theme::R_LG } else { 0 };
+    // The card's rim lights up with the accent while the shell has the keyboard, as the
+    // panel with it does. Its contents keep a pad inside the edge, so the rim goes on now.
+    let p = ui.painter().clone();
+    crate::kit::card_surface(&p, rect, CornerRadius::same(rad), pal.panel, crate::theme::Elevation::Card, &pal);
     let p = ui.painter_at(rect);
-    p.rect_filled(rect, CornerRadius::same(rad), pal.panel);
     let body = Rect::from_min_max(pos2(rect.left(), rect.top() + HEADER_H), rect.max);
     p.rect_filled(body, CornerRadius { nw: 0, ne: 0, sw: rad, se: rad }, pal.bg);
-    p.line_segment([body.left_top(), body.right_top()], Stroke::new(1.0_f32, pal.border));
+    p.line_segment([body.left_top(), body.right_top()], Stroke::new(1.0_f32, pal.hairline));
+    crate::kit::card_edge(&p, rect, CornerRadius::same(rad), if focused { 1.0 } else { 0.0 }, &pal);
     let font = FontId::monospace(app.cfg.inspector_font_size);
     let (cw, row_h) = ui.fonts_mut(|f| (f.glyph_width(&font, 'M'), f.row_height(&font).round()));
     // The size the pane is going to (not the one it eases through): the shells are told once.
-    let goal = room(app, full) - GAP - HEADER_H - 2.0 * PAD;
+    let goal = room(app, full) - gap - HEADER_H - 2.0 * PAD;
     let cols = ((full.width() - 2.0 * PAD) / cw).floor().max(2.0) as usize;
     let rows = (goal / row_h).floor().max(1.0) as usize;
     let pane = &mut app.terminal;

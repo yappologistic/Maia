@@ -19,6 +19,12 @@ pub const TAB_H: f32 = 30.0;
 const PIN_TAB_W: f32 = 36.0;
 pub const HEADER_H: f32 = 34.0;
 pub const FOOTER_H: f32 = 30.0;
+/// Air between a panel card's top edge and its first row (the toolbar, or its own tab
+/// strip), so its controls sit as far in from the top as from the sides. None in a narrow
+/// window (a small gutter), where every point is the list's.
+fn card_top() -> f32 {
+    if crate::kit::gutter() >= 6.0 { 3.0 } else { 0.0 }
+}
 
 /// A text field drawn without a frame of its own, keeping the padding it had when that
 /// was a switch: 4 by 2.
@@ -415,14 +421,24 @@ impl App {
         self.drop_right = matches!(self.drag, Some(Drag::Files { right: true, .. }));
         let ctx = ctx.clone();
         let pal = self.pal;
+        // The window is the canvas, and everything below the title strip is a card on it a
+        // gutter apart (see "surfaces" in theme.rs): each region's frame keeps that much
+        // canvas on its outer sides and half of it where it meets a neighbour, so the
+        // sidebar's resize edge falls in the middle of the gutter. The title strip, the
+        // panels' cards and the sidebar's card all start at TITLE_H.
+        let g = crate::theme::gutter(ctx.content_rect().width());
+        crate::kit::set_gutter(g);
+        let (gi, half) = (g as i8, (g / 2.0) as i8);
+        let canvas = |left: i8, bottom: i8| egui::Frame::NONE.fill(pal.canvas).inner_margin(egui::Margin { left, right: gi, top: 0, bottom });
+        let left = if self.sidebar { half } else { gi };
         // ------------------------------------------------ the picker's bar (Open and Save)
         // The window's whole width, under the sidebar too: a dialog's row of answers.
         if self.picker.is_some() {
             ctx.root_ui(|root| {
                 egui::Panel::bottom("picker")
-                    .exact_size(crate::picker::height(self))
+                    .exact_size(crate::picker::height(self) + g)
                     .show_separator_line(false)
-                    .frame(egui::Frame::NONE.fill(pal.chrome))
+                    .frame(canvas(gi, gi))
                     .show(root, |ui| crate::picker::bar(self, ui))
             });
         }
@@ -437,7 +453,7 @@ impl App {
                     .show_separator_line(false)
                     .default_size(self.sidebar_width)
                     .size_range(150.0..=most)
-                    .frame(egui::Frame::NONE.fill(pal.sidebar))
+                    .frame(egui::Frame::NONE.fill(pal.canvas).inner_margin(egui::Margin { left: gi, right: half, top: 0, bottom: gi }))
                     .show(root, |ui| crate::sidebar::sidebar(self, ui))
             });
             self.sidebar_width = r.response.rect.width();
@@ -447,7 +463,7 @@ impl App {
             egui::Panel::top("title")
                 .exact_size(TITLE_H)
                 .show_separator_line(false)
-                .frame(egui::Frame::NONE.fill(pal.panel))
+                .frame(egui::Frame::NONE.fill(pal.canvas))
                 .show(root, |ui| self.title_bar(ui))
         });
         // ------------------------------------------------ shelf (only while it holds something)
@@ -455,21 +471,23 @@ impl App {
         let open = if self.cfg.animations { ctx.animate_bool_with_time(Id::new("shelf open"), full, 0.13) } else if full { 1.0 } else { 0.0 };
         self.shelf.shown_h = (crate::shelf::height(self) * open).round();
         if self.shelf.shown_h >= 1.0 {
+            // Its gutter grows in with it: closed, the panels reach the window's foot.
+            let gb = (g * open).round() as i8;
             ctx.root_ui(|root| {
                 egui::Panel::bottom("shelf")
-                    .exact_size(self.shelf.shown_h)
+                    .exact_size(self.shelf.shown_h + gb as f32)
                     .show_separator_line(false)
-                    .frame(egui::Frame::NONE.fill(pal.chrome))
+                    .frame(canvas(left, gb))
                     .show(root, |ui| crate::shelf::strip(self, ui))
             });
         }
         // ------------------------------------------------ panels
-        ctx.root_ui(|root| egui::CentralPanel::default().frame(egui::Frame::NONE.fill(pal.bg)).show(root, |ui| {
+        ctx.root_ui(|root| egui::CentralPanel::default().frame(canvas(left, gi)).show(root, |ui| {
             let full = ui.max_rect();
             let mut leaves = vec![];
             let mut dividers = vec![];
             let panels = Rect::from_min_max(full.min, pos2(full.right(), full.bottom() - crate::terminal::room(self, full)));
-            self.tree.layout(panels, 3.0, &mut leaves, &mut dividers, &mut vec![]);
+            self.tree.layout(panels, g, &mut leaves, &mut dividers, &mut vec![]);
             // Panels still too small to lay out while they grow in: background only.
             let mut growing = std::collections::HashSet::new();
             // Ease each panel's rectangle toward its layout slot. A new panel grows out of
@@ -527,7 +545,9 @@ impl App {
             }
             for (id, rect) in leaves.clone() {
                 if growing.contains(&id) {
-                    ui.painter().rect_filled(rect, CornerRadius::same(if self.cfg.round_corners { 8 } else { 0 }), pal.panel);
+                    let rad = crate::theme::corner(crate::theme::R_LG);
+                    crate::kit::card_surface(ui.painter(), rect, rad, pal.panel, crate::theme::Elevation::Card, &pal);
+                    crate::kit::card_edge(ui.painter(), rect, rad, 0.0, &pal);
                     continue;
                 }
                 let tabs_in_title = if in_title.is_empty() { id == self.tree.first_leaf() } else { in_title.contains(&id) };
@@ -538,7 +558,7 @@ impl App {
                 let resp = ui.interact(handle, Id::new(("divider", &path)), Sense::click_and_drag());
                 if resp.hovered() || resp.dragged() {
                     ctx.set_cursor_icon(if vertical { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical });
-                    ui.painter().rect_filled(handle.shrink(2.0), CornerRadius::same(1), pal.accent.gamma_multiply(0.6));
+                    divider_grip(ui.painter(), handle, vertical, resp.dragged(), &pal);
                 }
                 if let Some(node) = self.tree.at_path(&path) {
                     if let crate::panel::Node::Split { ratio, .. } = node {
@@ -602,8 +622,7 @@ impl App {
             let m = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!m));
         }
-        // The tabs sit on the toolbar's own surface; a hairline is all that parts them.
-        ui.painter().line_segment([pos2(rect.left(), rect.bottom() - 0.5), pos2(rect.right(), rect.bottom() - 0.5)], Stroke::new(1.0, pal.border));
+        // The strip is the canvas itself: the panels' cards under it are what parts them.
         let mut ui = ui.new_child(UiBuilder::new().max_rect(rect.shrink2(vec2(6.0, 0.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
         // Menu and sidebar toggle live in the sidebar header while it is shown.
         if !self.sidebar {
@@ -651,8 +670,9 @@ impl App {
                 continue;
             }
             if i > 0 {
-                // A faint seam above the divider between the panels.
-                ui.painter().line_segment([pos2(pr.left() - 1.5, rect.top() + 8.0), pos2(pr.left() - 1.5, rect.bottom() - 6.0)], Stroke::new(1.0, pal.border));
+                // A faint seam above the gutter between the panels' cards.
+                let x = (pr.left() - crate::kit::gutter() / 2.0).round() + 0.5;
+                ui.painter().line_segment([pos2(x, rect.top() + 10.0), pos2(x, rect.bottom() - 8.0)], Stroke::new(1.0, pal.hairline));
             }
             let sr = Rect::from_min_max(pos2(x0, rect.top()), pos2(x1, rect.bottom()));
             let mut sui = ui.new_child(UiBuilder::new().max_rect(sr).layout(egui::Layout::left_to_right(egui::Align::Center)));
@@ -961,17 +981,20 @@ impl App {
                 }
             }
         }
-        let rad = if self.cfg.round_corners { 8 } else { 0 };
-        // Under the title bar's tabs the panel runs on from it: square top corners.
-        let top = if tabs_in_title { 0 } else { rad };
-        let corners = CornerRadius { nw: top, ne: top, sw: rad, se: rad };
-        ui.painter().rect_filled(rect, corners, pal.panel);
-        let mut y = rect.top();
+        // The panel is a card on the canvas. With more than one, the one with the keyboard
+        // has a brighter rim tinted with the accent and a faint halo, easing over as the
+        // keyboard moves; the others are calmer (and dimmed below, as Options says).
+        let corners = crate::theme::corner(crate::theme::R_LG);
+        let lit = if is_active && self.panels.len() > 1 { 1.0 } else { 0.0 };
+        let lit = if self.cfg.animations { ui.ctx().animate_value_with_time(Id::unique(("panel lit", id)), lit, 0.15) } else { lit };
+        crate::kit::glow(ui.painter(), rect, corners, lit, &pal);
+        crate::kit::card_surface(ui.painter(), rect, corners, pal.panel, crate::theme::Elevation::Card, &pal);
+        let mut y = rect.top() + card_top();
         // A split squeezed shorter than its tab strip shows none: the strip would be
         // drawn over the panel below it.
-        if !tabs_in_title && rect.height() >= TAB_H {
+        if !tabs_in_title && rect.height() >= card_top() + TAB_H {
             let r = Rect::from_min_max(pos2(rect.left(), y), pos2(rect.right(), y + TAB_H));
-            ui.painter().line_segment([pos2(r.left(), r.bottom() - 0.5), pos2(r.right(), r.bottom() - 0.5)], Stroke::new(1.0, pal.border));
+            ui.painter().line_segment([pos2(r.left(), r.bottom() - 0.5), pos2(r.right(), r.bottom() - 0.5)], Stroke::new(1.0, pal.hairline));
             let mut child = ui.new_child(UiBuilder::new().max_rect(r.shrink2(vec2(4.0, 0.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
             self.tab_strip(&mut child, id, r.width() - 8.0);
             y += TAB_H;
@@ -988,7 +1011,7 @@ impl App {
         }
         let footer = Rect::from_min_max(pos2(rect.left(), rect.bottom() - if show_footer { FOOTER_H } else { 0.0 }), rect.max);
         let body = Rect::from_min_max(pos2(rect.left(), y), pos2(rect.right(), footer.top()));
-        ui.painter().line_segment([body.left_top(), body.right_top()], Stroke::new(1.0, pal.border));
+        ui.painter().line_segment([body.left_top(), body.right_top()], Stroke::new(1.0, pal.hairline));
         // Inspector split.
         // The inspector slides open and closed: its share of the body animates.
         let insp_t = {
@@ -1149,17 +1172,25 @@ impl App {
                 // Divider
                 let handle = if right { Rect::from_center_size(pos2(ir.left() - 1.0, ir.center().y), vec2(6.0, ir.height())) } else { Rect::from_center_size(pos2(ir.center().x, ir.top() - 1.0), vec2(ir.width(), 6.0)) };
                 let resp = ui.interact(handle, Id::new(("insp_div", id)), Sense::drag());
-                ui.painter().line_segment(if right { [ir.left_top(), ir.left_bottom()] } else { [ir.left_top(), ir.right_top()] }, Stroke::new(1.0, pal.border));
                 if resp.hovered() || resp.dragged() {
                     ui.ctx().set_cursor_icon(if right { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical });
+                    divider_grip(ui.painter(), handle, right, resp.dragged(), &pal);
                 }
                 if resp.dragged() {
                     if let Some(pp) = resp.interact_pointer_pos() {
                         panel.inspector_ratio = if right { (body.right() - pp.x) / body.width() } else { (body.bottom() - pp.y) / body.height() }.clamp(0.15, 0.85);
                     }
                 }
-                panel.inspector_rect = Some(ir);
-                crate::inspector::inspector(ui, ir, panel, &mut env);
+                // The preview is a well inside the card: a flat card of its own, in from the
+                // panel's edges, the divider in the gap beside it. Views that paint their
+                // own square background have its corners taken back before its rim goes on.
+                let well = inspector_well(ir, right);
+                let wr = crate::theme::corner(crate::theme::R_MD);
+                crate::kit::card_surface(ui.painter(), well, wr, pal.bg, crate::theme::Elevation::Flat, &pal);
+                panel.inspector_rect = Some(well);
+                crate::inspector::inspector(ui, well, panel, &mut env);
+                crate::kit::mask_corners(ui.painter(), well, wr, pal.panel);
+                crate::kit::card_edge(ui.painter(), well, wr, 0.0, &pal);
             }
         }
         if show_footer {
@@ -1171,6 +1202,8 @@ impl App {
             let c = pal.panel;
             ui.painter().rect_filled(rect, corners, Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a));
         }
+        // The rim last, over the rows and stripes that run to the card's sides.
+        crate::kit::card_edge(ui.painter(), rect, corners, lit, &pal);
     }
 
     fn header_ui(&mut self, ui: &mut Ui, id: u64, rect: Rect) {
@@ -1627,7 +1660,7 @@ impl App {
     /// and between them only what is going on: jobs, the git branch, a walk's timing.
     fn footer_ui(&mut self, ui: &mut Ui, id: u64, rect: Rect) {
         let pal = self.pal;
-        ui.painter().line_segment([rect.left_top(), rect.right_top()], Stroke::new(1.0, pal.border));
+        ui.painter().line_segment([rect.left_top(), rect.right_top()], Stroke::new(1.0, pal.hairline));
         // The GitHub page has no files to filter or count: only when its answers are from.
         if self.panels.get(&id).is_some_and(|p| tab::is_github(&p.tab().path)) {
             let s = self.github.status_line();
@@ -2207,6 +2240,31 @@ impl App {
 
 /// Where a job card's text begins, inside its row and under it.
 const JOB_TEXT_X: f32 = 12.0;
+
+/// The inspector's well inside the part of a panel's body `ir` gives it (`right`: beside
+/// the list, else under it): in from the card's outer edges by the window's gutter (by
+/// two points in a narrow window, where the preview needs the room), and two points from
+/// the divider's side, where the gap beside the list already parts them.
+fn inspector_well(ir: Rect, right: bool) -> Rect {
+    let m = if crate::kit::gutter() >= 6.0 { crate::kit::gutter() } else { 2.0 };
+    if right {
+        Rect::from_min_max(pos2(ir.left() + 2.0, ir.top() + m), pos2(ir.right() - m, ir.bottom() - m))
+    } else {
+        Rect::from_min_max(pos2(ir.left() + m, ir.top() + 2.0), pos2(ir.right() - m, ir.bottom() - m))
+    }
+}
+
+/// A divider's grip while it is pointed at or dragged: a short rounded line in the middle
+/// of the gutter `handle` covers, along it (`vertical`: a divider between side-by-side
+/// cards). Nothing at rest: the gutter itself is the divider.
+pub fn divider_grip(p: &egui::Painter, handle: Rect, vertical: bool, dragged: bool, pal: &Palette) {
+    let c = handle.center();
+    let len = if vertical { handle.height() } else { handle.width() };
+    let l = (len - 16.0).clamp(0.0, 64.0);
+    let r = if vertical { Rect::from_center_size(c, vec2(2.0, l)) } else { Rect::from_center_size(c, vec2(l, 2.0)) };
+    let col = if pal.strong { pal.accent } else { pal.accent.gamma_multiply(if dragged { 0.85 } else { 0.55 }) };
+    p.rect_filled(r, CornerRadius::same(1), col);
+}
 
 fn p_filter_active(t: &tab::Tab) -> bool {
     !t.filter.is_empty() || t.flatten || t.git_only.is_some()

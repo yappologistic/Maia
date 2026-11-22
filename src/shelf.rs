@@ -172,9 +172,9 @@ pub fn strip(app: &mut App, ui: &mut Ui) {
     // Laid out at its full height while it slides in or out, and cut to what shows.
     let shown = ui.max_rect();
     let rect = Rect::from_min_size(shown.min, vec2(shown.width(), height(app)));
+    // A card on the canvas under the panels', as much of it as has slid in.
+    crate::kit::card(ui.painter(), shown, crate::theme::corner(crate::theme::R_LG), pal.chrome, crate::theme::Elevation::Card, &pal);
     ui.set_clip_rect(shown.intersect(ui.clip_rect()));
-    ui.painter().rect_filled(shown, CornerRadius::ZERO, pal.chrome);
-    ui.painter().line_segment([rect.left_top(), rect.right_top()], Stroke::new(1.0f32, pal.border));
     let fs = app.cfg.font_size;
     let pointer = ui.ctx().pointer_hover_pos();
     let released = ui.input(|i| i.pointer.any_released());
