@@ -607,22 +607,25 @@ pub fn listing(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
     // Empty states (in the Columns view, in the tab's own column).
     let rect = er;
     if t.view.is_empty() && !t.is_loading() {
-        let msg = if let Some(e) = &t.error {
-            format!("Can't open this folder: {}", fsx::plain_error(e))
+        let km = env.keymap;
+        let key = |c: Cmd| km.label(c).unwrap_or_default();
+        // What kind of empty: the words, a hint at the way on (keys drawn as keycaps), and
+        // a glyph for it at a glance.
+        let (msg, hint): (String, Vec<(String, &str)>) = if let Some(e) = &t.error {
+            ("Can't open this folder".into(), vec![(String::new(), fsx::plain_error(e))])
         } else if !t.filter.trim().is_empty() && !t.content.on {
-            format!("Nothing matches “{}”", t.filter.trim())
+            (format!("Nothing matches “{}”", t.filter.trim()), vec![("Esc".into(), "clears the filter")])
         } else if !t.filter.is_empty() || !t.settings.only_types.is_empty() || !t.settings.show_files || !t.settings.show_folders {
-            "No matches".into()
+            ("No matches".into(), if t.settings.only_types.is_empty() { vec![] } else { vec![(key(Cmd::TypesFilter), "chooses the types shown")] })
         } else if t.hidden_count > 0 {
-            format!("{} hidden item{}", t.hidden_count, if t.hidden_count == 1 { "" } else { "s" })
+            (format!("{} hidden item{}", t.hidden_count, if t.hidden_count == 1 { "" } else { "s" }), vec![(key(Cmd::ToggleHidden), "shows them")])
         } else if t.smart.is_some() {
-            "No files match".into()
+            ("No files match".into(), vec![])
+        } else if tab::is_place(&t.path) || t.archive.is_some() {
+            ("This folder is empty".into(), vec![])
         } else {
-            "This folder is empty".into()
+            ("This folder is empty".into(), vec![(key(Cmd::Paste), "paste here"), (key(Cmd::NewFolder), "new folder")])
         };
-        // Cut to the panel: a long error or filter ran past a narrow one.
-        let g = elided(&ui, &msg, FontId::proportional(env.cfg.font_size), (rect.width() - 24.0).max(40.0), env.pal.text_dim);
-        // What kind of empty, at a glance, above the words (when there is room for it).
         let glyph = if t.error.is_some() {
             theme::Glyph::Lock
         } else if !t.filter.is_empty() || t.smart.is_some() || !t.settings.only_types.is_empty() {
@@ -632,14 +635,7 @@ pub fn listing(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
         } else {
             theme::Glyph::Folder
         };
-        let side = (env.cfg.font_size * 2.6).round();
-        let tall = rect.height() > side * 3.0 + g.size().y;
-        let top = rect.center().y - g.size().y / 2.0 + if tall { side * 0.6 } else { 0.0 };
-        if tall {
-            let gr = Rect::from_center_size(pos2(rect.center().x, top - side * 0.75), Vec2::splat(side));
-            theme::paint_glyph_large(ui.painter(), gr, glyph, env.pal.text_dim.gamma_multiply(0.55));
-        }
-        ui.painter().galley(pos2(rect.center().x - g.size().x / 2.0, top), g, env.pal.text_dim);
+        empty_state(&ui, rect, glyph, &msg, &hint, env);
     } else if t.view.is_empty() && (t.flatten || t.content.busy()) {
         ui.painter().text(rect.center(), Align2::CENTER_CENTER, if t.content.busy() || t.smart.is_some() { "Searching…" } else { "Indexing…" }, FontId::proportional(env.cfg.font_size), env.pal.text_dim);
     }
@@ -671,6 +667,107 @@ pub fn listing(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
     let hovering_files = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
     if hovering_files && hover {
         ui.painter().rect_stroke(rect.shrink(2.0), CornerRadius::same(6), Stroke::new(2.0, env.pal.accent), StrokeKind::Inside);
+    }
+}
+
+/// An empty view's centre piece over `rect`: `glyph` in a soft round well, `title`, and a
+/// dim hint of what to do next (`hint`: keys, drawn as keycaps, each with its words; a key
+/// left empty is words alone), over a faint grid of dots that fades out towards the
+/// edges. The dots are one mesh of at most a few hundred specks, and none on a
+/// high-contrast theme; a short or narrow view drops the well, then the hint.
+fn empty_state(ui: &Ui, rect: Rect, glyph: theme::Glyph, title: &str, hint: &[(String, &str)], env: &Env) {
+    let pal = env.pal;
+    let fs = env.cfg.font_size;
+    let p = ui.painter();
+    let c = rect.center();
+    if !pal.strong && rect.width() > 120.0 && rect.height() > 120.0 {
+        let step = (fs * 1.6).round().max(14.0);
+        let reach = (rect.width().min(rect.height()) * 0.5).min(340.0);
+        let (nx, ny) = (((reach / step) as i32).min(14), ((reach / step) as i32).min(14));
+        let dot = pal.text.gamma_multiply(if pal.dark { 0.2 } else { 0.24 });
+        let mut m = egui::Mesh::default();
+        let ppp = ui.ctx().pixels_per_point();
+        let snap = |v: f32| (v * ppp).round() / ppp;
+        for j in -ny..=ny {
+            for i in -nx..=nx {
+                let at = pos2(snap(c.x + i as f32 * step), snap(c.y + j as f32 * step));
+                let d = (at - c).length() / reach;
+                if d >= 1.0 {
+                    continue;
+                }
+                // Fades out to the edge, and stays clear of the centre piece.
+                let k = (1.0 - d).powi(2) * ((d - 0.18) / 0.22).clamp(0.0, 1.0);
+                if k <= 0.02 {
+                    continue;
+                }
+                m.add_colored_rect(Rect::from_center_size(at, Vec2::splat(2.0)), dot.gamma_multiply(k));
+            }
+        }
+        p.add(egui::Shape::mesh(m));
+    }
+    let title_font = FontId::proportional(fs + 1.0);
+    let hint_font = FontId::proportional(fs - 1.0);
+    let cap_font = FontId::proportional((fs - 2.5).max(9.0));
+    let g = elided(ui, title, title_font, (rect.width() - 24.0).max(40.0), pal.text.lerp_to_gamma(pal.text_dim, 0.35));
+    // The hint as parts laid out in a line: caps, their words, a dot between pairs.
+    let mut parts: Vec<(Option<Vec<(Rect, String)>>, Option<Arc<Galley>>, f32)> = vec![];
+    let mut hint_w = 0.0;
+    for (n, (k, words)) in hint.iter().enumerate() {
+        if n > 0 {
+            let dotg = p.layout_no_wrap("·".into(), hint_font.clone(), pal.text_dim);
+            let w = dotg.size().x + 16.0;
+            parts.push((None, Some(dotg), w));
+            hint_w += w;
+        }
+        if !k.is_empty() {
+            let (caps, w) = crate::kit::caps_layout(p, k, 0.0, 0.0, &cap_font, pal);
+            parts.push((Some(caps), None, w + 6.0));
+            hint_w += w + 6.0;
+        }
+        let wg = elided(ui, words, hint_font.clone(), (rect.width() - 24.0).max(40.0), pal.text_dim);
+        hint_w += wg.size().x;
+        parts.push((None, Some(wg), 0.0));
+    }
+    let show_hint = !parts.is_empty() && hint_w <= rect.width() - 24.0;
+    let hint_h = if show_hint { (cap_font.size * 1.55).round().max(16.0) } else { 0.0 };
+    let well = (fs * 4.4).round();
+    let gap = (fs * 0.9).round();
+    let tall = rect.height() > well + g.size().y + hint_h + gap * 4.0;
+    let total = if tall { well + gap * 1.4 } else { 0.0 } + g.size().y + if show_hint { gap * 0.7 + hint_h } else { 0.0 };
+    let mut y = (c.y - total / 2.0).round();
+    if tall {
+        let wr = Rect::from_center_size(pos2(c.x, y + well / 2.0), Vec2::splat(well));
+        let round = egui::CornerRadius::same((well / 2.0) as u8);
+        let face = if pal.strong { pal.panel } else { theme::over(pal.text.gamma_multiply(if pal.dark { 0.05 } else { 0.035 }), pal.panel) };
+        crate::kit::card_surface(p, wr, round, face, theme::Elevation::Flat, pal);
+        if pal.glow.a() > 0 {
+            p.add(egui::epaint::Shadow { offset: [0, 0], blur: 24, spread: 0, color: pal.glow.gamma_multiply(0.45) }.as_shape(wr, round));
+            p.rect_filled(wr, round, face);
+        }
+        crate::kit::card_edge(p, wr, round, 0.0, pal);
+        let side = (fs * 2.0).round();
+        theme::paint_glyph_large(p, Rect::from_center_size(wr.center(), Vec2::splat(side)), glyph, pal.text_dim.gamma_multiply(0.8));
+        y += well + gap * 1.4;
+    }
+    p.galley(pos2((c.x - g.size().x / 2.0).round(), y), g.clone(), pal.text);
+    y += g.size().y;
+    if show_hint {
+        y += gap * 0.7;
+        let cy = (y + hint_h / 2.0).round();
+        let mut x = (c.x - hint_w / 2.0).round();
+        for (caps, words, w) in parts {
+            if let Some(caps) = caps {
+                for (r, cap) in caps {
+                    crate::kit::keycap(p, r.translate(vec2(x, cy)), &cap, cap_font.clone(), false, pal);
+                }
+                x += w;
+            } else if let Some(wg) = words {
+                let gw = wg.size().x;
+                let lead = if w > 0.0 { (w - gw) / 2.0 } else { 0.0 };
+                p.galley(pos2(x + lead, cy - wg.size().y / 2.0), wg, pal.text_dim);
+                x += if w > 0.0 { w } else { gw };
+            }
+        }
     }
 }
 
@@ -923,24 +1020,19 @@ pub(crate) fn drop_target(ui: &Ui, rect: Rect, e: &Entry, env: &mut Env) -> bool
     true
 }
 
-fn paint_item_bg(p: &egui::Painter, r: Rect, selected: bool, cursor: bool, hovered: bool, drop: bool, env: &Env, rad: u8) {
+fn paint_item_bg(p: &egui::Painter, r: Rect, selected: bool, cursor: bool, hover: f32, drop: bool, env: &Env, rad: u8) {
     let pal = env.pal;
-    // Picked rows lift a step, as a dialog's chosen row does; the panel with the keyboard
-    // marks them with the accent's bar, and lifts its cursor's row a little further.
+    let cr = theme::corner(rad);
     if selected {
-        crate::kit::picked(p, r, rad, env.active, cursor && env.active, pal);
-    } else if hovered {
-        p.rect_filled(r, CornerRadius::same(rad), crate::kit::touch(pal));
+        paint_run(p, r, rad, false, false, env.active, pal);
+    } else {
+        paint_hover(p, r, cr, hover, pal);
     }
-    // A high-contrast theme rings the cursor thick and in its text colour, over the
-    // selection too, so it is found without looking for it.
-    if pal.strong && cursor && env.active {
-        p.rect_stroke(r, CornerRadius::same(rad), Stroke::new(2.0, pal.text), StrokeKind::Inside);
-    } else if cursor && env.active && !selected {
-        crate::kit::cursor_ring(p, r, rad, pal);
+    if cursor && env.active {
+        paint_cursor(p, r, cr, selected, pal);
     }
     if drop {
-        p.rect_stroke(r.shrink(0.5), CornerRadius::same(rad), Stroke::new(1.5, pal.accent), StrokeKind::Inside);
+        p.rect_stroke(r.shrink(0.5), cr, Stroke::new(1.5, pal.accent), StrokeKind::Inside);
     }
 }
 
@@ -1111,13 +1203,189 @@ pub(crate) fn background_clicks(ui: &Ui, bg: &Response, t: &mut Tab, env: &mut E
     }
 }
 
+// ------------------------------------------------------------------ row looks
+//
+// What a row wears, in the views that list items in rows (Details, Tree, List) and on the
+// tiles of the icon views: rounded from the corner scale and kept a few points in from the
+// card's sides, so nothing runs into the card's rim or the gap beside the inspector. A run
+// of picked rows is one shape, rounded only at its two ends, tinted with the accent while
+// its panel has the keyboard and lifted a neutral step in a panel that has not. The
+// keyboard's row is a crisp ring with a faint halo, only in the panel with the keyboard.
+// The pointer's row fades in. None of it keeps anything per row: the fade is one slot per
+// view, so a folder of 100,000 files pays for two rows of it.
+
+/// How far rows stand in from the card's sides.
+pub(crate) const ROW_INSET: f32 = 6.0;
+
+/// The fill of picked rows. A high-contrast theme's own solid selection; else the accent,
+/// laid thin over a step of light, in the panel with the keyboard, and the light alone
+/// (a neutral lift) in another. Translucent, so stripes and the card show through alike.
+pub(crate) fn sel_fill(pal: &Palette, active: bool) -> Color32 {
+    if pal.strong {
+        return pal.selected;
+    }
+    let light = pal.text.gamma_multiply(if pal.dark { 0.045 } else { 0.035 });
+    if active { theme::over(pal.accent.gamma_multiply(if pal.dark { 0.17 } else { 0.13 }), light) } else { pal.text.gamma_multiply(if pal.dark { 0.075 } else { 0.06 }) }
+}
+
+/// The hairline round picked rows: the accent's, faint, in the panel with the keyboard.
+pub(crate) fn sel_line(pal: &Palette, active: bool) -> Color32 {
+    if active { pal.accent.gamma_multiply(if pal.dark { 0.42 } else { 0.5 }) } else { pal.hairline }
+}
+
+/// Alternate rows: barely there, a breath of the text's colour over the card (the option
+/// still decides whether they show). A high-contrast theme keeps its own.
+pub(crate) fn stripe(pal: &Palette) -> Color32 {
+    if pal.strong { pal.alt } else { pal.text.gamma_multiply(if pal.dark { 0.022 } else { 0.03 }) }
+}
+
+/// A run of picked rows in `r` (their union), as one shape: rounded at an end unless the
+/// run carries on past it (`open_top`, `open_bottom`: out of sight, or into the next
+/// column's rows), filled and lined once, so no seam shows between its rows.
+pub(crate) fn paint_run(p: &egui::Painter, r: Rect, rad: u8, open_top: bool, open_bottom: bool, active: bool, pal: &Palette) {
+    let mut rad = theme::corner(rad);
+    if open_top {
+        (rad.nw, rad.ne) = (0, 0);
+    }
+    if open_bottom {
+        (rad.sw, rad.se) = (0, 0);
+    }
+    p.rect_filled(r, rad, sel_fill(pal, active));
+    if !pal.strong {
+        p.rect_stroke(r, rad, Stroke::new(1.0, sel_line(pal, active)), StrokeKind::Inside);
+    }
+}
+
+/// The keyboard's row, `r`, in the panel with the keyboard: a faint accent halo round a
+/// crisp ring, in the accent on a picked row (to stand apart from the run it is in) and in
+/// the text's colour on another. A high-contrast theme rings it thick in its text colour.
+pub(crate) fn paint_cursor(p: &egui::Painter, r: Rect, rad: CornerRadius, selected: bool, pal: &Palette) {
+    if pal.strong {
+        p.rect_stroke(r, rad, Stroke::new(2.0, pal.text), StrokeKind::Inside);
+        return;
+    }
+    if selected {
+        // Inside the run, a ring of its own two points in: the run stays one shape.
+        let k = |v: u8| v.saturating_sub(2);
+        let inner = CornerRadius { nw: k(rad.nw), ne: k(rad.ne), sw: k(rad.sw), se: k(rad.se) };
+        p.rect_stroke(r.shrink(2.0), inner, Stroke::new(1.0, pal.accent.gamma_multiply(0.75)), StrokeKind::Inside);
+        return;
+    }
+    if pal.glow.a() > 0 {
+        p.add(egui::epaint::Shadow { offset: [0, 0], blur: 8, spread: 0, color: pal.glow.gamma_multiply(0.8) }.as_shape(r, rad));
+    }
+    let col = theme::over(pal.accent.gamma_multiply(0.25), pal.text.gamma_multiply(if pal.dark { 0.3 } else { 0.38 }));
+    p.rect_stroke(r, rad, Stroke::new(1.0, col), StrokeKind::Inside);
+}
+
+/// The pointer's row, `level` of the way in (0 to 1).
+pub(crate) fn paint_hover(p: &egui::Painter, r: Rect, rad: CornerRadius, level: f32, pal: &Palette) {
+    if level <= 0.0 {
+        return;
+    }
+    let c = if pal.strong { crate::kit::touch(pal) } else { pal.text.gamma_multiply(if pal.dark { 0.05 } else { 0.045 }) };
+    p.rect_filled(r, rad, c.gamma_multiply(level.min(1.0)));
+}
+
+/// The pointer's item fading in over 120 ms and the one it left fading out: one slot a
+/// view, not one a row. Read before the items are drawn, told which one the pointer is on
+/// after; an item is lit from the frame after the pointer reaches it.
+#[derive(Clone, Copy)]
+pub(crate) struct HoverFade {
+    cur: Option<u32>,
+    since: f64,
+    prev: Option<u32>,
+    prev_since: f64,
+    now: f64,
+    moving: bool,
+}
+
+const HOVER_FADE: f64 = 0.12;
+
+impl HoverFade {
+    pub(crate) fn load(ctx: &egui::Context, id: Id) -> Self {
+        let now = ctx.input(|i| i.time);
+        let moving = crate::kit::moving(ctx);
+        let (cur, since, prev, prev_since) = ctx.data(|d| d.get_temp::<(Option<u32>, f64, Option<u32>, f64)>(id)).unwrap_or((None, 0.0, None, 0.0));
+        HoverFade { cur, since, prev, prev_since, now, moving }
+    }
+
+    /// How lit item `idx` is: `hovered` is whether the pointer is on it this frame.
+    pub(crate) fn level(&self, idx: u32, hovered: bool) -> f32 {
+        if !self.moving {
+            return if hovered { 1.0 } else { 0.0 };
+        }
+        let ease = |t: f64| (1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(3)) as f32;
+        if self.cur == Some(idx) {
+            ease((self.now - self.since) / HOVER_FADE)
+        } else if self.prev == Some(idx) {
+            1.0 - ease((self.now - self.prev_since) / HOVER_FADE)
+        } else {
+            0.0
+        }
+    }
+
+    /// Keeps which item the pointer is on now, and repaints while either fade runs.
+    pub(crate) fn store(mut self, ctx: &egui::Context, id: Id, hovered: Option<u32>) {
+        if hovered != self.cur {
+            (self.prev, self.prev_since) = (self.cur, self.now);
+            (self.cur, self.since) = (hovered, self.now);
+        }
+        if self.moving && (self.now - self.since < HOVER_FADE || self.now - self.prev_since < HOVER_FADE) {
+            ctx.request_repaint();
+        }
+        ctx.data_mut(|d| d.insert_temp(id, (self.cur, self.since, self.prev, self.prev_since)));
+    }
+}
+
+/// Scroll bars for a view inside a card: slim rounded thumbs a few points in from the
+/// card's edge, out of sight until the pointer comes over the view, brightening under it.
+pub(crate) fn card_scrollbars(ui: &mut Ui) {
+    let s = &mut ui.spacing_mut().scroll;
+    s.bar_width = 8.0;
+    s.floating_width = 3.0;
+    s.bar_outer_margin = 3.0;
+    s.bar_inner_margin = 3.0;
+    s.handle_min_length = 24.0;
+    s.active_handle_opacity = 0.32;
+    s.interact_handle_opacity = 0.55;
+    s.active_background_opacity = 0.0;
+    s.interact_background_opacity = 0.12;
+}
+
+/// A thumbnail as a small card: a soft contact shadow (deeper while `lift`, the pointer on
+/// it, rises), a quiet backing that shows through a transparent picture, the picture in
+/// `rad` corners, and a hairline rim over its edge.
+fn paint_picture(p: &egui::Painter, r: Rect, rad: CornerRadius, tex: egui::TextureId, uv: Rect, alpha: f32, lift: f32, pal: &Palette) {
+    if !pal.strong {
+        let a = if pal.dark { 70.0 + 40.0 * lift } else { 22.0 + 18.0 * lift };
+        p.add(egui::epaint::Shadow { offset: [0, 1 + (2.0 * lift) as i8], blur: 4 + (6.0 * lift) as u8, spread: 0, color: Color32::from_black_alpha((a * alpha) as u8) }.as_shape(r, rad));
+    }
+    let backing = if pal.dark { pal.text.gamma_multiply(0.07) } else { pal.text.gamma_multiply(0.05) };
+    p.rect_filled(r, rad, backing.gamma_multiply(alpha));
+    p.add(egui::epaint::RectShape::filled(r, rad, Color32::WHITE.gamma_multiply(alpha)).with_texture(tex, uv));
+    let rim = if pal.strong { pal.border } else { pal.hairline };
+    p.rect_stroke(r, rad, Stroke::new(1.0, rim.gamma_multiply(alpha)), StrokeKind::Inside);
+}
+
+/// A column header's title: small, dim and a little letter-spaced, cut with "…" to `width`.
+fn head_label(ui: &Ui, text: &str, font: FontId, width: f32, color: Color32) -> Arc<Galley> {
+    let mut job = LayoutJob::default();
+    job.append(text, 0.0, egui::TextFormat { font_id: font, color, extra_letter_spacing: 0.35, ..Default::default() });
+    job.wrap = egui::text::TextWrapping { max_width: width.max(8.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+    ui.fonts_mut(|f| f.layout_job(job))
+}
+
 // ------------------------------------------------------------------ details
 
 fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query) {
     let pal = *env.pal;
     let row_h = row_height(env.cfg);
-    // As tall as the inspector's toolbar beside it, so their lines run on as one.
+    // As tall as the inspector's toolbar beside it, and as far down the card as the
+    // inspector's well, so their lines run on as one; the air above it parts it from the
+    // toolbar's line instead of sitting flush against it.
     let header_h = 30.0;
+    let air = if crate::kit::gutter() >= 6.0 { crate::kit::gutter() } else { 2.0 };
     let font = FontId::proportional(env.cfg.font_size);
     let small = FontId::proportional(env.cfg.font_size - 1.0);
     let pad = 10.0;
@@ -1147,7 +1415,7 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
         *w = w.max((tw + if *c == Column::Type { 48.0 } else { 34.0 }).ceil());
     }
     let total_w: f32 = cols.iter().map(|c| c.1).sum::<f32>() + pad * 2.0;
-    let body = Rect::from_min_max(pos2(rect.left(), rect.top() + header_h), rect.max);
+    let body = Rect::from_min_max(pos2(rect.left(), rect.top() + air + header_h), rect.max);
     let content_w = total_w.max(body.width());
     // Name column stretches to fill spare width.
     let spare = (body.width() - total_w).max(0.0);
@@ -1176,6 +1444,10 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
         sa = sa.vertical_scroll_offset(s).horizontal_scroll_offset(0.0);
     }
     let mut body_ui = ui.new_child(UiBuilder::new().max_rect(body));
+    card_scrollbars(&mut body_ui);
+    let hover_id = Id::new(("row_hover", t.id));
+    let fade = HoverFade::load(ui.ctx(), hover_id);
+    let mut hovered_now = None;
     let rows = std::mem::take(&mut t.rows);
     let group_labels = std::mem::take(&mut t.group_labels);
     let out = sa.show_viewport(&mut body_ui, |ui, vp| {
@@ -1207,7 +1479,7 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
                     let label = group_labels.get(*label as usize).map(String::as_str).unwrap_or("");
                     let resp = ui.interact(rr, Id::new(("ghdr", t.id, label)), Sense::click());
                     if resp.hovered() {
-                        ui.painter().rect_filled(rr, CornerRadius::same(4), pal.hover);
+                        paint_hover(ui.painter(), Rect::from_min_max(pos2(rr.left() + ROW_INSET, rr.top() + 0.5), pos2(rr.right().min(viewport_screen.right()) - ROW_INSET, rr.bottom() - 0.5)), theme::corner(theme::R_SM), 1.0, &pal);
                     }
                     let c = pos2(rr.left() + pad + 6.0, rr.center().y);
                     let g = if *collapsed { theme::Glyph::ChevronRight } else { theme::Glyph::ChevronDown };
@@ -1222,7 +1494,7 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
                     let tx = rr.left() + pad + 18.0;
                     let gw = gal.size().x;
                     ui.painter().galley(pos2(tx, rr.center().y - gal.size().y / 2.0), gal, pal.text_dim);
-                    ui.painter().line_segment([pos2(tx + gw + 10.0, rr.center().y), pos2(rr.right() - pad, rr.center().y)], Stroke::new(1.0, pal.border));
+                    ui.painter().line_segment([pos2(tx + gw + 10.0, rr.center().y), pos2(rr.right().min(viewport_screen.right()) - pad, rr.center().y)], Stroke::new(1.0, pal.hairline));
                     if resp.clicked() {
                         if !t.collapsed_groups.remove(label) {
                             t.collapsed_groups.insert(label.to_string());
@@ -1248,17 +1520,37 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
                     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &e.name));
                     let is_cursor = t.cursor == Some(idx);
                     if is_cursor {
-                        cursor_row = Some(rr);
                         t.cursor_screen_pos = Some(pos2(rr.left() + 40.0, rr.bottom()));
                     }
                     let drop = drop_target(ui, rr, &e, env);
+                    // A row's shape: in from the card's sides, its ends in view however
+                    // wide the columns run.
+                    let shape = Rect::from_min_max(pos2(rr.left() + ROW_INSET, rr.top()), pos2(rr.right().min(viewport_screen.right()) - ROW_INSET, rr.bottom()));
+                    let row_sel = |k: usize| matches!(rows.get(k), Some(Row::Item(x)) if t.selected.contains(x));
                     // Stripes take a row's own shape, so a lifted row sits among them as one.
                     if env.cfg.alt_rows && ri % 2 == 1 && !selected {
-                        ui.painter().rect_filled(rr.shrink2(vec2(3.0, 0.5)), CornerRadius::same(6), pal.alt);
+                        ui.painter().rect_filled(shape.shrink2(vec2(0.0, 0.5)), theme::corner(theme::R_SM), stripe(&pal));
                     }
                     // The item being renamed drops its highlight; the others fade back.
                     let editing = rename_focus(ui, rr, idx, t, env);
-                    paint_item_bg(ui.painter(), rr.shrink2(vec2(3.0, 0.5)), selected && !editing, is_cursor && !editing, resp.hovered() && !editing, drop, env, 6);
+                    // A run of picked rows is painted once, from its first row in sight.
+                    let up = ri > 0 && row_sel(ri - 1);
+                    if selected && (!up || ri == first) {
+                        let mut end = ri + 1;
+                        while end < last && row_sel(end) {
+                            end += 1;
+                        }
+                        let run = Rect::from_min_max(pos2(shape.left(), shape.top() + if up { 0.0 } else { 0.5 }), pos2(shape.right(), origin.y + end as f32 * row_h + off.y - if row_sel(end) { 0.0 } else { 0.5 }));
+                        paint_run(ui.painter(), run, theme::R_SM, up, row_sel(end), env.active, &pal);
+                    }
+                    if resp.hovered() {
+                        hovered_now = Some(idx);
+                    }
+                    let lit = if editing || selected { 0.0 } else { fade.level(idx, resp.hovered()) };
+                    paint_item_bg(ui.painter(), shape.shrink2(vec2(0.0, 0.5)), false, false, lit, drop, env, theme::R_SM);
+                    if is_cursor && !editing {
+                        cursor_row = Some(rr);
+                    }
                     if env.cut.contains(&e.path) {
                         paint_ants(ui, rr.shrink2(vec2(4.0, 1.5)), env);
                     }
@@ -1401,6 +1693,12 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
             }
         }
         t.glide.end(ui.ctx());
+        // The keyboard's ring last, its halo over the rows round it.
+        if let (Some(cr), true) = (cursor_row, env.active) {
+            let selected = t.cursor.is_some_and(|c| t.selected.contains(&c));
+            let shape = Rect::from_min_max(pos2(cr.left() + ROW_INSET, cr.top() + 0.5), pos2(cr.right().min(viewport_screen.right()) - ROW_INSET, cr.bottom() - 0.5));
+            paint_cursor(ui.painter(), shape, theme::corner(theme::R_SM), selected, &pal);
+        }
         if t.scroll_to_cursor {
             t.scroll_to_cursor = false;
             let target = cursor_row.or_else(|| {
@@ -1413,6 +1711,7 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
             }
         }
     });
+    fade.store(ui.ctx(), hover_id, hovered_now);
     t.rows = rows;
     t.group_labels = group_labels;
     t.current_scroll = out.state.offset().y;
@@ -1428,9 +1727,10 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
         crate::ribbon::paint(ui, body, ribbon, rows.len(), &order, entries, sort, desc, loading, out.state.offset().y, out.content_size.y, env.cfg.font_size, &pal, env.cfg.animations);
     }
     // Header (scrolls horizontally with the body).
-    let header = Rect::from_min_max(rect.min, pos2(rect.right(), rect.top() + header_h));
+    let header = Rect::from_min_max(pos2(rect.left(), rect.top() + air), pos2(rect.right(), rect.top() + air + header_h));
     let painter = ui.painter().with_clip_rect(header.intersect(ui.clip_rect()));
-    painter.line_segment([header.left_bottom(), header.right_bottom()], Stroke::new(1.0, pal.border));
+    // Its line stands in from the card's sides as the rows do.
+    painter.line_segment([pos2(header.left() + ROW_INSET, header.bottom() - 0.5), pos2(header.right() - ROW_INSET, header.bottom() - 0.5)], Stroke::new(1.0, pal.hairline));
     let mut x = header.left() + pad - t.hscroll;
     let mut new_widths: Option<(usize, f32)> = None;
     let mut toggle_col: Option<Column> = None;
@@ -1444,13 +1744,12 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
         let resp = ui.interact(cell.intersect(header), Id::new(("hdr", t.id, ci)), Sense::click());
         let active_sort = c.sort_key() == Some(t.settings.sort);
         if resp.hovered() {
-            painter.rect_filled(cell.shrink2(vec2(2.0, 3.0)), CornerRadius::same(6), crate::kit::touch(&pal));
+            paint_hover(&painter, cell.shrink2(vec2(2.0, 4.0)), theme::corner(theme::R_SM), 1.0, &pal);
         }
-        // Thin separator at each column's right edge (the resize handle).
-        painter.line_segment([pos2(cell.right() - 0.5, cell.top() + 6.0), pos2(cell.right() - 0.5, cell.bottom() - 6.0)], Stroke::new(1.0, pal.border));
         let label = c.title();
-        let col = pal.text_dim;
-        let g = elided(ui, label, head_font.clone(), w - 26.0, col);
+        // The column the rows are sorted by reads a step brighter than the others.
+        let col = if active_sort { pal.text_dim.lerp_to_gamma(pal.text, 0.3) } else { pal.text_dim };
+        let g = head_label(ui, label, head_font.clone(), w - 26.0, col);
         let boxes = env.cfg.selection_boxes && !tab::is_computer(&t.path);
         let gx = if c.right_aligned() { cell.right() - 8.0 - g.size().x - if active_sort { 12.0 } else { 0.0 } } else if *c == Column::Name && boxes { cell.left() + 29.0 } else { cell.left() + 6.0 };
         if *c == Column::Name && boxes && over_header {
@@ -1477,7 +1776,7 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
             let fresp = ui.interact(fr, Id::new(("hdr_funnel", t.id)), Sense::click()).on_hover_text("Filter by type (Alt+T)");
             let active = !t.settings.only_types.is_empty();
             if fresp.hovered() || active {
-                painter.rect_filled(fr, CornerRadius::same(3), if active { pal.accent.gamma_multiply(0.3) } else { pal.raised });
+                painter.rect_filled(fr, theme::corner(theme::R_XS), if active { pal.accent.gamma_multiply(0.22) } else { pal.text.gamma_multiply(if pal.dark { 0.07 } else { 0.06 }) });
             }
             if active || over_header {
                 crate::ui::funnel(&painter, fr.center(), if active { pal.accent } else { pal.text_dim });
@@ -1513,11 +1812,15 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
         // Resize handle
         let hr = Rect::from_center_size(pos2(cell.right(), cell.center().y), vec2(8.0, header_h));
         let hresp = ui.interact(hr.intersect(header), Id::new(("hdr_rs", t.id, ci)), Sense::click_and_drag());
+        // A hairline at each column's right edge (the resize handle), brighter while the
+        // pointer is over the header, in the accent while it is on the handle.
+        let sx = cell.right() - 0.5;
         if hresp.hovered() || hresp.dragged() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn);
-            painter.line_segment([pos2(cell.right(), cell.top() + 5.0), pos2(cell.right(), cell.bottom() - 5.0)], Stroke::new(1.0, pal.accent));
+            painter.line_segment([pos2(sx, cell.top() + 6.0), pos2(sx, cell.bottom() - 6.0)], Stroke::new(1.0, pal.accent));
         } else if ci + 1 < cols.len() {
-            painter.line_segment([pos2(cell.right(), cell.top() + 7.0), pos2(cell.right(), cell.bottom() - 7.0)], Stroke::new(1.0, pal.border));
+            let line = if pal.strong { pal.border } else if over_header { pal.text.gamma_multiply(if pal.dark { 0.2 } else { 0.24 }) } else { pal.hairline };
+            painter.line_segment([pos2(sx, cell.top() + 9.0), pos2(sx, cell.bottom() - 9.0)], Stroke::new(1.0, line));
         }
         if hresp.dragged() {
             let dx = hresp.drag_delta().x;
@@ -1604,6 +1907,10 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
         sa = if horizontal { sa.horizontal_scroll_offset(0.0) } else { sa.vertical_scroll_offset(s) };
     }
     let mut body_ui = ui.new_child(UiBuilder::new().max_rect(body));
+    card_scrollbars(&mut body_ui);
+    let hover_id = Id::new(("cell_hover", t.id));
+    let fade = HoverFade::load(ui.ctx(), hover_id);
+    let mut hovered_now = None;
     // Cloned: item handlers mutate selection using `t.view`.
     let view = t.view.clone();
     let now = std::time::Instant::now();
@@ -1673,10 +1980,32 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
             let faded = env.cut.contains(&e.path) || unmounted(t, &e) || dim_ignored && crate::gitstatus::ignored(git.as_deref(), &e.path, &t.path);
             let dimc = |c: Color32| if faded { c.gamma_multiply(0.45) } else { c };
             let cat = theme::categorize(&e.ext(), e.is_dir, e.is_executable());
+            if resp.hovered() {
+                hovered_now = Some(idx);
+            }
             match mode {
                 Mode::List => {
                     let editing = rename_focus(ui, r, idx, t, env);
-                    paint_item_bg(ui.painter(), r.shrink2(vec2(3.0, 0.5)), selected && !editing, is_cursor && !editing, resp.hovered() && !editing, drop, env, 6);
+                    // Picked rows down one column join into one shape, as in Details.
+                    let sel_at = |k: usize| view.get(k).is_some_and(|x| t.selected.contains(x));
+                    let up = i % rows_per_col != 0 && sel_at(i.wrapping_sub(1));
+                    let shape = r.shrink2(vec2(3.0, 0.0));
+                    if selected && (!up || i == first) {
+                        let mut end = i + 1;
+                        while end < last && end % rows_per_col != 0 && sel_at(end) {
+                            end += 1;
+                        }
+                        let down = end % rows_per_col != 0 && sel_at(end);
+                        let bottom = (origin + pos_of(end - 1) + off).y + cell.y;
+                        let run = Rect::from_min_max(pos2(shape.left(), shape.top() + if up { 0.0 } else { 0.5 }), pos2(shape.right(), bottom - if down { 0.0 } else { 0.5 }));
+                        paint_run(ui.painter(), run, theme::R_SM, up, down, env.active, &pal);
+                    }
+                    let lit = if editing || selected { 0.0 } else { fade.level(idx, resp.hovered()) };
+                    let cr = theme::corner(theme::R_SM);
+                    paint_item_bg(ui.painter(), shape.shrink2(vec2(0.0, 0.5)), false, false, lit, drop, env, theme::R_SM);
+                    if is_cursor && !editing && env.active {
+                        paint_cursor(ui.painter(), shape.shrink2(vec2(0.0, 0.5)), cr, selected, &pal);
+                    }
                     if env.cut.contains(&e.path) {
                         paint_ants(ui, r.shrink2(vec2(3.0, 1.5)), env);
                     }
@@ -1708,7 +2037,7 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
                     }
                 }
                 Mode::Icons(s) => {
-                    let rad = if env.cfg.round_corners { 8 } else { 0 };
+                    let rad = theme::R_MD;
                     let editing = rename_focus(ui, r, idx, t, env);
                     // A picked tile keeps its picture: a ring around it and a tint behind its
                     // name, no filled block. The keyboard's cursor is an outline of the whole
@@ -1716,13 +2045,19 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
                     // a wide picture; there the cursor's ring is drawn at full strength and the
                     // other picked tiles' rings softer, as list rows do with their fills.
                     let picked = selected && !editing;
-                    paint_item_bg(ui.painter(), r.shrink(2.0), false, is_cursor && !editing && !picked, resp.hovered() && !editing && !picked, drop, env, rad);
+                    // The pointer's tile is lit and its picture rises a point and a half.
+                    let lit = if editing { 0.0 } else { fade.level(idx, resp.hovered()) };
+                    let rise = if env.cfg.animations { -1.5 * lit } else { 0.0 };
+                    paint_item_bg(ui.painter(), r.shrink(2.0), false, is_cursor && !editing && !picked, if picked { 0.0 } else { lit * 0.8 }, drop, env, rad);
                     if env.cut.contains(&e.path) {
                         paint_ants(ui, r.shrink(3.0), env);
                     }
                     handle_item(ui, &resp, idx, t, env);
-                    let icon_r = Rect::from_min_size(pos2(r.center().x - s / 2.0, r.top() + 8.0), Vec2::splat(s));
+                    let icon_r = Rect::from_min_size(pos2(r.center().x - s / 2.0, r.top() + 8.0 + rise), Vec2::splat(s));
                     let mut art = icon_r;
+                    // A picture is a small card of its own: corners from the scale, small
+                    // ones on small tiles.
+                    let pic_rad = theme::corner(if s >= 72.0 { theme::R_SM } else { theme::R_XS });
                     if e.is_dir && resp.hovered() && thumbs_here && !tab::is_computer(&t.path) && viewport_screen.contains(icon_r.center()) {
                         peek_at = Some((e.path.clone(), icon_r));
                     }
@@ -1749,7 +2084,7 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
                                 let size = vec2(tw * k, th * k);
                                 (Rect::from_min_size(pos2(icon_r.center().x - size.x / 2.0, icon_r.bottom() - size.y), size), Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)))
                             };
-                            ui.painter().image(l.tex.id(), dst, uv, Color32::WHITE.gamma_multiply(alpha * if faded { 0.45 } else { 1.0 }));
+                            paint_picture(ui.painter(), dst, pic_rad, l.tex.id(), uv, alpha * if faded { 0.45 } else { 1.0 }, lit, &pal);
                             t.item_rects.push((idx, dst));
                             art = dst;
                             drew = true;
@@ -1765,9 +2100,16 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
                         }
                     }
                     if picked {
-                        // 2 points of the background between the picture and a 2 point ring.
-                        let ring = if is_cursor { pal.accent } else { pal.accent.gamma_multiply(0.55) };
-                        ui.painter().rect_stroke(art.expand(4.0), CornerRadius::same(if env.cfg.round_corners { 7 } else { 0 }), Stroke::new(2.0, ring), StrokeKind::Inside);
+                        // 2 points of the background between the picture and a 2 point ring,
+                        // a faint halo beyond it in the panel with the keyboard. The cursor's
+                        // ring is whole, the other picked tiles' softer.
+                        let ring_r = art.expand(4.0);
+                        let rr = theme::corner(if s >= 72.0 { theme::R_SM + 3 } else { theme::R_XS + 3 });
+                        if env.active && pal.glow.a() > 0 {
+                            ui.painter().add(egui::epaint::Shadow { offset: [0, 0], blur: 12, spread: 0, color: pal.glow }.as_shape(ring_r, rr));
+                        }
+                        let ring = if is_cursor && env.active { pal.accent } else if env.active { pal.accent.gamma_multiply(0.6) } else { pal.text.gamma_multiply(0.3) };
+                        ui.painter().rect_stroke(ring_r, rr, Stroke::new(2.0, ring), StrokeKind::Inside);
                     }
                     crate::gitstatus::paint(ui.painter(), icon_r.shrink(s * 0.1), git.as_deref(), &e.path, &pal);
                     // Colour labels as a badge on the icon's top right corner.
@@ -1786,8 +2128,9 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
                         let g = ui.fonts_mut(|f| f.layout_job(job));
                         let gh = g.size().y;
                         if picked {
-                            let back = Rect::from_center_size(pos2(text_r.center().x, text_r.top() + gh / 2.0), vec2((g.size().x + 10.0).min(r.width() - 4.0), gh + 2.0));
-                            ui.painter().rect_filled(back, CornerRadius::same(5), crate::kit::lift(&pal));
+                            // The name on a chip of the selection's own tint.
+                            let back = Rect::from_center_size(pos2(text_r.center().x, text_r.top() + gh / 2.0), vec2((g.size().x + 12.0).min(r.width() - 4.0), gh + 3.0));
+                            paint_run(ui.painter(), back, theme::R_SM, false, false, env.active, &pal);
                         }
                         ui.painter().galley(pos2(text_r.center().x, text_r.top()), g, pal.text);
                         {
@@ -1818,6 +2161,7 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
             }
         }
     });
+    fade.store(ui.ctx(), hover_id, hovered_now);
     t.current_scroll = if horizontal { 0.0 } else { out.state.offset().y };
     if !horizontal {
         let loading = t.is_loading();
@@ -2070,7 +2414,7 @@ fn own_column(ui: &mut Ui, cr: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Quer
             let drop = drop_target(ui, r, &e, env);
             let faded = env.cut.contains(&e.path) || unmounted(t, &e) || dim_ignored && crate::gitstatus::ignored(git.as_deref(), &e.path, &t.path);
             let editing = rename_focus(ui, r, idx, t, env);
-            paint_item_bg(ui.painter(), r.shrink2(vec2(3.0, 0.5)), selected && !editing, is_cursor && !editing, resp.hovered() && !editing, drop, env, 6);
+            paint_item_bg(ui.painter(), r.shrink2(vec2(3.0, 0.5)), selected && !editing, is_cursor && !editing, if resp.hovered() && !editing { 1.0 } else { 0.0 }, drop, env, theme::R_SM);
             crate::compare::paint(ui.painter(), r, &e.path, &pal);
             handle_item(ui, &resp, idx, t, env);
             let ic = Rect::from_min_size(pos2(r.left() + 16.0, r.center().y - 8.0), Vec2::splat(16.0));
@@ -2128,9 +2472,9 @@ fn side_column(ui: &mut Ui, cr: Rect, col: &mut Tab, child: Option<u32>, env: &m
             // tab's own column. It lifts as a picked row does, without the accent's bar,
             // which is left to the one folder that has the selection.
             if on {
-                crate::kit::picked(ui.painter(), r.shrink2(vec2(3.0, 0.5)), 6, false, false, env.pal);
+                paint_run(ui.painter(), r.shrink2(vec2(3.0, 0.5)), theme::R_SM, false, false, false, env.pal);
             }
-            paint_item_bg(ui.painter(), r.shrink2(vec2(3.0, 0.5)), false, false, resp.hovered() && !on, drop, env, 6);
+            paint_item_bg(ui.painter(), r.shrink2(vec2(3.0, 0.5)), false, false, if resp.hovered() && !on { 1.0 } else { 0.0 }, drop, env, theme::R_SM);
             let ic = Rect::from_min_size(pos2(r.left() + 16.0, r.center().y - 8.0), Vec2::splat(16.0));
             let faded = env.cut.contains(&e.path);
             column_cells(ui, r, ic, e, env, &none, false, faded, true, git.as_deref());
