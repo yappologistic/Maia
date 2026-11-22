@@ -1777,13 +1777,16 @@ impl App {
         let mut jobs_at = None;
         // Right to left: free space, the jobs pill, the branch. Whatever the summary leaves.
         let mut right = |ui: &mut Ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.spacing_mut().item_spacing.x = 10.0;
             if let Some(f) = free {
                 let s = format!("{} free", fsx::fmt_size(f));
                 let g = listing::figures(ui, &s, font_small.clone(), 400.0, pal.text_dim, crate::kit::words_of(pal.text_dim));
-                if g.size().x + 8.0 <= ui.available_width() {
-                    let (r, resp) = ui.allocate_exact_size(g.size(), Sense::hover());
-                    ui.painter().galley(r.min, g, pal.text_dim);
+                // A quiet item: the drive's glyph, then the figure, the words a step back.
+                let gw = (font_small.size * 0.9).round();
+                if g.size().x + gw + 13.0 <= ui.available_width() {
+                    let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + gw + 5.0, g.size().y), Sense::hover());
+                    paint_glyph(ui.painter(), Rect::from_center_size(pos2(r.left() + gw / 2.0, r.center().y), Vec2::splat(gw)), Glyph::Drive, crate::kit::words_of(pal.text_dim));
+                    ui.painter().galley(pos2(r.left() + gw + 5.0, r.top()), g, pal.text_dim);
                     resp.on_hover_text("Free space on this folder's drive");
                 }
             }
