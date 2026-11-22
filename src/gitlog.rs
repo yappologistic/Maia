@@ -2122,7 +2122,7 @@ fn graph(ui: &mut Ui, body: Rect, h: &mut History, env: &mut Env) {
             } else {
                 let lit = fade.level(i as u32, resp.hovered());
                 crate::listing::paint_hover(&p, rr.shrink2(vec2(crate::listing::ROW_INSET, 1.0)), crate::theme::corner(crate::theme::R_SM), lit, &pal);
-                crate::theme::over((if pal.strong { crate::kit::touch(&pal) } else { pal.text.gamma_multiply(if pal.dark { 0.05 } else { 0.045 }) }).gamma_multiply(lit), pal.bg)
+                crate::theme::over(crate::listing::hover_fill(&pal).gamma_multiply(lit), pal.bg)
             };
             if resp.hovered() {
                 hovered_now = Some(i as u32);
