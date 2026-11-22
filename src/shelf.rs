@@ -181,7 +181,7 @@ pub fn strip(app: &mut App, ui: &mut Ui) {
     // Files dropped on it go on it.
     if let Some(paths) = dragged(app) {
         if pointer.is_some_and(|p| rect.contains(p)) {
-            ui.painter().rect_stroke(rect.shrink(2.0), CornerRadius::same(6), Stroke::new(1.5f32, pal.accent), StrokeKind::Inside);
+            ui.painter().rect_stroke(rect.shrink(2.0), crate::theme::corner(crate::theme::R_MD), Stroke::new(1.5f32, pal.accent), StrokeKind::Inside);
             if released {
                 let shown = known_entries(app, &paths);
                 app.shelf.add(shown);
@@ -198,9 +198,8 @@ pub fn strip(app: &mut App, ui: &mut Ui) {
     let head = Rect::from_min_max(pos2(inner.left() - 4.0, cy - chip_h / 2.0), pos2(tray.right() + 8.0 + count.size().x + 6.0, cy + chip_h / 2.0));
     let hr = ui.interact(head, Id::new("shelf all"), Sense::click_and_drag());
     crate::ui::note_control(ui, head, "shelf all");
-    if hr.hovered() && n > 0 {
-        ui.painter().rect_filled(head, CornerRadius::same(5), pal.hover);
-    }
+    let head_t = crate::kit::ease_to(ui, Id::unique("shelf all hot"), hr.hovered() && n > 0);
+    crate::kit::wash(ui.painter(), head, crate::theme::corner(crate::theme::R_SM), head_t, hr.is_pointer_button_down_on(), &pal);
     paint_tray(ui.painter(), tray, if n > 0 { pal.text_dim } else { pal.accent });
     let cg = count.size();
     ui.painter().galley(pos2(tray.right() + 8.0, cy - cg.y / 2.0), count, pal.text_dim);
@@ -216,7 +215,7 @@ pub fn strip(app: &mut App, ui: &mut Ui) {
     let mut actions = vec![];
     let mut right = inner.right();
     let button = |ui: &mut Ui, label: &str, accent: bool, what: &'static str, right: &mut f32| -> bool {
-        let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(fs - 0.5), if accent { Color32::WHITE } else { pal.text });
+        let g = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(fs - 0.5), if accent { pal.on_accent() } else { pal.text });
         let r = Rect::from_min_max(pos2(*right - g.size().x - 22.0, cy - chip_h / 2.0), pos2(*right, cy + chip_h / 2.0));
         if r.left() < head.right() + 8.0 {
             return false;
@@ -224,8 +223,12 @@ pub fn strip(app: &mut App, ui: &mut Ui) {
         *right = r.left() - 6.0;
         let resp = ui.interact(r, Id::new(("shelf button", what)), Sense::click());
         crate::ui::note_control(ui, r, what);
-        let fill = if accent { if resp.hovered() { pal.accent.gamma_multiply(0.85) } else { pal.accent } } else if resp.hovered() { pal.hover } else { pal.card() };
-        ui.painter().rect(r, CornerRadius::same(6), fill, if accent { Stroke::NONE } else { Stroke::new(1.0f32, pal.card_line()) }, StrokeKind::Inside);
+        // The chrome's buttons: raised faces, the main one in the accent; a wash under the
+        // pointer, deeper while pressed.
+        let rad = crate::theme::corner(crate::theme::R_SM);
+        let t = crate::kit::ease_to(ui, Id::unique(("shelf button hot", what)), resp.hovered());
+        crate::kit::raised(ui.painter(), r, rad, if accent { pal.accent } else { crate::kit::raised_fill(&pal) }, &pal);
+        crate::kit::wash(ui.painter(), r, rad, t, resp.is_pointer_button_down_on(), &pal);
         ui.painter().galley(pos2(r.center().x - g.size().x / 2.0, cy - g.size().y / 2.0), g, pal.text);
         resp.clicked()
     };
@@ -233,9 +236,8 @@ pub fn strip(app: &mut App, ui: &mut Ui) {
     right = clear.left() - 6.0;
     let cr = ui.interact(clear, Id::new("shelf clear"), Sense::click());
     crate::ui::note_control(ui, clear, "shelf clear");
-    if cr.hovered() {
-        ui.painter().rect_filled(clear, CornerRadius::same(5), pal.hover);
-    }
+    let clear_t = crate::kit::ease_to(ui, Id::unique("shelf clear hot"), cr.hovered());
+    crate::kit::wash(ui.painter(), clear, crate::theme::corner(crate::theme::R_SM), clear_t, cr.is_pointer_button_down_on(), &pal);
     crate::theme::paint_glyph(ui.painter(), clear.shrink(5.0), Glyph::Close, if cr.hovered() { pal.text } else { pal.text_dim });
     if cr.on_hover_text("Clear the shelf").clicked() {
         actions.push(Action::Cmd(crate::commands::Cmd::ClearShelf));
@@ -262,7 +264,7 @@ pub fn strip(app: &mut App, ui: &mut Ui) {
                     let x = Rect::from_center_size(pos2(resp.rect.right() - 12.0, cy), Vec2::splat(16.0));
                     let over_x = pointer.is_some_and(|p| x.contains(p));
                     if resp.hovered() {
-                        ui.painter().rect_filled(x, CornerRadius::same(4), if over_x { pal.hover } else { Color32::TRANSPARENT });
+                        crate::kit::wash(ui.painter(), x, crate::theme::corner(crate::theme::R_XS), if over_x { 1.0 } else { 0.0 }, false, &pal);
                         crate::theme::paint_glyph(ui.painter(), x.shrink(4.0), Glyph::Close, if over_x { pal.text } else { pal.text_dim });
                     }
                     crate::ui::note_control(ui, resp.rect, "shelf item");
@@ -313,8 +315,10 @@ fn chip(ui: &mut Ui, it: &Item, h: f32, fs: f32, pal: &Palette) -> egui::Respons
     let g = crate::listing::elided(ui, &name, FontId::proportional(fs - 0.5), 180.0, pal.text);
     let w = 8.0 + 16.0 + 6.0 + g.size().x + 26.0;
     let (r, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click_and_drag());
-    let fill = if resp.hovered() { pal.hover } else { pal.card() };
-    ui.painter().rect(r, CornerRadius::same(6), fill, Stroke::new(1.0f32, pal.card_line()), StrokeKind::Inside);
+    // Each item a small raised face on the shelf's card, a wash over it under the pointer.
+    let rad = crate::theme::corner(crate::theme::R_SM);
+    crate::kit::raised(ui.painter(), r, rad, crate::kit::raised_fill(pal), pal);
+    crate::kit::wash(ui.painter(), r, rad, if resp.hovered() { 1.0 } else { 0.0 }, false, pal);
     let ic = Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), Vec2::splat(16.0));
     match &it.entry {
         Some(e) => {

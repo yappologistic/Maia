@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use egui::{Align2, CornerRadius, FontId, Id, Key, Modifiers, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
+use egui::{Align2, FontId, Id, Key, Modifiers, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 
 use crate::app::App;
 use crate::fsx::Entry;
@@ -667,10 +667,18 @@ fn button(ui: &mut Ui, r: Rect, label: &str, accent: bool, enabled: bool, what: 
     let resp = ui.interact(r, Id::new(("picker button", what)), if enabled { Sense::click() } else { Sense::hover() });
     crate::ui::note_control(ui, r, what);
     let hover = enabled && resp.hovered();
-    let fill = if accent { if hover { pal.accent.gamma_multiply(0.85) } else { pal.accent } } else if hover { pal.hover } else { pal.card() };
-    let fill = if enabled { fill } else { fill.gamma_multiply(0.45) };
-    ui.painter().rect(r, CornerRadius::same(6), fill, if accent { Stroke::NONE } else { Stroke::new(1.0f32, pal.card_line()) }, StrokeKind::Inside);
-    let col = if accent { egui::Color32::WHITE } else { pal.text };
+    // Raised faces, the main one in the accent, a wash under the pointer; disabled, flat
+    // and faint.
+    let rad = crate::theme::corner(crate::theme::R_SM);
+    let face = if accent { pal.accent } else { crate::kit::raised_fill(pal) };
+    if enabled {
+        crate::kit::raised(ui.painter(), r, rad, face, pal);
+        let t = crate::kit::ease_to(ui, Id::unique(("picker button hot", what)), hover);
+        crate::kit::wash(ui.painter(), r, rad, t, resp.is_pointer_button_down_on(), pal);
+    } else {
+        ui.painter().rect(r, rad, face.gamma_multiply(0.45), Stroke::new(1.0f32, pal.hairline), StrokeKind::Inside);
+    }
+    let col = if accent { pal.on_accent() } else { pal.text };
     let g = crate::listing::elided(ui, label, FontId::proportional(fs - 0.5), r.width() - 12.0, if enabled { col } else { col.gamma_multiply(0.6) });
     ui.painter().galley(pos2(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, col);
     enabled && resp.clicked()
@@ -680,8 +688,15 @@ fn button(ui: &mut Ui, r: Rect, label: &str, accent: bool, enabled: bool, what: 
 fn chip(ui: &mut Ui, r: Rect, text: &str, open: bool, what: &'static str, fs: f32, pal: &crate::theme::Palette) -> bool {
     let resp = ui.interact(r, Id::new(("picker chip", what, r.left() as i32)), Sense::click());
     crate::ui::note_control(ui, r, what);
-    let fill = if open { pal.selected } else if resp.hovered() { pal.hover } else { pal.card() };
-    ui.painter().rect(r, CornerRadius::same(6), fill, Stroke::new(1.0f32, pal.card_line()), StrokeKind::Inside);
+    // A well, as the toolbar's fields are, its menu's chooser; raised while its menu is open.
+    let rad = crate::theme::corner(crate::theme::R_SM);
+    if open {
+        crate::kit::raised(ui.painter(), r, rad, crate::kit::raised_fill(pal), pal);
+    } else {
+        crate::kit::well(ui.painter(), r, rad, pal);
+        let t = crate::kit::ease_to(ui, Id::unique(("picker chip hot", what, r.left() as i32)), resp.hovered());
+        crate::kit::wash(ui.painter(), r, rad, t, resp.is_pointer_button_down_on(), pal);
+    }
     let g = crate::listing::elided(ui, text, FontId::proportional(fs - 1.0), r.width() - 30.0, pal.text);
     ui.painter().galley(pos2(r.left() + 9.0, r.center().y - g.size().y / 2.0), g, pal.text);
     paint_glyph(ui.painter(), Rect::from_center_size(pos2(r.right() - 12.0, r.center().y), Vec2::splat(10.0)), if open { Glyph::ChevronDown } else { Glyph::ChevronUp }, pal.text_dim);
@@ -772,9 +787,7 @@ pub fn bar(app: &mut App, ui: &mut Ui) {
     for (r, i) in &checks {
         let resp = ui.interact(*r, Id::new(("picker check", *i)), Sense::click());
         crate::ui::note_control(ui, *r, "picker check");
-        if resp.hovered() {
-            ui.painter().rect_filled(*r, CornerRadius::same(6), pal.hover);
-        }
+        crate::kit::wash(ui.painter(), *r, crate::theme::corner(crate::theme::R_SM), if resp.hovered() { 1.0 } else { 0.0 }, false, &pal);
         let on = p.chosen.get(*i).is_some_and(|v| v == "true");
         crate::popups::checkbox_glyph(ui.painter(), Rect::from_center_size(pos2(r.left() + 14.0, cy), Vec2::splat(14.0)), on, &pal);
         let g = crate::listing::elided(ui, &p.pick.choices[*i].label, FontId::proportional(fs - 1.0), r.width() - 32.0, pal.text);
@@ -835,7 +848,11 @@ pub fn bar(app: &mut App, ui: &mut Ui) {
 fn name_field(app: &mut App, ui: &mut Ui, r: Rect, fs: f32, pal: &crate::theme::Palette) {
     let id = Id::new("picker name");
     let Some(p) = app.picker.as_mut() else { return };
-    ui.painter().rect(r, CornerRadius::same(6), pal.bg, Stroke::new(1.0f32, pal.card_line()), StrokeKind::Inside);
+    let has_focus = ui.memory(|m| m.has_focus(id));
+    crate::kit::well(ui.painter(), r, crate::theme::corner(crate::theme::R_SM), pal);
+    if has_focus {
+        crate::kit::focus_ring(ui.painter(), r, crate::theme::corner(crate::theme::R_SM), pal);
+    }
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(8.0, 0.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
     let te = egui::TextEdit::singleline(&mut p.name).id(id).frame(crate::ui::bare_edit()).font(FontId::proportional(fs)).desired_width(r.width() - 16.0).hint_text(egui::RichText::new("Name").color(pal.text_dim));
     let resp = child.add(te);

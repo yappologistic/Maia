@@ -19,6 +19,11 @@ pub const TAB_H: f32 = 30.0;
 const PIN_TAB_W: f32 = 36.0;
 pub const HEADER_H: f32 = 34.0;
 pub const FOOTER_H: f32 = 30.0;
+/// What the sidebar's panel holds beside its card: the canvas's gutter on its outer side
+/// and half of one where it meets the panels (at the usual six point gutter). A width
+/// saved in the session is the card's, as it was before the window stood its parts on a
+/// canvas, so a saved width still gives the sidebar the room it had.
+pub const SIDEBAR_MARGINS: f32 = 9.0;
 /// Air between a panel card's top edge and its first row (the toolbar, or its own tab
 /// strip), so its controls sit as far in from the top as from the sides. None in a narrow
 /// window (a small gutter), where every point is the list's.
@@ -446,13 +451,13 @@ impl App {
         if self.sidebar {
             // A narrow window keeps room beside it for the title bar's window buttons and
             // tab list; a wide sidebar left them on top of each other.
-            let most = 420f32.min(ctx.content_rect().width() - 230.0).max(150.0);
+            let most = (420.0 + SIDEBAR_MARGINS).min(ctx.content_rect().width() - 230.0).max(150.0 + SIDEBAR_MARGINS);
             let r = ctx.root_ui(|root| {
                 egui::Panel::left("sidebar")
                     .resizable(true)
                     .show_separator_line(false)
                     .default_size(self.sidebar_width)
-                    .size_range(150.0..=most)
+                    .size_range(150.0 + SIDEBAR_MARGINS..=most)
                     .frame(egui::Frame::NONE.fill(pal.canvas).inner_margin(egui::Margin { left: gi, right: half, top: 0, bottom: gi }))
                     .show(root, |ui| crate::sidebar::sidebar(self, ui))
             });
@@ -631,7 +636,7 @@ impl App {
                 self.popup = if matches!(self.popup, Popup::MainMenu) { Popup::None } else { Popup::MainMenu };
             }
             let (r, resp) = ui.allocate_exact_size(vec2(28.0, 26.0), Sense::click());
-            let t = crate::kit::ease_to(&ui, Id::new("show sidebar hot"), resp.hovered());
+            let t = crate::kit::ease_to(&ui, Id::unique("show sidebar hot"), resp.hovered());
             crate::kit::wash(ui.painter(), r, crate::theme::corner(crate::theme::R_SM), t, resp.is_pointer_button_down_on(), &pal);
             let ink = pal.text_dim.lerp_to_gamma(pal.text, t);
             let ir = Rect::from_center_size(r.center(), vec2(15.0, 12.0));
@@ -690,7 +695,7 @@ impl App {
                 let hovered = resp.hovered();
                 // A well under the pointer, easing in; the close button's is the danger
                 // colour. Rectangular window buttons fill their whole slot, square.
-                let t = crate::kit::ease_to(ui, Id::new(("window button hot", kind)), hovered);
+                let t = crate::kit::ease_to(ui, Id::unique(("window button hot", kind)), hovered);
                 let (hr, rad) = if self.cfg.rect_buttons { (r, CornerRadius::ZERO) } else { (r.shrink2(vec2(6.0, 6.0)), crate::theme::corner(crate::theme::R_SM)) };
                 if kind == 2 {
                     if t > 0.01 {
@@ -730,7 +735,7 @@ impl App {
             ui.add_space(4.0);
             let (r, resp) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::click());
             note_control(ui, r, "tab list");
-            let t = crate::kit::ease_to(ui, Id::new("tab list hot"), resp.hovered());
+            let t = crate::kit::ease_to(ui, Id::unique("tab list hot"), resp.hovered());
             crate::kit::wash(ui.painter(), r, crate::theme::corner(crate::theme::R_SM), t, resp.is_pointer_button_down_on(), &pal);
             ui.painter().add(egui::Shape::line(vec![r.center() + vec2(-5.0, -2.0), r.center() + vec2(0.0, 3.0), r.center() + vec2(5.0, -2.0)], Stroke::new(1.5, pal.text_dim.lerp_to_gamma(pal.text, t))));
             if cmd_tip(resp, None, Cmd::TabSearch, &self.keymap, &pal).clicked() {
@@ -821,7 +826,7 @@ impl App {
             // easing in under the pointer.
             let pill_r = r.shrink2(vec2(1.0, 0.0));
             let rad = crate::theme::corner(crate::theme::R_MD);
-            let hot_t = crate::kit::ease_to(ui, Id::new(("tab hot", panel_id, t.id)), hovered && !is_active);
+            let hot_t = crate::kit::ease_to(ui, Id::unique(("tab hot", panel_id, t.id)), hovered && !is_active);
             if is_active {
                 let fill = if pal.strong { pal.raised } else if on_canvas { pal.panel } else { crate::kit::raised_fill(&pal) };
                 crate::kit::raised(ui.painter(), pill_r, rad, fill, &pal);
@@ -886,7 +891,7 @@ impl App {
                 let cr = Rect::from_center_size(pos2(r.right() - 14.0, r.center().y), Vec2::splat(16.0));
                 let ch = pointer.map(|pp| cr.contains(pp)).unwrap_or(false);
                 // Its well takes the danger colour's tint under the pointer: this closes.
-                let ct = crate::kit::ease_to(ui, Id::new(("tab close hot", panel_id, t.id)), ch);
+                let ct = crate::kit::ease_to(ui, Id::unique(("tab close hot", panel_id, t.id)), ch);
                 if ct > 0.01 {
                     ui.painter().rect_filled(cr, crate::theme::corner(crate::theme::R_XS), if pal.strong { pal.hover } else { pal.danger.gamma_multiply((if pal.dark { 0.22 } else { 0.14 }) * ct) });
                 }
@@ -949,7 +954,7 @@ impl App {
         let (r, resp) = ui.allocate_exact_size(vec2(if room { plus_w } else { 0.0 }, TAB_H - 6.0), Sense::click());
         note_control(ui, r, "new tab");
         if room {
-            let t = crate::kit::ease_to(ui, Id::new(("new tab hot", panel_id)), resp.hovered());
+            let t = crate::kit::ease_to(ui, Id::unique(("new tab hot", panel_id)), resp.hovered());
             crate::kit::wash(ui.painter(), r, crate::theme::corner(crate::theme::R_SM), t, resp.is_pointer_button_down_on(), &pal);
             paint_glyph(ui.painter(), Rect::from_center_size(r.center(), Vec2::splat(13.0)), Glyph::Plus, pal.text_dim.lerp_to_gamma(pal.text, t));
         }
@@ -1356,7 +1361,7 @@ impl App {
         let rad = crate::theme::corner(crate::theme::R_SM);
         let bg = ui.interact(rect, Id::new(("crumbs_bg", id)), Sense::click());
         // The empty part of the path takes you to typing one: a faint wash says so.
-        let bg_t = crate::kit::ease_to(ui, Id::new(("crumbs hot", id)), bg.hovered());
+        let bg_t = crate::kit::ease_to(ui, Id::unique(("crumbs hot", id)), bg.hovered());
         crate::kit::wash(ui.painter(), rect, rad, bg_t * 0.5, false, &pal);
         if bg.clicked() {
             self.actions.push(Action::FocusPanel(id));
@@ -1510,7 +1515,7 @@ impl App {
             let r = Rect::from_min_size(pos2(x, rect.top()), vec2(w, rect.height()));
             let resp = ui.interact(r, Id::new(("crumb", id, i)), Sense::click());
             // The segment whose dropdown is open lifts, with its chevron.
-            let seg_t = crate::kit::ease_to(ui, Id::new(("crumb hot", id, i)), resp.hovered() && !last && !dropped);
+            let seg_t = crate::kit::ease_to(ui, Id::unique(("crumb hot", id, i)), resp.hovered() && !last && !dropped);
             if dropped {
                 crate::kit::raised(ui.painter(), Rect::from_min_max(r.min, pos2(r.right() + sep_w, r.bottom())), rad, crate::kit::raised_fill(&pal), &pal);
             } else {
@@ -1599,7 +1604,7 @@ impl App {
         // A well like the path's beside it. While it has the keyboard it wears the focus
         // ring and the accent's halo, easing in; a filter in force keeps an accent rim.
         let rad = crate::theme::corner(crate::theme::R_MD);
-        let focus_t = crate::kit::ease_to(ui, Id::new(("filter focus", id)), had_focus);
+        let focus_t = crate::kit::ease_to(ui, Id::unique(("filter focus", id)), had_focus);
         if focus_t > 0.01 {
             crate::kit::glow(ui.painter(), frame_rect, rad, focus_t, &pal);
         }

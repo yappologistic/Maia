@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use egui::{Align2, CornerRadius, FontId, Id, Rect, Sense, Stroke, Ui, Vec2, pos2, vec2};
+use egui::{CornerRadius, FontId, Id, Rect, Sense, Stroke, Ui, Vec2, pos2, vec2};
 
 use crate::app::{Action, App, Drag};
 use crate::fsx;
@@ -309,12 +309,18 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
     if want || !filter.is_empty() || ui.memory(|m| m.has_focus(field_id)) {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            let w = ui.available_width() - 8.0;
+            ui.add_space(ROW_INSET);
+            let w = ui.available_width() - ROW_INSET;
             // As tall as its text needs at larger font sizes, 26 points at least.
             let row_h = (ui.text_style_height(&egui::TextStyle::Body) + 8.0).max(26.0).round();
             let (r, _) = ui.allocate_exact_size(vec2(w, row_h), Sense::hover());
-            ui.painter().rect(r, CornerRadius::same(6), pal.bg, Stroke::new(1.0, if filter.is_empty() { pal.border } else { pal.accent.gamma_multiply(0.7) }), egui::StrokeKind::Inside);
+            // A well, as the toolbar's filter is, with the focus ring while it is typed in.
+            crate::kit::well(ui.painter(), r, row_corner(), &pal);
+            if ui.memory(|m| m.has_focus(field_id)) || want {
+                crate::kit::focus_ring(ui.painter(), r, row_corner(), &pal);
+            } else if !filter.is_empty() {
+                ui.painter().rect_stroke(r, row_corner(), Stroke::new(1.0, pal.accent.gamma_multiply(0.7)), egui::StrokeKind::Inside);
+            }
             paint_glyph(ui.painter(), Rect::from_center_size(pos2(r.left() + 13.0, r.center().y), Vec2::splat(13.0)), Glyph::Search, if filter.is_empty() { pal.text_dim } else { pal.accent });
             // The text's capitals on the icon's middle (see `cap_nudge`).
             let nudge = crate::ui::cap_nudge(ui, &egui::TextStyle::Body.resolve(ui.style()));
@@ -352,14 +358,20 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
             let fs = (app.cfg.font_size * 0.8).round().max(10.0);
             let (r, resp) = ui.allocate_exact_size(vec2(width, (fs + 16.0).round()), Sense::click());
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::DisclosureTriangle, true, title));
-            let col = if resp.hovered() { pal.text } else { pal.text_dim };
+            // Dim at rest, a little letter-spaced, as a label is; up to the text's colour
+            // under the pointer, easing.
+            let t = crate::kit::ease_to(ui, Id::unique(("side fold hot", key)), resp.hovered());
+            let col = pal.text_dim.gamma_multiply(0.85).lerp_to_gamma(pal.text, t * 0.8);
             let text_y = r.bottom() - 6.0 - fs * 0.6;
             let open = crate::kit::slide(ui.ctx(), Id::new(("side fold", key)), if collapsed { 0.0 } else { 1.0 });
-            crate::kit::chevron(ui.painter(), pos2(r.left() + 17.0, text_y), open, col.gamma_multiply(if resp.hovered() { 1.0 } else { 0.8 }));
-            ui.painter().text(pos2(r.left() + 28.0, text_y), Align2::LEFT_CENTER, title, crate::theme::semibold(fs), col);
+            crate::kit::chevron(ui.painter(), pos2(r.left() + 17.0, text_y), open, col.gamma_multiply(0.8 + 0.2 * t));
+            let mut job = egui::text::LayoutJob::single_section(title.to_string(), egui::TextFormat { font_id: crate::theme::semibold(fs), color: col, extra_letter_spacing: 0.4, ..Default::default() });
+            job.wrap.max_rows = 1;
+            let g = ui.fonts_mut(|f| f.layout_job(job));
+            ui.painter().galley(pos2(r.left() + 28.0, text_y - g.size().y / 2.0), g, col);
             if let Some(n) = count {
-                let g = crate::listing::tabular(ui, &n.to_string(), FontId::proportional(fs), 60.0, crate::kit::words_of(pal.text_dim));
-                ui.painter().galley(pos2(r.right() - 14.0 - g.size().x, text_y - g.size().y / 2.0), g, pal.text_dim);
+                let g = crate::listing::tabular(ui, &n.to_string(), FontId::proportional(fs - 1.0), 60.0, pal.text_dim);
+                crate::kit::count_badge(ui.painter(), r.right() - ROW_INSET - 2.0, text_y, g, &pal);
             }
             if resp.clicked() {
                 if app.ud.sidebar_collapsed.iter().any(|s| s == key) {
@@ -383,13 +395,11 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
             // The place you are in wears a quiet pill, a step off the sidebar, so it is found
             // at a glance without competing with the list's selection.
             let here = path == current.as_path();
-            let r2 = r.shrink2(vec2(6.0, 1.0));
+            let r2 = pill(r);
             if here {
-                crate::kit::picked(ui.painter(), r2, 6, true, false, &pal);
-            } else if ctx_target.as_deref() == Some(path) {
-                ui.painter().rect_filled(r2, CornerRadius::same(6), crate::kit::lift(&pal));
-            } else if resp.hovered() {
-                ui.painter().rect_filled(r2, CornerRadius::same(6), crate::kit::touch(&pal));
+                here_mark(ui.painter(), r2, &pal);
+            } else {
+                row_face(ui, r2, resp.id.with("hot"), ctx_target.as_deref() == Some(path), resp.hovered(), &pal);
             }
             let ic = Rect::from_center_size(pos2(r.left() + 36.0, r.center().y), Vec2::splat(15.0));
             match glyph {
@@ -430,7 +440,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
         let drop_files = |ui: &Ui, drag: &Option<Drag>, actions: &mut Vec<Action>, resp: &egui::Response, path: &Path| {
             if let Some(Drag::Files { paths, .. }) = drag {
                 if pointer.map(|p| resp.rect.contains(p)).unwrap_or(false) && path.is_dir() {
-                    ui.painter().rect_stroke(resp.rect.shrink2(vec2(6.0, 1.0)), CornerRadius::same(6), Stroke::new(1.5, pal.accent), egui::StrokeKind::Inside);
+                    ui.painter().rect_stroke(pill(resp.rect), row_corner(), Stroke::new(1.5, pal.accent), egui::StrokeKind::Inside);
                     if released {
                         actions.push(Action::Drop { paths: paths.clone(), dest: path.to_path_buf(), copy: mods.ctrl, link: false });
                     }
@@ -491,7 +501,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
         // Dropping folders on the header bookmarks them.
         if let Some(Drag::Files { paths, .. }) = &app.drag {
             if pointer.map(|p| hdr.contains(p)).unwrap_or(false) {
-                ui.painter().rect_stroke(hdr.shrink2(vec2(6.0, 1.0)), CornerRadius::same(6), Stroke::new(1.5, pal.accent), egui::StrokeKind::Inside);
+                ui.painter().rect_stroke(pill(hdr), row_corner(), Stroke::new(1.5, pal.accent), egui::StrokeKind::Inside);
                 if released {
                     for p in paths.iter().filter(|p| p.is_dir()) {
                         actions.push(Action::BookmarkAdd(p.clone()));
@@ -545,12 +555,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                 let key = crate::ctxmenu::smart_key(id);
                 let (r, resp) = ui.allocate_exact_size(vec2(width, row_h), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
-                let r2 = r.shrink2(vec2(6.0, 1.0));
-                if ctx_target.as_deref() == Some(key.as_path()) {
-                    ui.painter().rect_filled(r2, CornerRadius::same(6), crate::kit::lift(&pal));
-                } else if resp.hovered() {
-                    ui.painter().rect_filled(r2, CornerRadius::same(6), crate::kit::touch(&pal));
-                }
+                row_face(ui, pill(r), resp.id.with("hot"), ctx_target.as_deref() == Some(key.as_path()), resp.hovered(), &pal);
                 let ic = Rect::from_center_size(pos2(r.left() + 36.0, r.center().y), Vec2::splat(15.0));
                 crate::theme::paint_symbol(ui.painter(), ic, "file-search", pal.text_dim);
                 let g = crate::listing::elided(ui, &name, font.clone(), r.width() - 62.0, pal.text);
@@ -587,12 +592,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                 let key = crate::ctxmenu::smart_key(id);
                 let (r, resp) = ui.allocate_exact_size(vec2(width, row_h), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &tag));
-                let r2 = r.shrink2(vec2(6.0, 1.0));
-                if ctx_target.as_deref() == Some(key.as_path()) {
-                    ui.painter().rect_filled(r2, CornerRadius::same(6), crate::kit::lift(&pal));
-                } else if resp.hovered() {
-                    ui.painter().rect_filled(r2, CornerRadius::same(6), crate::kit::touch(&pal));
-                }
+                row_face(ui, pill(r), resp.id.with("hot"), ctx_target.as_deref() == Some(key.as_path()), resp.hovered(), &pal);
                 let ic = Rect::from_center_size(pos2(r.left() + 36.0, r.center().y), Vec2::splat(15.0));
                 match crate::tags::color_of(&tag) {
                     Some(c) => {
@@ -646,15 +646,15 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                 let (r, resp) = ui.allocate_exact_size(vec2(width, if two { row_h + line2 } else { row_h }), Sense::click_and_drag());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
                 let sel = *p == current;
-                let r2 = r.shrink2(vec2(6.0, 1.0));
+                let r2 = pill(r);
                 // Hover covers the eject button too (it sits on top of the row).
                 let row_hover = ui.rect_contains_pointer(r) && app.drag.is_none();
                 let ctx_on = ctx_target.as_deref() == Some(p.as_path());
                 let face = if sel || ctx_on { crate::kit::lift(&pal) } else if row_hover { crate::kit::touch(&pal) } else { pal.sidebar };
                 if sel {
-                    crate::kit::picked(ui.painter(), r2, 6, true, false, &pal);
-                } else if face != pal.sidebar {
-                    ui.painter().rect_filled(r2, CornerRadius::same(6), face);
+                    here_mark(ui.painter(), r2, &pal);
+                } else {
+                    row_face(ui, r2, resp.id.with("hot"), ctx_on, row_hover, &pal);
                 }
                 // On two lines, the name moves up so they don't touch.
                 let ic = Rect::from_center_size(pos2(r.left() + 36.0, if two { r.top() + row_h / 2.0 - 1.0 } else { r.center().y }), Vec2::splat(15.0));
@@ -692,15 +692,22 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                     if fits {
                         ui.painter().galley(pos2(r.right() - 14.0 - g.size().x, cy2 - g.size().y / 2.0), g, pal.text_dim);
                     }
-                    let bar = Rect::from_min_max(pos2(r.left() + 52.0, cy2 - 1.5), pos2(right, cy2 + 1.5));
-                    let track = face.lerp_to_gamma(pal.text, if pal.dark { 0.1 } else { 0.09 });
-                    ui.painter().rect_filled(bar, CornerRadius::same(2), track);
+                    // A slim rounded track sunk into the row, its fill the accent while there
+                    // is room, amber, then red as the drive fills.
+                    let bar = Rect::from_min_max(pos2(r.left() + 52.0, (cy2 - 2.0).round()), pos2(right, (cy2 - 2.0).round() + 4.0));
+                    let ends = if crate::kit::round() { CornerRadius::same(2) } else { CornerRadius::ZERO };
+                    let track = if pal.strong { pal.bg } else { pal.text.gamma_multiply(if pal.dark { 0.09 } else { 0.08 }) };
+                    ui.painter().rect_filled(bar, ends, track);
+                    if pal.strong {
+                        ui.painter().rect_stroke(bar, ends, Stroke::new(1.0, pal.border), egui::StrokeKind::Outside);
+                    }
                     let col = match fullness(frac) {
                         Some(true) => pal.danger,
                         Some(false) => pal.warn,
-                        None => pal.text_dim.gamma_multiply(if sel { 0.8 } else { 0.6 }),
+                        None if pal.strong => pal.text,
+                        None => pal.accent.gamma_multiply(if sel { 0.95 } else { 0.75 }),
                     };
-                    ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2((bar.width() * frac.min(1.0)).max(3.0), bar.height())), CornerRadius::same(2), col);
+                    ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2((bar.width() * frac.min(1.0)).max(4.0), bar.height())), ends, col);
                 }
                 if busy {
                     crate::ui::spinner(ui.painter(), btn.center(), 5.5, pal.accent, ui.input(|i| i.time));
@@ -709,9 +716,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                     // Shown while the row is hovered (or the button itself is).
                     let b = ui.interact(btn, Id::new(("eject", &d.dev)), Sense::click());
                     if row_hover {
-                        if b.hovered() {
-                            ui.painter().rect_filled(btn, CornerRadius::same(10), crate::kit::lift(&pal));
-                        }
+                        crate::kit::wash(ui.painter(), btn, crate::theme::corner(crate::theme::R_SM), if b.hovered() { 1.0 } else { 0.0 }, b.is_pointer_button_down_on(), &pal);
                         paint_glyph(ui.painter(), btn.shrink(4.0), Glyph::Eject, if b.hovered() { pal.text } else { pal.text_dim });
                         crate::ui::note_control(ui, btn, if op == crate::drives::Op::Eject { "eject button" } else { "unmount button" });
                     }
@@ -740,11 +745,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                 let (r, resp) = ui.allocate_exact_size(vec2(width, row_h), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
                 let row_hover = ui.rect_contains_pointer(r) && app.drag.is_none();
-                if ctx_target.is_some() && ctx_target == place.path {
-                    ui.painter().rect_filled(r.shrink2(vec2(6.0, 1.0)), CornerRadius::same(6), crate::kit::lift(&pal));
-                } else if row_hover {
-                    ui.painter().rect_filled(r.shrink2(vec2(6.0, 1.0)), CornerRadius::same(6), crate::kit::touch(&pal));
-                }
+                row_face(ui, pill(r), resp.id.with("hot"), ctx_target.is_some() && ctx_target == place.path, row_hover, &pal);
                 let ic = Rect::from_center_size(pos2(r.left() + 36.0, r.center().y), Vec2::splat(15.0));
                 let busy = app.connecting(&place.uri);
                 let col = if place.mounted { pal.text_dim } else { pal.text_dim.gamma_multiply(0.6) };
@@ -760,9 +761,7 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
                 } else if place.mounted {
                     let b = ui.interact(btn, Id::new(("disconnect", &place.uri)), Sense::click());
                     if row_hover {
-                        if b.hovered() {
-                            ui.painter().rect_filled(btn, CornerRadius::same(10), crate::kit::lift(&pal));
-                        }
+                        crate::kit::wash(ui.painter(), btn, crate::theme::corner(crate::theme::R_SM), if b.hovered() { 1.0 } else { 0.0 }, b.is_pointer_button_down_on(), &pal);
                         paint_glyph(ui.painter(), btn.shrink(4.0), Glyph::Eject, if b.hovered() { pal.text } else { pal.text_dim });
                         crate::ui::note_control(ui, btn, "disconnect button");
                     }
@@ -820,4 +819,42 @@ pub fn sidebar(app: &mut App, ui: &mut Ui) {
     ui.set_clip_rect(outer_clip);
     crate::kit::card_edge(ui.painter(), card, rad, 0.0, &pal);
     app.actions.extend(actions);
+}
+
+/// A row's pill: `r` brought in from the card's sides by the same eight points every row
+/// keeps, its corners the rows' on the scale.
+fn pill(r: Rect) -> Rect {
+    r.shrink2(vec2(ROW_INSET, 1.0))
+}
+
+/// Between the card's sides and a row's pill.
+const ROW_INSET: f32 = 8.0;
+
+fn row_corner() -> CornerRadius {
+    crate::theme::corner(crate::theme::R_SM)
+}
+
+/// The place the active panel shows: a pill lifted and tinted with the accent's glow, and
+/// the accent's short bar at its left end. Calm, but found at a glance. A high-contrast
+/// theme's is its selection, solid.
+fn here_mark(p: &egui::Painter, r: Rect, pal: &crate::theme::Palette) {
+    let rad = row_corner();
+    p.rect_filled(r, rad, crate::kit::lift(pal));
+    if pal.strong {
+        return;
+    }
+    p.rect_filled(r, rad, pal.glow.gamma_multiply(0.7));
+    let h = (r.height() - 14.0).clamp(8.0, 16.0);
+    p.rect_filled(Rect::from_center_size(pos2(r.left() + 3.5, r.center().y), vec2(3.0, h)), CornerRadius::same(2), pal.accent);
+}
+
+/// A row's hover and context-menu faces under its contents: the menu's lift, or a wash
+/// easing in under the pointer.
+fn row_face(ui: &Ui, r: Rect, id: Id, ctx_on: bool, hot: bool, pal: &crate::theme::Palette) {
+    let t = crate::kit::ease_to(ui, id, hot && !ctx_on);
+    if ctx_on {
+        ui.painter().rect_filled(r, row_corner(), crate::kit::lift(pal));
+    } else {
+        crate::kit::wash(ui.painter(), r, row_corner(), t, false, pal);
+    }
 }
