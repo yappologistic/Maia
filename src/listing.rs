@@ -1416,9 +1416,11 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
     }
     let total_w: f32 = cols.iter().map(|c| c.1).sum::<f32>() + pad * 2.0;
     let body = Rect::from_min_max(pos2(rect.left(), rect.top() + air + header_h), rect.max);
-    let content_w = total_w.max(body.width());
-    // Name column stretches to fill spare width.
-    let spare = (body.width() - total_w).max(0.0);
+    // Name column stretches to fill spare width, and gives way down to 160 points in a
+    // narrow card before the columns run past the card's right edge.
+    let name_w = cols.iter().find(|(c, _)| *c == Column::Name).map_or(300.0, |c| c.1);
+    let spare = (body.width() - total_w).max(-(name_w - 160.0).max(0.0));
+    let content_w = (total_w + spare).max(body.width());
     let col_w = |c: Column, w: f32| if c == Column::Name { w + spare } else { w };
     let computer = tab::is_computer(&t.path);
     let tree = t.tree_active();
@@ -1445,7 +1447,7 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
     }
     let mut body_ui = ui.new_child(UiBuilder::new().max_rect(body));
     card_scrollbars(&mut body_ui);
-    let hover_id = Id::new(("row_hover", t.id));
+    let hover_id = Id::NULL.with(("row_hover", t.id));
     let fade = HoverFade::load(ui.ctx(), hover_id);
     let mut hovered_now = None;
     let rows = std::mem::take(&mut t.rows);
@@ -1908,7 +1910,7 @@ fn grid(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query, m
     }
     let mut body_ui = ui.new_child(UiBuilder::new().max_rect(body));
     card_scrollbars(&mut body_ui);
-    let hover_id = Id::new(("cell_hover", t.id));
+    let hover_id = Id::NULL.with(("cell_hover", t.id));
     let fade = HoverFade::load(ui.ctx(), hover_id);
     let mut hovered_now = None;
     // Cloned: item handlers mutate selection using `t.view`.
