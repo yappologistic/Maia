@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use egui::{self, Align2, CornerRadius, FontId, Id, Key, Modifiers, Pos2, Rect, Sense, Stroke, Vec2, pos2, vec2};
+use egui::{self, Align2, FontId, Id, Key, Modifiers, Pos2, Rect, Sense, Stroke, Vec2, pos2, vec2};
 
 use crate::app::{Action, App};
 use crate::commands::Cmd;
@@ -743,7 +743,7 @@ pub fn draw(app: &mut App, ctx: &egui::Context, st: &mut CtxState) -> bool {
     let mut bar_click: Option<Cmd> = None;
     let moved = ctx.input(|i| i.pointer.delta() != Vec2::ZERO);
     let resp = egui::Area::new(Id::new("ctxmenu")).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(ctx, |ui| {
-        crate::popups::come_in(ui, crate::popups::entrance(ui.ctx(), Id::new("ctxmenu")));
+        crate::popups::come_in(ui, crate::popups::entrance(ui.ctx(), ui.layer_id().id));
         crate::frost::behind(ui, crate::theme::R_LG);
         crate::popups::float(ui, crate::popups::popup_frame(&pal).inner_margin(egui::Margin::same(5)), crate::theme::R_LG, crate::theme::Elevation::Menu, &pal, |ui| {
                 ui.set_width(w - 10.0);

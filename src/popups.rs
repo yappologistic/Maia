@@ -1154,7 +1154,7 @@ pub(crate) fn centered_footer<R, F>(ctx: &egui::Context, id: &str, width: f32, p
         .order(egui::Order::Foreground)
         .fixed_pos(pos2((screen.center().x - w / 2.0).round(), screen.top() + top))
         .show(ctx, |ui| {
-            let t = entrance(ui.ctx(), Id::new(id));
+            let t = entrance(ui.ctx(), ui.layer_id().id);
             come_in(ui, t);
             veil(ui, t, pal);
             crate::frost::behind(ui, DIALOG_RADIUS);
@@ -1192,7 +1192,7 @@ pub(crate) fn centered_top<R>(ctx: &egui::Context, id: &str, width: f32, top: f3
         .order(egui::Order::Foreground)
         .fixed_pos(pos2((screen.center().x - w / 2.0).round(), screen.top() + top))
         .show(ctx, |ui| {
-            let t = entrance(ui.ctx(), Id::new(id));
+            let t = entrance(ui.ctx(), ui.layer_id().id);
             come_in(ui, t);
             veil(ui, t, pal);
             crate::frost::behind(ui, DIALOG_RADIUS);
@@ -1223,7 +1223,7 @@ pub(crate) fn anchored_from<R>(ctx: &egui::Context, id: &str, pos: Pos2, pivot: 
     // remembers its last size and would cut a longer menu short (see ctxmenu.rs).
     let room = if pivot == Align2::LEFT_BOTTOM { pos.y - screen.top() - 26.0 } else { screen.height() - 16.0 - 10.0 }.max(60.0);
     let r = egui::Area::new(Id::new(id)).order(egui::Order::Foreground).pivot(pivot).fixed_pos(pos2(x, pos.y)).constrain_to(screen.shrink(6.0)).show(ctx, |ui| {
-        come_in(ui, entrance(ui.ctx(), Id::new(id)));
+        come_in(ui, entrance(ui.ctx(), ui.layer_id().id));
         crate::frost::behind(ui, theme::R_LG);
         float(ui, popup_frame(pal).inner_margin(egui::Margin::same(5)), theme::R_LG, theme::Elevation::Menu, pal, |ui| {
                 ui.set_width(width - 10.0);
@@ -2340,7 +2340,7 @@ fn palette(app: &mut App, ctx: &egui::Context, st: &mut PaletteState) -> bool {
     let pos = pos2((screen.center().x - w / 2.0).round(), screen.top() + top);
     note_layer(Id::new("palette"));
     let area = egui::Area::new(Id::new("palette")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
-        let t = entrance(ui.ctx(), Id::new("palette"));
+        let t = entrance(ui.ctx(), ui.layer_id().id);
         come_in(ui, t);
         veil(ui, t, &pal);
         crate::frost::behind(ui, theme::R_LG);
@@ -3716,7 +3716,7 @@ fn options(app: &mut App, ctx: &egui::Context, st: &mut OptState) -> bool {
     let pos = pos2((screen.center().x - w / 2.0).round(), (screen.top() + ((screen.height() - h) / 2.0).clamp(12.0, 70.0)).round());
     note_layer(Id::new("options"));
     let area = egui::Area::new(Id::new("options")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
-        let t = entrance(ui.ctx(), Id::new("options"));
+        let t = entrance(ui.ctx(), ui.layer_id().id);
         come_in(ui, t);
         veil(ui, t, &pal);
         crate::frost::behind(ui, DIALOG_RADIUS);
@@ -5115,7 +5115,7 @@ fn themes(app: &mut App, ctx: &egui::Context) -> bool {
     let pos = pos2((screen.center().x - w / 2.0).round(), (screen.top() + ((screen.height() - h) / 2.0).clamp(12.0, 70.0)).round());
     note_layer(Id::new("themes"));
     let area = egui::Area::new(Id::new("themes")).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
-        let t = entrance(ui.ctx(), Id::new("themes"));
+        let t = entrance(ui.ctx(), ui.layer_id().id);
         come_in(ui, t);
         veil(ui, t, &pal);
         crate::frost::behind(ui, DIALOG_RADIUS);
