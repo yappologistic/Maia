@@ -666,7 +666,7 @@ pub fn listing(ui: &mut Ui, rect: Rect, panel: &mut Panel, env: &mut Env) {
     }
     let hovering_files = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
     if hovering_files && hover {
-        ui.painter().rect_stroke(rect.shrink(2.0), CornerRadius::same(6), Stroke::new(2.0, env.pal.accent), StrokeKind::Inside);
+        ui.painter().rect_stroke(rect.shrink(2.0), theme::corner(theme::R_LG - 2), Stroke::new(2.0, env.pal.accent), StrokeKind::Inside);
     }
 }
 
@@ -737,7 +737,7 @@ fn empty_state(ui: &Ui, rect: Rect, glyph: theme::Glyph, title: &str, hint: &[(S
     let mut y = (c.y - total / 2.0).round();
     if tall {
         let wr = Rect::from_center_size(pos2(c.x, y + well / 2.0), Vec2::splat(well));
-        let round = egui::CornerRadius::same((well / 2.0) as u8);
+        let round = if crate::kit::round() { egui::CornerRadius::same((well / 2.0) as u8) } else { CornerRadius::ZERO };
         let face = if pal.strong { pal.panel } else { theme::over(pal.text.gamma_multiply(if pal.dark { 0.05 } else { 0.035 }), pal.panel) };
         crate::kit::card_surface(p, wr, round, face, theme::Elevation::Flat, pal);
         if pal.glow.a() > 0 {
@@ -1645,9 +1645,9 @@ fn details(ui: &mut Ui, rect: Rect, t: &mut Tab, env: &mut Env, q: &fuzzy::Query
                                 if !label.is_empty() {
                                     // Bar with the percentage centered on it.
                                     let bar = Rect::from_min_max(pos2(inner.left(), cell.center().y - 7.0), pos2(inner.right(), cell.center().y + 7.0));
-                                    ui.painter().rect_filled(bar, CornerRadius::same(4), pal.raised);
+                                    ui.painter().rect_filled(bar, theme::corner(theme::R_XS), pal.raised);
                                     let col = if computer && frac > 0.9 { pal.danger } else if computer && frac > 0.75 { pal.warn } else { pal.accent };
-                                    ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac.clamp(0.0, 1.0), bar.height())), CornerRadius::same(4), col.gamma_multiply(0.75));
+                                    ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac.clamp(0.0, 1.0), bar.height())), theme::corner(theme::R_XS), col.gamma_multiply(0.75));
                                     ui.painter().text(bar.center(), Align2::CENTER_CENTER, label, FontId::proportional(env.cfg.font_size - 2.5), pal.text);
                                 }
                             }
