@@ -4006,7 +4006,7 @@ pub fn apply(ctx: &egui::Context, p: &Palette, font_size: f32, spacing: f32, ani
     // hairline, which brightens under the pointer and turns to the accent while typing
     // goes there (egui strokes a focused field with the selection's stroke).
     if !p.strong {
-        v.text_edit_bg_color = Some(p.card().lerp_to_gamma(p.canvas, if p.dark { 0.45 } else { 0.3 }));
+        v.text_edit_bg_color = Some(crate::kit::well_fill_on(p.card(), p));
         v.widgets.inactive.bg_stroke = Stroke::new(1.0, p.hairline);
         v.widgets.hovered.bg_stroke = Stroke::new(1.0, p.hairline_active());
     }
