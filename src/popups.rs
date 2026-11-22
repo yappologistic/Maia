@@ -779,17 +779,17 @@ pub(crate) fn step(sel: &mut usize, n: usize, k: &Keys, skip: impl Fn(usize) -> 
 /// The space inside a dialog's edge, and its corners: one measure for every dialog, so
 /// titles, lists and buttons line up the same way in each.
 pub(crate) const DIALOG_PAD: f32 = 20.0;
-pub(crate) const DIALOG_RADIUS: u8 = 12;
+pub(crate) const DIALOG_RADIUS: u8 = theme::R_XL;
 
-/// A menu's or the palette's frame. Its shadow is lighter on a light theme, where the
-/// dark one's weight read as a smudge.
+/// A menu's or the palette's frame, at the menus' elevation (`Palette::shadows`: lighter
+/// on a light theme, where the dark one's weight read as a smudge).
 pub(crate) fn popup_frame(pal: &Palette) -> egui::Frame {
     egui::Frame::NONE
         .fill(crate::frost::fill(pal.raised))
         .stroke(Stroke::new(1.0, pal.border))
-        .corner_radius(CornerRadius::same(10))
+        .corner_radius(CornerRadius::same(theme::R_LG))
         .inner_margin(egui::Margin::same(8))
-        .shadow(egui::epaint::Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(if pal.dark { 90 } else { 34 }) })
+        .shadow(pal.shadows(theme::Elevation::Menu)[0])
 }
 
 /// A dialog's frame: `DIALOG_PAD` inside, rounder corners and a deeper, softer shadow
@@ -798,7 +798,7 @@ pub(crate) fn dialog_frame(pal: &Palette) -> egui::Frame {
     popup_frame(pal)
         .corner_radius(CornerRadius::same(DIALOG_RADIUS))
         .inner_margin(egui::Margin::same(DIALOG_PAD as i8))
-        .shadow(egui::epaint::Shadow { offset: [0, 10], blur: 32, spread: 0, color: Color32::from_black_alpha(if pal.dark { 80 } else { 30 }) })
+        .shadow(pal.shadows(theme::Elevation::Dialog)[0])
 }
 
 /// A path with the home folder written as ~.
@@ -5256,7 +5256,7 @@ fn confirm(app: &mut App, ctx: &egui::Context, msg: &str, ok_label: &str, on_ok:
     let mut cancel = ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
     // Dim the background for destructive confirmations.
     let screen = ctx.content_rect();
-    ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, Id::new("dim"))).rect_filled(screen, CornerRadius::ZERO, Color32::from_black_alpha(90));
+    crate::kit::scrim(&ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, Id::new("dim"))), screen, &pal);
     centered(ctx, "confirm", 440.0, &pal, |ui| {
         ui.add_space(4.0);
         dialog_title(ui, msg, None, &pal);
