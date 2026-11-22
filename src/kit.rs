@@ -214,9 +214,9 @@ pub fn keycap(p: &egui::Painter, r: Rect, text: &str, font: FontId, down: bool, 
     let shine = if pal.dark { pal.text.gamma_multiply(0.12) } else { Color32::from_white_alpha(200) };
     let r = if down { r.translate(vec2(0.0, 1.0)) } else { r };
     if !down {
-        p.rect_filled(r.translate(vec2(0.0, 1.0)), CornerRadius::same(4), shade);
+        p.rect_filled(r.translate(vec2(0.0, 1.0)), CornerRadius::same(crate::theme::R_XS), shade);
     }
-    p.rect(r, CornerRadius::same(4), if down { face.lerp_to_gamma(pal.text, 0.06) } else { face }, Stroke::new(1.0, rim), StrokeKind::Inside);
+    p.rect(r, CornerRadius::same(crate::theme::R_XS), if down { face.lerp_to_gamma(pal.text, 0.06) } else { face }, Stroke::new(1.0, rim), StrokeKind::Inside);
     p.line_segment([pos2(r.left() + 3.0, r.top() + 1.5), pos2(r.right() - 3.0, r.top() + 1.5)], Stroke::new(1.0, shine));
     let c = if down { pal.text } else { pal.text_dim };
     p.text(pos2(r.center().x, r.center().y - 0.5), Align2::CENTER_CENTER, text, font, c);
@@ -475,7 +475,10 @@ pub fn button_in(ui: &mut Ui, label: &str, h: f32, news: bool, pal: &Palette) ->
     let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 18.0 + dot, h), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     let hot = ui.is_enabled() && (resp.hovered() || resp.has_focus());
-    ui.painter().rect(r, radius(r.height(), round()), if hot { lift(pal) } else { pal.card() }, Stroke::new(1.0, if resp.has_focus() { pal.accent.gamma_multiply(0.7) } else { pal.card_line() }), StrokeKind::Inside);
+    ui.painter().rect(r, radius(r.height(), round()), if hot { lift(pal) } else { pal.card() }, Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+    if resp.has_focus() {
+        focus_ring(ui.painter(), r, radius(r.height(), round()), pal);
+    }
     if news {
         ui.painter().circle_filled(pos2(r.left() + 12.0, r.center().y), 3.0, pal.accent);
     }
@@ -687,4 +690,123 @@ pub fn cursor_ring(p: &egui::Painter, r: Rect, radius: u8, pal: &Palette) {
 /// back from `c`.
 pub fn words_of(c: Color32) -> Color32 {
     c.gamma_multiply(0.62)
+}
+
+// ---------------------------------------------------------------- surfaces
+//
+// The window's cards, and anything else made of the same stuff (see "surfaces" in
+// theme.rs for the tokens). A card is painted in two halves around what it holds:
+// `card_surface` first (its shadows and fill), `card_edge` last (its rim and the light on
+// its top), so rows, stripes and pictures that run to the card's side never cover its
+// edge. `card` paints both at once for a card whose contents keep clear of the edge.
+// Corners come from `theme::corner`, so all of this squares off with Round corners off,
+// and a high-contrast theme gets a flat card with a solid border and no light or halo.
+
+/// A card's body: the shadows `e` casts (none for `Flat`), then `fill` in `rad` corners.
+/// Paint it before what the card holds, and `card_edge` after.
+pub fn card_surface(p: &egui::Painter, r: Rect, rad: CornerRadius, fill: Color32, e: crate::theme::Elevation, pal: &Palette) {
+    for s in pal.shadows(e) {
+        if s.color.a() > 0 {
+            p.add(s.as_shape(r, rad));
+        }
+    }
+    p.rect_filled(r, rad, fill);
+}
+
+/// A card's rim: the hairline just inside its edge and the lit line along its top. `active`
+/// (0 to 1, eased by the caller) brings the rim up to `Palette::hairline_active`: the
+/// panel with the keyboard. Paint it over what the card holds.
+pub fn card_edge(p: &egui::Painter, r: Rect, rad: CornerRadius, active: f32, pal: &Palette) {
+    let t = active.clamp(0.0, 1.0);
+    if pal.strong {
+        // Solid, and two points wide on the active card: no tint to tell them apart by.
+        let w = if t > 0.5 { 2.0 } else { 1.0 };
+        p.rect_stroke(r, rad, Stroke::new(w, if t > 0.5 { pal.hairline_active() } else { pal.hairline }), StrokeKind::Inside);
+        return;
+    }
+    lit_edge(p, r, rad, pal.lit);
+    p.rect_stroke(r, rad, Stroke::new(1.0, pal.hairline.lerp_to_gamma(pal.hairline_active(), t)), StrokeKind::Inside);
+}
+
+/// A whole card at `e` in one go: `card_surface` and `card_edge`, at rest. For a card whose
+/// contents stay clear of its edge (a bar of controls, a strip of chips).
+pub fn card(p: &egui::Painter, r: Rect, rad: CornerRadius, fill: Color32, e: crate::theme::Elevation, pal: &Palette) {
+    card_surface(p, r, rad, fill, e, pal);
+    card_edge(p, r, rad, 0.0, pal);
+}
+
+/// The line of light one point inside `r`'s top, fading out before the corners so it
+/// follows their curve instead of ending in a stub. A small mesh, no texture.
+fn lit_edge(p: &egui::Painter, r: Rect, rad: CornerRadius, col: Color32) {
+    if col.a() == 0 || r.width() < 8.0 || r.height() < 4.0 {
+        return;
+    }
+    let (x0, x1) = (r.left() + rad.nw as f32 * 0.5, r.right() - rad.ne as f32 * 0.5);
+    let fade = ((x1 - x0) * 0.25).min(40.0);
+    let (y0, y1) = (r.top() + 1.0, r.top() + 2.0);
+    let mut m = egui::Mesh::default();
+    for (x, c) in [(x0, Color32::TRANSPARENT), (x0 + fade, col), (x1 - fade, col), (x1, Color32::TRANSPARENT)] {
+        m.colored_vertex(pos2(x, y0), c);
+        m.colored_vertex(pos2(x, y1), c);
+    }
+    for k in 0..3u32 {
+        let i = 2 * k;
+        m.add_triangle(i, i + 1, i + 2);
+        m.add_triangle(i + 1, i + 3, i + 2);
+    }
+    p.add(Shape::mesh(m));
+}
+
+/// The accent's soft halo round `r`, `t` strong (0 to 1): the panel with the keyboard.
+/// Paint it before the card's fill, which hides its inner half. Nothing on a
+/// high-contrast theme.
+pub fn glow(p: &egui::Painter, r: Rect, rad: CornerRadius, t: f32, pal: &Palette) {
+    let t = t.clamp(0.0, 1.0);
+    if pal.glow.a() == 0 || t <= 0.0 {
+        return;
+    }
+    p.add(egui::epaint::Shadow { offset: [0, 0], blur: 18, spread: 1, color: pal.glow.gamma_multiply(t) }.as_shape(r, rad));
+}
+
+/// A focused control's ring, drawn just outside `r`: a one-point line in the accent and,
+/// beyond it, its soft halo. A high-contrast theme's is the accent two points wide.
+pub fn focus_ring(p: &egui::Painter, r: Rect, rad: CornerRadius, pal: &Palette) {
+    if pal.strong {
+        p.rect_stroke(r, rad, Stroke::new(2.0, pal.accent), StrokeKind::Outside);
+        return;
+    }
+    p.add(egui::epaint::Shadow { offset: [0, 0], blur: 8, spread: 1, color: pal.glow }.as_shape(r, rad));
+    p.rect_stroke(r, rad, Stroke::new(1.0, pal.accent.gamma_multiply(0.75)), StrokeKind::Outside);
+}
+
+/// The veil over `r` behind a dialog (`Palette::scrim`).
+pub fn scrim(p: &egui::Painter, r: Rect, pal: &Palette) {
+    p.rect_filled(r, CornerRadius::ZERO, pal.scrim());
+}
+
+/// Rounds off what was painted square inside a card: fills the outside of each of `r`'s
+/// `rad` corners with `outside`, the opaque colour round the card. egui clips only to
+/// rectangles, so a view that paints its own square background (a preview, a diff) is
+/// painted first and its corners taken back with this; then the card's edge goes on top.
+pub fn mask_corners(p: &egui::Painter, r: Rect, rad: CornerRadius, outside: Color32) {
+    let most = rad.nw.max(rad.ne).max(rad.sw).max(rad.se) as f32;
+    if most <= 0.0 {
+        return;
+    }
+    // A stroke outside the rounded rect, cut to the rect's own bounds, is exactly the four
+    // corners (with egui's smoothing on the curve); it reaches the far corner at 0.42 R.
+    let p = p.with_clip_rect(r.intersect(p.clip_rect()));
+    p.rect_stroke(r, rad, Stroke::new(most * 0.5 + 1.0, outside), StrokeKind::Outside);
+}
+
+static GUTTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x40c0_0000);
+
+/// The gutter between the window's cards this frame (`theme::gutter` of the window's
+/// width), set once a frame by the shell, read by whatever lays out a card of its own.
+pub fn gutter() -> f32 {
+    f32::from_bits(GUTTER.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+pub fn set_gutter(g: f32) {
+    GUTTER.store(g.to_bits(), std::sync::atomic::Ordering::Relaxed);
 }

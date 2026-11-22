@@ -1,6 +1,6 @@
 //! Colors, fonts and vector icons.
 
-use egui::{self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Painter, Rect, Shape, Stroke, StrokeKind, Vec2, pos2, vec2};
+use egui::{self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, Painter, Rect, Shape, Stroke, StrokeKind, Vec2, epaint::Shadow, pos2, vec2};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -696,8 +696,24 @@ pub struct Palette {
     pub text_dim: Color32,
     pub border: Color32,
     pub danger: Color32,
-    /// Title strip behind the tabs (the active tab takes the content color).
+    /// A bar a step off the sidebar: the shelf's and the file picker's cards.
     pub chrome: Color32,
+    /// What the window's cards stand on, and what shows in the gutters between them: a
+    /// step darker than the darkest card on a dark theme, a step greyer on a light one.
+    /// The title strip with the tabs is drawn straight on it.
+    pub canvas: Color32,
+    /// A card's edge: the text's colour at a low alpha (translucent, premultiplied), so it
+    /// reads on whatever fill it lines. Not `border`, which is for controls and rules
+    /// inside a card; a card is parted by light, not by a line drawn round it.
+    pub hairline: Color32,
+    /// The light along a card's top edge, one pixel inside it: barely there, it is what
+    /// makes a card read as standing up from the canvas. Transparent on a high-contrast
+    /// theme.
+    pub lit: Color32,
+    /// The accent as a soft halo (translucent): the panel with the keyboard, a focused
+    /// field. Single-digit to low-teens percent, never more. Transparent on a
+    /// high-contrast theme, which marks focus with a solid edge instead.
+    pub glow: Color32,
     /// Alternate (striped) rows.
     pub alt: Color32,
     /// Hovered list rows: a tint of the selection color.
@@ -752,16 +768,119 @@ impl Palette {
     pub fn on_sel_dim(&self) -> Color32 {
         self.on_sel().lerp_to_gamma(self.selected, 0.3)
     }
+
+    /// The edge of the card with the keyboard: the rim a little brighter and tinted with
+    /// the accent, a step short of a coloured line. A high-contrast theme's is the accent
+    /// itself (drawn two points wide by `kit::card_edge`).
+    pub fn hairline_active(&self) -> Color32 {
+        if self.strong {
+            return self.accent;
+        }
+        over(self.accent.gamma_multiply(if self.dark { 0.40 } else { 0.42 }), self.text.gamma_multiply(if self.dark { 0.10 } else { 0.12 }))
+    }
+
+    /// The veil laid over the window behind a dialog, so the dialog is what is read.
+    pub fn scrim(&self) -> Color32 {
+        Color32::from_black_alpha(if self.dark { 90 } else { 56 })
+    }
+
+    /// What something at `e` casts on what is under it: a tight contact shadow where it
+    /// touches and a wide, faint ambient one around it (in that order, the ambient one
+    /// painted first). Lighter on a light theme, where the dark one's weight reads as a
+    /// smudge; none at all on a high-contrast theme or for `Flat`.
+    pub fn shadows(&self, e: Elevation) -> [Shadow; 2] {
+        let none = Shadow::NONE;
+        if self.strong {
+            return [none, none];
+        }
+        // (offset, blur, alpha on a dark theme) for the ambient and the contact shadow.
+        let ((ao, ab, aa), (co, cb, ca)) = match e {
+            Elevation::Flat => return [none, none],
+            Elevation::Card => ((4, 16, 60), (1, 2, 70)),
+            Elevation::Menu => ((8, 26, 96), (2, 5, 60)),
+            Elevation::Dialog => ((14, 40, 110), (3, 8, 64)),
+        };
+        let k = if self.dark { 1.0 } else { 0.36 };
+        let a = |x: u8| Color32::from_black_alpha((x as f32 * k).round() as u8);
+        [Shadow { offset: [0, ao], blur: ab, spread: 0, color: a(aa) }, Shadow { offset: [0, co], blur: cb, spread: 0, color: a(ca) }]
+    }
+}
+
+/// `top` composited over `bottom`, both premultiplied: a tint laid on a translucent colour
+/// stays translucent.
+pub fn over(top: Color32, bottom: Color32) -> Color32 {
+    let k = 1.0 - top.a() as f32 / 255.0;
+    let f = |t: u8, b: u8| (t as f32 + b as f32 * k).round().min(255.0) as u8;
+    Color32::from_rgba_premultiplied(f(top.r(), bottom.r()), f(top.g(), bottom.g()), f(top.b(), bottom.b()), f(top.a(), bottom.a()))
+}
+
+// ---------------------------------------------------------------- surfaces
+//
+// The window is a canvas (`Palette::canvas`) with cards standing on it, a gutter apart:
+// the sidebar, each panel, the terminal, the shelf, the picker's bar. The title strip
+// with the tabs sits on the canvas itself. A card is its fill, a hairline rim, a lit top
+// edge and, where it floats over something, a shadow (`kit::card` paints all of that).
+// Depth comes from these layers and their light, never from thick borders. Corners are
+// taken from one scale, and all square off with Round corners off (`corner`).
+
+/// How far a surface stands off what is under it: what shadow it casts
+/// (`Palette::shadows`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Elevation {
+    /// On the same plane: a card inside a card (the inspector's well), a group in a bar.
+    Flat,
+    /// The window's cards on the canvas.
+    Card,
+    /// Menus, the palette, popovers, tooltips that hold controls.
+    Menu,
+    /// Dialogs, which stand furthest off the window.
+    Dialog,
+}
+
+/// The corner scale. Keycaps, badges and the smallest chips.
+pub const R_XS: u8 = 4;
+/// Rows, buttons, fields, the pills in a bar.
+pub const R_SM: u8 = 6;
+/// A card inside a card (the inspector's well), menus.
+pub const R_MD: u8 = 8;
+/// The window's cards, popovers and the palette.
+pub const R_LG: u8 = 10;
+/// Dialogs.
+pub const R_XL: u8 = 14;
+
+/// `r` (from the scale above) on all four corners, or square with Round corners off.
+pub fn corner(r: u8) -> CornerRadius {
+    if crate::kit::round() { CornerRadius::same(r) } else { CornerRadius::ZERO }
+}
+
+/// The gutter between the window's cards and round its edge, in points, for a window
+/// `width` wide: six, and four in a narrow window, where every point is the list's.
+pub fn gutter(width: f32) -> f32 {
+    if width < 900.0 { 4.0 } else { 6.0 }
 }
 
 pub fn palette(t: ThemeName) -> Palette {
     let mut p = base_palette(t);
     let mix = |a: Color32, b: Color32, t: f32| Color32::from_rgb((a.r() as f32 + (b.r() as f32 - a.r() as f32) * t) as u8, (a.g() as f32 + (b.g() as f32 - a.g() as f32) * t) as u8, (a.b() as f32 + (b.b() as f32 - a.b() as f32) * t) as u8);
+    // The canvas is a step below the darkest card (the list, the sidebar or the previews'
+    // well): darker on a dark theme, greyer on a light one, where a darker card would
+    // look dirty. Gutters a few points wide only read as gaps when the step is clear.
+    let luma = |c: Color32| 0.2126 * c.r() as f32 + 0.7152 * c.g() as f32 + 0.0722 * c.b() as f32;
+    let darkest = [p.panel, p.sidebar, p.bg].into_iter().min_by(|a, b| luma(*a).total_cmp(&luma(*b))).unwrap_or(p.panel);
+    p.canvas = if p.dark { mix(darkest, Color32::BLACK, 0.34) } else { mix(darkest, p.text, 0.075) };
+    // Edges are light, not lines: the text's colour faint for the rim, white fainter
+    // still for the lit top. A light theme's cards need a firmer rim (their shadows are
+    // all but gone) and take a near-white gloss.
+    p.hairline = p.text.gamma_multiply(if p.dark { 0.10 } else { 0.15 });
+    p.lit = Color32::from_white_alpha(if p.dark { 18 } else { 160 });
+    p.glow = p.accent.gamma_multiply(if p.dark { 0.13 } else { 0.10 });
     if t == ThemeName::Midnight {
-        // Neutral graphite: a lighter title strip, the sidebar a step above the list,
+        // Neutral graphite in three layers: a near-black canvas, the cards on it (the
+        // sidebar a step above the list), the previews' well and the popups above those;
         // clearly visible stripes and a saturated teal selection.
-        p.chrome = Color32::from_rgb(0x26, 0x27, 0x2a);
+        p.chrome = Color32::from_rgb(0x22, 0x23, 0x26);
         p.alt = Color32::from_rgb(0x1d, 0x1e, 0x21);
+        p.canvas = Color32::from_rgb(0x09, 0x0a, 0x0b);
     } else {
         p.chrome = mix(p.sidebar, p.text, if p.dark { 0.07 } else { 0.05 });
         p.alt = mix(p.panel, p.text, if p.dark { 0.035 } else { 0.03 });
@@ -769,6 +888,17 @@ pub fn palette(t: ThemeName) -> Palette {
     p.row_hover = mix(p.panel, p.selected, if p.dark { 0.35 } else { 0.22 });
     p.warn = crate::gitstatus::AMBER;
     // The high-contrast pair sets every field itself: nothing mixed, nothing faint.
+    match t {
+        ThemeName::HighContrastDark | ThemeName::HighContrastLight => {
+            // Flat and crisp: the cards stand on the window's own colour, edged with
+            // the full-strength border, no light and no halo.
+            p.canvas = p.bg;
+            p.hairline = p.border;
+            p.lit = Color32::TRANSPARENT;
+            p.glow = Color32::TRANSPARENT;
+        }
+        _ => {}
+    }
     match t {
         ThemeName::HighContrastDark => {
             p.chrome = Color32::from_rgb(0x0a, 0x0a, 0x0a);
@@ -794,9 +924,9 @@ fn base_palette(t: ThemeName) -> Palette {
     match t {
         ThemeName::Midnight => Palette {
             dark: true,
-            bg: c(0x18, 0x19, 0x1c),
-            panel: c(0x15, 0x16, 0x19),
-            sidebar: c(0x1d, 0x1e, 0x21),
+            bg: c(0x1d, 0x1e, 0x21),
+            panel: c(0x17, 0x18, 0x1b),
+            sidebar: c(0x1a, 0x1b, 0x1e),
             raised: c(0x25, 0x26, 0x2a),
             hover: c(0x27, 0x29, 0x2d),
             selected: c(0x12, 0x79, 0xa0),
@@ -807,6 +937,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x2c, 0x2d, 0x31),
             danger: c(0xff, 0x6b, 0x6b),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -828,6 +962,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x34, 0x34, 0x36),
             danger: c(0xff, 0x6b, 0x6b),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -849,6 +987,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x25, 0x35, 0x39),
             danger: c(0xff, 0x6b, 0x6b),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -870,6 +1012,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x25, 0x2f, 0x4a),
             danger: c(0xff, 0x6b, 0x6b),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -891,6 +1037,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xdc, 0xe0, 0xe6),
             danger: c(0xd6, 0x33, 0x33),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -912,6 +1062,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xdd, 0xd3, 0xc1),
             danger: c(0xc8, 0x32, 0x32),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -933,6 +1087,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x31, 0x32, 0x44),
             danger: c(0xf3, 0x8b, 0xa8),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -954,6 +1112,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x29, 0x2e, 0x42),
             danger: c(0xf7, 0x76, 0x8e),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -975,6 +1137,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x3c, 0x38, 0x36),
             danger: c(0xfb, 0x49, 0x34),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -996,6 +1162,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xcc, 0xd0, 0xda),
             danger: c(0xd2, 0x0f, 0x39),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -1017,6 +1187,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x34, 0x37, 0x46),
             danger: c(0xff, 0x55, 0x55),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1038,6 +1212,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x3b, 0x42, 0x52),
             danger: c(0xbf, 0x61, 0x6a),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1059,6 +1237,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x3a, 0x3f, 0x4b),
             danger: c(0xe0, 0x6c, 0x75),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1080,6 +1262,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xdd, 0xd6, 0xc1),
             danger: c(0xdc, 0x32, 0x2f),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -1101,6 +1287,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xdf, 0xda, 0xd9),
             danger: c(0xb4, 0x63, 0x7a),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -1122,6 +1312,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x3d, 0x48, 0x4d),
             danger: c(0xe6, 0x7e, 0x80),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1143,6 +1337,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x2a, 0x2a, 0x37),
             danger: c(0xe8, 0x24, 0x24),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1164,6 +1362,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xe0, 0xd0, 0xa8),
             danger: c(0x9d, 0x00, 0x06),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -1185,6 +1387,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xe1, 0xe3, 0xe6),
             danger: c(0xe6, 0x50, 0x50),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -1206,6 +1412,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x26, 0x23, 0x3a),
             danger: c(0xeb, 0x6f, 0x92),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1227,6 +1437,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x07, 0x36, 0x42),
             danger: c(0xdc, 0x32, 0x2f),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1248,6 +1462,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x0b, 0x29, 0x42),
             danger: c(0xef, 0x53, 0x50),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1269,6 +1487,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xe6, 0xe2, 0xcc),
             danger: c(0xe9, 0x4f, 0x4d),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -1290,6 +1512,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xc8, 0xc9, 0xd0),
             danger: c(0xc6, 0x43, 0x43),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -1311,6 +1537,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xdc, 0xd5, 0xac),
             danger: c(0xc8, 0x40, 0x53),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -1332,6 +1562,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x41, 0x45, 0x59),
             danger: c(0xe7, 0x82, 0x84),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1353,6 +1587,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x36, 0x3a, 0x4f),
             danger: c(0xed, 0x87, 0x96),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1374,6 +1612,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x3e, 0x3d, 0x32),
             danger: c(0xf9, 0x26, 0x72),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1395,6 +1637,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x32, 0x37, 0x4d),
             danger: c(0xff, 0x53, 0x70),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1416,6 +1662,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x1b, 0x1f, 0x29),
             danger: c(0xd9, 0x57, 0x57),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1437,6 +1687,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x2d, 0x33, 0x43),
             danger: c(0xf2, 0x87, 0x79),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1458,6 +1712,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x39, 0x35, 0x52),
             danger: c(0xeb, 0x6f, 0x92),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1479,6 +1737,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x29, 0x2e, 0x42),
             danger: c(0xf7, 0x76, 0x8e),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1500,6 +1762,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x28, 0x27, 0x27),
             danger: c(0xc4, 0x74, 0x6e),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1521,6 +1787,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x29, 0x39, 0x4f),
             danger: c(0xc9, 0x4f, 0x6d),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1542,6 +1812,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x28, 0x27, 0x26),
             danger: c(0xd1, 0x4d, 0x41),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1563,6 +1837,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xe5, 0xe5, 0xe6),
             danger: c(0xe4, 0x56, 0x49),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -1584,6 +1862,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xe0, 0xe0, 0xe0),
             danger: c(0xde, 0x3d, 0x3b),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -1605,6 +1887,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xd3, 0xc7, 0xbb),
             danger: c(0xa5, 0x22, 0x2f),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -1626,6 +1912,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xe6, 0xe4, 0xd9),
             danger: c(0xaf, 0x30, 0x29),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -1647,6 +1937,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x30, 0x36, 0x3d),
             danger: c(0xf8, 0x51, 0x49),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1668,6 +1962,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x44, 0x4c, 0x56),
             danger: c(0xe5, 0x53, 0x4b),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1689,6 +1987,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x4f, 0x4f, 0x4f),
             danger: c(0xcc, 0x93, 0x93),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1710,6 +2012,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x28, 0x2a, 0x2e),
             danger: c(0xcc, 0x66, 0x66),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1731,6 +2037,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x34, 0x3d, 0x46),
             danger: c(0xec, 0x5f, 0x67),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1752,6 +2062,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x2e, 0x30, 0x3e),
             danger: c(0xf4, 0x3e, 0x5c),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1773,6 +2087,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x0d, 0x3a, 0x58),
             danger: c(0xff, 0x62, 0x8c),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1794,6 +2112,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x34, 0x29, 0x4f),
             danger: c(0xfe, 0x44, 0x50),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1815,6 +2137,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x2f, 0x33, 0x4d),
             danger: c(0xff, 0x75, 0x7f),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1836,6 +2162,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x25, 0x2b, 0x37),
             danger: c(0xd0, 0x67, 0x9d),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1857,6 +2187,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x26, 0x26, 0x26),
             danger: c(0xee, 0x53, 0x96),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1878,6 +2212,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x64, 0x64, 0x64),
             danger: c(0xff, 0x5f, 0x59),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1899,6 +2237,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x1e, 0x21, 0x32),
             danger: c(0xe2, 0x78, 0x78),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -1920,6 +2262,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xd0, 0xd7, 0xde),
             danger: c(0xcf, 0x22, 0x2e),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -1941,6 +2287,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xe0, 0xe0, 0xe0),
             danger: c(0xc8, 0x28, 0x29),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -1962,6 +2312,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xca, 0xd0, 0xde),
             danger: c(0xcc, 0x51, 0x7a),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -1983,6 +2337,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x9f, 0x9f, 0x9f),
             danger: c(0xa6, 0x00, 0x00),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -2004,6 +2362,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xd5, 0xcd, 0xb6),
             danger: c(0xd2, 0x21, 0x2d),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -2025,6 +2387,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xdc, 0xdc, 0xdc),
             danger: c(0xaa, 0x37, 0x31),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -2046,6 +2412,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xd0, 0xd0, 0xd0),
             danger: c(0xaf, 0x00, 0x00),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -2067,6 +2437,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x2b, 0x2b, 0x2b),
             danger: c(0xf8, 0x51, 0x49),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2088,6 +2462,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x32, 0x32, 0x32),
             danger: c(0xff, 0x6b, 0x68),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2109,6 +2487,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x38, 0x38, 0x3d),
             danger: c(0xff, 0x45, 0x3a),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2130,6 +2512,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x29, 0x29, 0x29),
             danger: c(0xf0, 0x71, 0x78),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2151,6 +2537,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x3f, 0x44, 0x4a),
             danger: c(0xff, 0x6c, 0x6b),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2172,6 +2562,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x41, 0x45, 0x50),
             danger: c(0xfc, 0x5d, 0x7c),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2193,6 +2587,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x45, 0x40, 0x3d),
             danger: c(0xea, 0x69, 0x62),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2214,6 +2612,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x28, 0x28, 0x28),
             danger: c(0xff, 0x80, 0x80),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2235,6 +2637,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x1b, 0x1d, 0x23),
             danger: c(0xfc, 0x64, 0x4d),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2256,6 +2662,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x25, 0x25, 0x4b),
             danger: c(0xec, 0x3a, 0x37),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2277,6 +2687,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x35, 0x35, 0x35),
             danger: c(0xee, 0x53, 0x96),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2298,6 +2712,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x37, 0x33, 0x54),
             danger: c(0xeb, 0x6f, 0x92),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2319,6 +2737,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x19, 0x19, 0x19),
             danger: c(0xcb, 0x76, 0x76),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2340,6 +2762,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xe5, 0xe5, 0xe5),
             danger: c(0xf8, 0x51, 0x49),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -2361,6 +2787,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xeb, 0xec, 0xf0),
             danger: c(0xdb, 0x3b, 0x4b),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -2382,6 +2812,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xdc, 0xdc, 0xe0),
             danger: c(0xff, 0x3b, 0x30),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -2404,6 +2838,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xbd, 0xbf, 0xc9),
             danger: c(0xb4, 0x63, 0x7a),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -2425,6 +2863,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xf0, 0xf0, 0xf0),
             danger: c(0xab, 0x59, 0x59),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -2446,6 +2888,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xe5, 0xd5, 0xad),
             danger: c(0xc1, 0x4a, 0x4a),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -2467,6 +2913,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xdd, 0xdd, 0xdd),
             danger: c(0xaa, 0x37, 0x31),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -2488,6 +2938,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x40, 0x3e, 0x41),
             danger: c(0xff, 0x61, 0x88),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2509,6 +2963,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x23, 0x2a, 0x2d),
             danger: c(0xe5, 0x74, 0x74),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2530,6 +2988,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x26, 0x26, 0x26),
             danger: c(0xcf, 0x6a, 0x4c),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2551,6 +3013,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x30, 0x30, 0x30),
             danger: c(0xef, 0x2f, 0x27),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2572,6 +3038,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x1d, 0x33, 0x37),
             danger: c(0xe8, 0x5c, 0x51),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2593,6 +3063,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x36, 0x39, 0x44),
             danger: c(0xec, 0x72, 0x79),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2614,6 +3088,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x39, 0x39, 0x39),
             danger: c(0xf2, 0x77, 0x7a),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2635,6 +3113,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x31, 0x35, 0x3a),
             danger: c(0xff, 0x2c, 0x6d),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2656,6 +3138,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x1e, 0x21, 0x24),
             danger: c(0xff, 0x6e, 0x5e),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2677,6 +3163,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x3b, 0x45, 0x50),
             danger: c(0xec, 0x5f, 0x66),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2698,6 +3188,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x2d, 0x2b, 0x40),
             danger: c(0xf4, 0x8f, 0xb1),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2719,6 +3213,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x34, 0x32, 0x3e),
             danger: c(0xf2, 0x24, 0x1f),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2740,6 +3238,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x34, 0x30, 0x2c),
             danger: c(0xd4, 0x77, 0x66),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2761,6 +3263,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xdd, 0xe2, 0xe7),
             danger: c(0xd0, 0x58, 0x58),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -2782,6 +3288,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xe0, 0xd9, 0xd7),
             danger: c(0xe1, 0x47, 0x75),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -2803,6 +3313,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xe6, 0xe0, 0xcb),
             danger: c(0xcb, 0x3a, 0x2a),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -2824,6 +3338,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xd9, 0xd3, 0xcf),
             danger: c(0xa8, 0x33, 0x4c),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -2845,6 +3363,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xe3, 0xde, 0xdd),
             danger: c(0xf2, 0x24, 0x1f),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -2866,6 +3388,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xe1, 0xe1, 0xe1),
             danger: c(0xc3, 0x08, 0x0d),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -2887,6 +3413,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xdf, 0xdf, 0xdf),
             danger: c(0xe4, 0x56, 0x49),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -2908,6 +3438,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x36, 0x3a, 0x58),
             danger: c(0xff, 0x75, 0x7f),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2929,6 +3463,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x3b, 0x42, 0x52),
             danger: c(0xd0, 0x73, 0x7c),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2950,6 +3488,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x1d, 0x4f, 0x5c),
             danger: c(0xfa, 0x57, 0x50),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2971,6 +3513,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x25, 0x25, 0x30),
             danger: c(0xd8, 0x64, 0x7e),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -2992,6 +3538,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x26, 0x26, 0x26),
             danger: c(0xff, 0x54, 0x54),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -3013,6 +3563,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x1f, 0x22, 0x33),
             danger: c(0xf0, 0x71, 0x78),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -3034,6 +3588,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x2a, 0x2a, 0x2d),
             danger: c(0xea, 0x83, 0xa5),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -3055,6 +3613,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x2b, 0x29, 0x43),
             danger: c(0xff, 0x80, 0x80),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -3076,6 +3638,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x0d, 0x3a, 0x3f),
             danger: c(0xe3, 0x4e, 0x1c),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -3097,6 +3663,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x2b, 0x28, 0x38),
             danger: c(0xff, 0x67, 0x67),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -3118,6 +3688,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x2a, 0x2d, 0x34),
             danger: c(0xf4, 0x58, 0x7e),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -3139,6 +3713,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x22, 0x22, 0x22),
             danger: c(0xe8, 0x3a, 0x3a),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -3160,6 +3738,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x2a, 0x2a, 0x2a),
             danger: c(0xff, 0x6a, 0x6a),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -3181,6 +3763,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xdd, 0xd6, 0xd0),
             danger: c(0xbf, 0x00, 0x21),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -3202,6 +3788,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xe0, 0xe0, 0xe0),
             danger: c(0xd5, 0x27, 0x53),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -3223,6 +3813,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xe8, 0xdc, 0xc4),
             danger: c(0xe3, 0x4e, 0x1c),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -3244,6 +3838,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xe8, 0xe8, 0xe8),
             danger: c(0xd3, 0x2f, 0x2f),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -3265,6 +3863,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xe0, 0xe0, 0xe0),
             danger: c(0xe5, 0x39, 0x35),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -3286,6 +3888,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xf2, 0xd8, 0xd1),
             danger: c(0xe3, 0x3e, 0x5a),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -3307,6 +3913,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xff, 0xff, 0xff),
             danger: c(0xff, 0x7a, 0x7a),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(true),
@@ -3328,6 +3938,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0x00, 0x00, 0x00),
             danger: c(0xa0, 0x00, 0x00),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -3349,6 +3963,10 @@ fn base_palette(t: ThemeName) -> Palette {
             border: c(0xdc, 0xdc, 0xdc),
             danger: c(0xc3, 0x07, 0x71),
             chrome: z,
+            canvas: z,
+            hairline: z,
+            lit: z,
+            glow: z,
             alt: z,
             row_hover: z,
             syntax: Syntax::classic(false),
@@ -3358,8 +3976,12 @@ fn base_palette(t: ThemeName) -> Palette {
     }
 }
 
-pub fn apply(ctx: &egui::Context, p: &Palette, font_size: f32, spacing: f32, animations: bool) {
+/// The theme and the window's measures, as egui's own widgets read them: their corners on
+/// the scale (square with Round corners off), windows and menus on the elevation's
+/// shadows with a hairline rim, like the window's cards.
+pub fn apply(ctx: &egui::Context, p: &Palette, font_size: f32, spacing: f32, animations: bool, round: bool) {
     let mut v = if p.dark { egui::Visuals::dark() } else { egui::Visuals::light() };
+    let rad = |r: u8| if round { CornerRadius::same(r) } else { CornerRadius::ZERO };
     v.panel_fill = p.panel;
     v.window_fill = p.raised;
     v.extreme_bg_color = p.bg;
@@ -3368,11 +3990,16 @@ pub fn apply(ctx: &egui::Context, p: &Palette, font_size: f32, spacing: f32, ani
     v.hyperlink_color = p.accent;
     v.selection.bg_fill = p.selected;
     v.selection.stroke = Stroke::new(1.0, p.accent);
-    v.window_stroke = Stroke::new(1.0, p.border);
-    v.window_corner_radius = CornerRadius::same(10);
-    v.menu_corner_radius = CornerRadius::same(8);
-    for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
-        w.corner_radius = CornerRadius::same(6);
+    // A high-contrast theme keeps its full-strength border round windows; the others
+    // take the cards' rim, a firmer one where the window floats over a light theme.
+    v.window_stroke = Stroke::new(1.0, if p.strong { p.border } else { over(p.hairline, p.border.gamma_multiply(0.5)) });
+    v.window_corner_radius = rad(R_LG);
+    v.menu_corner_radius = rad(R_MD);
+    // egui's windows and menus cast one shadow: the elevation's wide one.
+    v.window_shadow = p.shadows(Elevation::Dialog)[0];
+    v.popup_shadow = p.shadows(Elevation::Menu)[0];
+    for w in [&mut v.widgets.noninteractive, &mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
+        w.corner_radius = rad(R_SM);
     }
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, p.border);
     v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, p.text);

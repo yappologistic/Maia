@@ -278,7 +278,7 @@ pub struct App {
     pub queue: std::sync::Arc<ops::Queue>,
     /// Moves that Undo or Redo handed to a job, by job: what to record when it ends.
     pub job_steps: HashMap<u64, crate::redo::Step>,
-    pub theme_applied: (theme::ThemeName, f32, f32, bool, bool),
+    pub theme_applied: (theme::ThemeName, f32, f32, bool, bool, bool),
     pub ctx: egui::Context,
     pub fresh: bool,
     /// Set to close the window at the end of the frame.
@@ -407,7 +407,7 @@ impl App {
         if !cfg.syntax_theme {
             pal.syntax = theme::Syntax::classic(pal.dark);
         }
-        theme::apply(&ctx, &pal, cfg.font_size, cfg.spacing, cfg.animations);
+        theme::apply(&ctx, &pal, cfg.font_size, cfg.spacing, cfg.animations, cfg.round_corners);
         let session: Session = config::load_json(&config::session_path());
         let mut app = App {
             keymap: Keymap::build(&cfg.hotkeys),
@@ -452,7 +452,7 @@ impl App {
             undo_keep: crate::undofile::Keeper::new((!cfg!(test)).then(crate::undofile::path), &ctx),
             queue: Default::default(),
             job_steps: HashMap::new(),
-            theme_applied: (cfg.theme, cfg.font_size, cfg.spacing, cfg.animations, cfg.syntax_theme),
+            theme_applied: (cfg.theme, cfg.font_size, cfg.spacing, cfg.animations, cfg.syntax_theme, cfg.round_corners),
             ctx: ctx.clone(),
             fresh: true,
             quit: false,
@@ -1421,7 +1421,7 @@ impl App {
             crate::ui::POPUPS.with(|c| c.borrow_mut().clear());
         }
         self.heal();
-        let t = (self.preview_theme.unwrap_or(self.cfg.theme), self.cfg.font_size, self.cfg.spacing, self.cfg.animations, self.cfg.syntax_theme);
+        let t = (self.preview_theme.unwrap_or(self.cfg.theme), self.cfg.font_size, self.cfg.spacing, self.cfg.animations, self.cfg.syntax_theme, self.cfg.round_corners);
         self.preview_theme = None;
         crate::icons::set_enabled(self.cfg.system_icons);
         // One wheel notch scrolls three rows (eased out by egui over ~100 ms).
@@ -1437,13 +1437,13 @@ impl App {
         self.thumbs.budget_bytes = (self.cfg.asset_cache_mb.max(32) as usize) << 20;
         // Only the theme changed: it washes in over a copy of the old window, which the
         // runner makes after this frame (still drawn in the old one).
-        let only_theme = t.0 != self.theme_applied.0 && (t.1, t.2, t.3, t.4) == (self.theme_applied.1, self.theme_applied.2, self.theme_applied.3, self.theme_applied.4);
+        let only_theme = t.0 != self.theme_applied.0 && (t.1, t.2, t.3, t.4, t.5) == (self.theme_applied.1, self.theme_applied.2, self.theme_applied.3, self.theme_applied.4, self.theme_applied.5);
         if t != self.theme_applied && (!only_theme || self.wash.theme_changing(&ctx, self.cfg.animations)) {
             self.pal = theme::palette(t.0);
             if !t.4 {
                 self.pal.syntax = theme::Syntax::classic(self.pal.dark);
             }
-            theme::apply(&ctx, &self.pal, self.cfg.font_size, self.cfg.spacing, self.cfg.animations);
+            theme::apply(&ctx, &self.pal, self.cfg.font_size, self.cfg.spacing, self.cfg.animations, self.cfg.round_corners);
             self.theme_applied = t;
         }
         self.pump(&ctx);
