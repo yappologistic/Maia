@@ -631,12 +631,12 @@ impl App {
                 self.popup = if matches!(self.popup, Popup::MainMenu) { Popup::None } else { Popup::MainMenu };
             }
             let (r, resp) = ui.allocate_exact_size(vec2(28.0, 26.0), Sense::click());
-            if resp.hovered() {
-                ui.painter().rect_filled(r, CornerRadius::same(5), pal.hover);
-            }
+            let t = crate::kit::ease_to(&ui, Id::new("show sidebar hot"), resp.hovered());
+            crate::kit::wash(ui.painter(), r, crate::theme::corner(crate::theme::R_SM), t, resp.is_pointer_button_down_on(), &pal);
+            let ink = pal.text_dim.lerp_to_gamma(pal.text, t);
             let ir = Rect::from_center_size(r.center(), vec2(15.0, 12.0));
-            ui.painter().rect_stroke(ir, CornerRadius::same(2), Stroke::new(1.4, pal.text_dim), StrokeKind::Middle);
-            ui.painter().line_segment([pos2(ir.left() + 5.0, ir.top()), pos2(ir.left() + 5.0, ir.bottom())], Stroke::new(1.4, pal.text_dim));
+            ui.painter().rect_stroke(ir, CornerRadius::same(2), Stroke::new(1.4, ink), StrokeKind::Middle);
+            ui.painter().line_segment([pos2(ir.left() + 5.0, ir.top()), pos2(ir.left() + 5.0, ir.bottom())], Stroke::new(1.4, ink));
             if cmd_tip(resp, Some("Show sidebar".into()), Cmd::ToggleSidebar, &self.keymap, &pal).clicked() {
                 self.sidebar = true;
             }
@@ -679,7 +679,7 @@ impl App {
             // Too many tabs for the strip: they clip at its edge instead of running under
             // the next strip or the window buttons.
             sui.set_clip_rect(sr.intersect(ui.clip_rect()));
-            self.tab_strip(&mut sui, pid, sr.width());
+            self.tab_strip(&mut sui, pid, sr.width(), true);
         }
         ui.allocate_space(vec2((rect.right() - right_reserved - ui.cursor().min.x).max(0.0), 1.0));
         // Tab search chevron + window buttons on the right.
@@ -688,12 +688,20 @@ impl App {
                 let (r, resp) = ui.allocate_exact_size(vec2(40.0, TITLE_H), Sense::click());
                 note_control(ui, r, "window button");
                 let hovered = resp.hovered();
-                if hovered {
-                    let (hr, rad) = if self.cfg.rect_buttons { (r, 0) } else { (r.shrink2(vec2(5.0, 5.0)), 6) };
-                    ui.painter().rect_filled(hr, CornerRadius::same(rad), if kind == 2 { Color32::from_rgb(0xc4, 0x2b, 0x1c) } else { pal.hover });
+                // A well under the pointer, easing in; the close button's is the danger
+                // colour. Rectangular window buttons fill their whole slot, square.
+                let t = crate::kit::ease_to(ui, Id::new(("window button hot", kind)), hovered);
+                let (hr, rad) = if self.cfg.rect_buttons { (r, CornerRadius::ZERO) } else { (r.shrink2(vec2(6.0, 6.0)), crate::theme::corner(crate::theme::R_SM)) };
+                if kind == 2 {
+                    if t > 0.01 {
+                        let danger = if resp.is_pointer_button_down_on() { pal.danger.lerp_to_gamma(Color32::BLACK, 0.18) } else { pal.danger };
+                        ui.painter().rect_filled(hr, rad, danger.gamma_multiply(t));
+                    }
+                } else {
+                    crate::kit::wash(ui.painter(), hr, rad, t, resp.is_pointer_button_down_on(), &pal);
                 }
                 let c = r.center();
-                let col = if hovered && kind == 2 { Color32::WHITE } else { pal.text_dim };
+                let col = if kind == 2 { pal.text_dim.lerp_to_gamma(Color32::WHITE, t) } else { pal.text_dim.lerp_to_gamma(pal.text, t) };
                 let st = Stroke::new(1.2, col);
                 match kind {
                     0 => {
@@ -722,10 +730,9 @@ impl App {
             ui.add_space(4.0);
             let (r, resp) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::click());
             note_control(ui, r, "tab list");
-            if resp.hovered() {
-                ui.painter().rect_filled(r, CornerRadius::same(5), pal.hover);
-            }
-            ui.painter().add(egui::Shape::line(vec![r.center() + vec2(-5.0, -2.0), r.center() + vec2(0.0, 3.0), r.center() + vec2(5.0, -2.0)], Stroke::new(1.5, pal.text_dim)));
+            let t = crate::kit::ease_to(ui, Id::new("tab list hot"), resp.hovered());
+            crate::kit::wash(ui.painter(), r, crate::theme::corner(crate::theme::R_SM), t, resp.is_pointer_button_down_on(), &pal);
+            ui.painter().add(egui::Shape::line(vec![r.center() + vec2(-5.0, -2.0), r.center() + vec2(0.0, 3.0), r.center() + vec2(5.0, -2.0)], Stroke::new(1.5, pal.text_dim.lerp_to_gamma(pal.text, t))));
             if cmd_tip(resp, None, Cmd::TabSearch, &self.keymap, &pal).clicked() {
                 self.popup = Popup::tab_search();
             }
@@ -733,7 +740,9 @@ impl App {
     }
 
     /// Tab strip for a panel within the current horizontal layout.
-    pub fn tab_strip(&mut self, ui: &mut Ui, panel_id: u64, max_w: f32) {
+    /// `on_canvas`: the strip is the title bar's, on the canvas over its panel's card (else
+    /// it is the panel's own, inside the card).
+    pub fn tab_strip(&mut self, ui: &mut Ui, panel_id: u64, max_w: f32, on_canvas: bool) {
         let pal = self.pal;
         // Folders a running job copies, moves or unpacks into, and how far it is: their
         // tabs show a ring in place of the folder icon.
@@ -806,13 +815,24 @@ impl App {
             let (r, resp) = ui.allocate_exact_size(vec2(w, TAB_H - 4.0), Sense::click_and_drag());
             let is_active = i == p.active;
             let hovered = resp.hovered();
-            // The active tab is a pill raised a step off the surface it shares with the
-            // toolbar, not a tab cut from the panel below.
-            let pill = pal.panel.lerp_to_gamma(pal.text, if pal.dark { 0.08 } else { 0.06 });
-            let fill = if is_active { pill } else if hovered { pal.hover } else { Color32::TRANSPARENT };
-            let rad = if self.cfg.round_corners { 7 } else { 0 };
-            ui.painter().rect_filled(r.shrink2(vec2(1.0, 0.0)), CornerRadius::same(rad), fill);
-            let _ = active_panel;
+            // The active tab is a small raised surface. On the canvas it is made of its
+            // panel's card (the card's fill, rim and lit top), a piece of what it opens;
+            // inside a card it stands a step up from it. The others are words, a wash
+            // easing in under the pointer.
+            let pill_r = r.shrink2(vec2(1.0, 0.0));
+            let rad = crate::theme::corner(crate::theme::R_MD);
+            let hot_t = crate::kit::ease_to(ui, Id::new(("tab hot", panel_id, t.id)), hovered && !is_active);
+            if is_active {
+                let fill = if pal.strong { pal.raised } else if on_canvas { pal.panel } else { crate::kit::raised_fill(&pal) };
+                crate::kit::raised(ui.painter(), pill_r, rad, fill, &pal);
+                // The keyboard's panel, among several: its tab's rim takes the accent's tint
+                // as the card's does.
+                if active_panel && self.panels.len() > 1 && !pal.strong {
+                    ui.painter().rect_stroke(pill_r, rad, Stroke::new(1.0, pal.hairline_active().gamma_multiply(0.8)), StrokeKind::Inside);
+                }
+            } else {
+                crate::kit::wash(ui.painter(), pill_r, rad, hot_t, false, &pal);
+            }
             // Icon or spinner; a pinned tab is its icon alone.
             let ic = Rect::from_center_size(pos2(if t.pinned { r.center().x } else { r.left() + 15.0 }, r.center().y), Vec2::splat(14.0));
             if t.is_loading() {
@@ -847,7 +867,7 @@ impl App {
             let title = t.title();
             if !t.pinned {
                 let font = FontId::proportional(self.cfg.font_size - 0.5);
-                let tcol = if is_active { pal.text } else { pal.text_dim };
+                let tcol = if is_active { pal.text } else { pal.text_dim.lerp_to_gamma(pal.text, hot_t * 0.6) };
                 let g = listing::elided(ui, &title, font.clone(), text_rect.width(), tcol);
                 let (gw, gy) = (g.size().x, r.center().y - g.size().y / 2.0);
                 ui.painter().galley(pos2(text_rect.left(), gy), g, pal.text);
@@ -865,10 +885,13 @@ impl App {
             if close_w > 0.0 {
                 let cr = Rect::from_center_size(pos2(r.right() - 14.0, r.center().y), Vec2::splat(16.0));
                 let ch = pointer.map(|pp| cr.contains(pp)).unwrap_or(false);
-                if ch {
-                    ui.painter().rect_filled(cr, CornerRadius::same(4), pal.raised);
+                // Its well takes the danger colour's tint under the pointer: this closes.
+                let ct = crate::kit::ease_to(ui, Id::new(("tab close hot", panel_id, t.id)), ch);
+                if ct > 0.01 {
+                    ui.painter().rect_filled(cr, crate::theme::corner(crate::theme::R_XS), if pal.strong { pal.hover } else { pal.danger.gamma_multiply((if pal.dark { 0.22 } else { 0.14 }) * ct) });
                 }
-                paint_glyph(ui.painter(), cr.shrink(3.0), Glyph::Close, if ch { pal.text } else { pal.text_dim });
+                let rest = if is_active { pal.text_dim } else { pal.text_dim.gamma_multiply(0.85) };
+                paint_glyph(ui.painter(), cr.shrink(3.5), Glyph::Close, if pal.strong && ch { pal.text } else { rest.lerp_to_gamma(pal.danger, ct) });
                 if ch && resp.clicked() {
                     actions.push(Action::CloseTab { panel: panel_id, idx: i });
                     continue;
@@ -900,7 +923,7 @@ impl App {
                         drop_index = Some(if before { i } else { i + 1 });
                     }
                     if dragging_files {
-                        ui.painter().rect_stroke(r, CornerRadius::same(6), Stroke::new(1.5, pal.accent), StrokeKind::Inside);
+                        ui.painter().rect_stroke(r.shrink2(vec2(1.0, 0.0)), crate::theme::corner(crate::theme::R_MD), Stroke::new(1.5, pal.accent), StrokeKind::Inside);
                         // Spring-load: hovering a tab with files activates it.
                         if !is_active && ui.input(|i| i.pointer.time_since_last_movement()) > 0.6 {
                             actions.push(Action::ActivateTab { panel: panel_id, idx: i });
@@ -925,11 +948,10 @@ impl App {
         let room = !no_room(ui, plus_w);
         let (r, resp) = ui.allocate_exact_size(vec2(if room { plus_w } else { 0.0 }, TAB_H - 6.0), Sense::click());
         note_control(ui, r, "new tab");
-        if room && resp.hovered() {
-            ui.painter().rect_filled(r, CornerRadius::same(5), pal.hover);
-        }
         if room {
-            paint_glyph(ui.painter(), Rect::from_center_size(r.center(), Vec2::splat(13.0)), Glyph::Plus, pal.text_dim);
+            let t = crate::kit::ease_to(ui, Id::new(("new tab hot", panel_id)), resp.hovered());
+            crate::kit::wash(ui.painter(), r, crate::theme::corner(crate::theme::R_SM), t, resp.is_pointer_button_down_on(), &pal);
+            paint_glyph(ui.painter(), Rect::from_center_size(r.center(), Vec2::splat(13.0)), Glyph::Plus, pal.text_dim.lerp_to_gamma(pal.text, t));
         }
         let resp = cmd_tip(resp, None, Cmd::NewTab, &self.keymap, &pal);
         if room && (resp.clicked() || resp.middle_clicked()) {
@@ -996,7 +1018,7 @@ impl App {
             let r = Rect::from_min_max(pos2(rect.left(), y), pos2(rect.right(), y + TAB_H));
             ui.painter().line_segment([pos2(r.left(), r.bottom() - 0.5), pos2(r.right(), r.bottom() - 0.5)], Stroke::new(1.0, pal.hairline));
             let mut child = ui.new_child(UiBuilder::new().max_rect(r.shrink2(vec2(4.0, 0.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
-            self.tab_strip(&mut child, id, r.width() - 8.0);
+            self.tab_strip(&mut child, id, r.width() - 8.0, false);
             y += TAB_H;
         }
         // Too short for everything (tiny window): drop the status bar, then the toolbar,
@@ -1236,20 +1258,23 @@ impl App {
         let hist_open = matches!(self.popup, Popup::History { panel, .. } if panel == id);
         let mut hist_at = None;
         let keymap = &self.keymap;
-        crate::kit::capsule_group(ui, round, &pal, |ui| {
-            let r = crate::kit::bar_item(ui, "toolbar button", "", can_back, false, round, &pal, |p, r, c| paint_glyph(p, r, Glyph::Back, c));
+        // The toolbar's groups are wells cut into the card, their buttons washing in under
+        // the pointer; what belongs to the folder shown stands raised in its well.
+        let _ = round;
+        crate::kit::well_group(ui, &pal, |ui| {
+            let r = crate::kit::chrome_item(ui, "toolbar button", "", can_back, false, &pal, |p, r, c| paint_glyph(p, r, Glyph::Back, c));
             if cmd_tip(r, back_to, Cmd::Back, keymap, &pal).clicked() {
                 cmd = Some(Cmd::Back);
             }
-            let r = crate::kit::bar_item(ui, "toolbar button", "", can_fwd, false, round, &pal, |p, r, c| paint_glyph(p, r, Glyph::Forward, c));
+            let r = crate::kit::chrome_item(ui, "toolbar button", "", can_fwd, false, &pal, |p, r, c| paint_glyph(p, r, Glyph::Forward, c));
             if cmd_tip(r, fwd_to, Cmd::Forward, keymap, &pal).clicked() {
                 cmd = Some(Cmd::Forward);
             }
-            let r = crate::kit::bar_item(ui, "toolbar button", "", !tab::is_computer(&path), false, round, &pal, |p, r, c| paint_glyph(p, r, Glyph::Up, c));
+            let r = crate::kit::chrome_item(ui, "toolbar button", "", !tab::is_computer(&path), false, &pal, |p, r, c| paint_glyph(p, r, Glyph::Up, c));
             if cmd_tip(r, up_to, Cmd::Up, keymap, &pal).clicked() {
                 cmd = Some(Cmd::Up);
             }
-            let hr = crate::kit::bar_item(ui, "toolbar button", "Recent locations", true, hist_open, round, &pal, |p, r, c| paint_glyph(p, r, Glyph::ChevronDown, c));
+            let hr = crate::kit::chrome_item(ui, "toolbar button", "Recent locations", true, hist_open, &pal, |p, r, c| paint_glyph(p, r, Glyph::ChevronDown, c));
             if hr.clicked() {
                 hist_at = Some(hr.rect.left_bottom());
             }
@@ -1275,7 +1300,7 @@ impl App {
         let cap = Rect::from_min_size(pos2(ui.cursor().min.x, rect.center().y - CAP_H / 2.0), vec2(path_w, CAP_H));
         ui.allocate_rect(cap, Sense::hover());
         if path_w > 2.0 * INSET + 8.0 {
-            crate::kit::capsule(ui.painter(), cap, round, &pal);
+            crate::kit::well(ui.painter(), cap, crate::theme::corner(crate::theme::R_MD), &pal);
             // The folder's own two, inside the path at its end, when there is room for
             // them and a few segments.
             let own = path_w >= 2.0 * ITEM.x + 2.0 * INSET + 96.0;
@@ -1286,14 +1311,14 @@ impl App {
             if own {
                 // Lock (saved view settings): open when this folder follows the general view.
                 let lr = Rect::from_min_size(pos2(inner.right() - 2.0 * ITEM.x, inner.top()), ITEM);
-                let lresp = crate::kit::bar_item_at(ui, lr, Id::new(("saved view", id)), "toolbar button", if saved { "View settings saved for this folder" } else { "Save view settings for this folder" }, true, false, round, &pal, |p, r, c| paint_glyph(p, r, if saved { Glyph::Lock } else { Glyph::LockOpen }, if saved { pal.accent } else { c }));
+                let lresp = crate::kit::chrome_item_at(ui, lr, Id::new(("saved view", id)), crate::theme::corner(crate::theme::R_SM), "toolbar button", if saved { "View settings saved for this folder" } else { "Save view settings for this folder" }, true, false, &pal, |p, r, c| paint_glyph(p, r, if saved { Glyph::Lock } else { Glyph::LockOpen }, if saved { pal.accent } else { c }));
                 if lresp.clicked() {
                     self.popup = Popup::saved_view(id);
                 }
                 // Bookmark ribbon: solid while the folder is bookmarked.
                 let bookmarked = self.ud.bookmarks.contains(&path);
                 let br = Rect::from_min_size(pos2(inner.right() - ITEM.x, inner.top()), ITEM);
-                let bresp = crate::kit::bar_item_at(ui, br, Id::new(("bookmark", id)), "bookmark", "", true, false, round, &pal, |p, r, c| paint_bookmark(p, r, bookmarked, if bookmarked { pal.text } else { c }));
+                let bresp = crate::kit::chrome_item_at(ui, br, Id::new(("bookmark", id)), crate::theme::corner(crate::theme::R_SM), "bookmark", "", true, false, &pal, |p, r, c| paint_bookmark(p, r, bookmarked, if bookmarked { pal.text } else { c }));
                 if cmd_tip(bresp, Some(if bookmarked { "Remove bookmark".into() } else { "Bookmark this folder".into() }), Cmd::ToggleBookmark, &self.keymap, &pal).clicked() && !tab::is_place(&path) {
                     self.actions.push(Action::FocusPanel(id));
                     if bookmarked {
@@ -1309,7 +1334,7 @@ impl App {
         }
         ui.set_clip_rect(outer_clip);
         let open = matches!(self.popup, Popup::PanelMenu { panel, .. } if panel == id);
-        let resp = crate::kit::bar_item_at(ui, menu_r, Id::new(("panel menu", id)), "panel menu", "Panel menu", true, open, round, &pal, |p, r, c| {
+        let resp = crate::kit::chrome_item_at(ui, menu_r, Id::new(("panel menu", id)), crate::theme::corner(crate::theme::R_SM), "panel menu", "Panel menu", true, open, &pal, |p, r, c| {
             for dy in [-4.5, 0.0, 4.5] {
                 p.circle_filled(r.center() + vec2(0.0, dy), 1.5, c);
             }
@@ -1328,11 +1353,11 @@ impl App {
         let pal = self.pal;
         let font = FontId::proportional(self.cfg.font_size);
         // Empty space → GoTo with the current path.
-        let round = self.cfg.round_corners;
+        let rad = crate::theme::corner(crate::theme::R_SM);
         let bg = ui.interact(rect, Id::new(("crumbs_bg", id)), Sense::click());
-        if bg.hovered() {
-            ui.painter().rect_filled(rect, crate::kit::radius(rect.height(), round), crate::kit::touch(&pal));
-        }
+        // The empty part of the path takes you to typing one: a faint wash says so.
+        let bg_t = crate::kit::ease_to(ui, Id::new(("crumbs hot", id)), bg.hovered());
+        crate::kit::wash(ui.painter(), rect, rad, bg_t * 0.5, false, &pal);
         if bg.clicked() {
             self.actions.push(Action::FocusPanel(id));
             self.actions.push(Action::Cmd(Cmd::AddressBar));
@@ -1464,7 +1489,6 @@ impl App {
             ui.ctx().request_repaint();
         }
         let pill_slot = ui.painter().add(egui::Shape::Noop);
-        let rad = crate::kit::radius(rect.height(), round);
         let mut here: Option<Rect> = None;
         let mut x = rect.left();
         let mut prev: Option<usize> = None;
@@ -1486,13 +1510,14 @@ impl App {
             let r = Rect::from_min_size(pos2(x, rect.top()), vec2(w, rect.height()));
             let resp = ui.interact(r, Id::new(("crumb", id, i)), Sense::click());
             // The segment whose dropdown is open lifts, with its chevron.
+            let seg_t = crate::kit::ease_to(ui, Id::new(("crumb hot", id, i)), resp.hovered() && !last && !dropped);
             if dropped {
-                ui.painter().rect(Rect::from_min_max(r.min, pos2(r.right() + sep_w, r.bottom())), rad, crate::kit::lift(&pal), Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
-            } else if resp.hovered() && !last {
-                ui.painter().rect_filled(r, rad, crate::kit::touch(&pal));
+                crate::kit::raised(ui.painter(), Rect::from_min_max(r.min, pos2(r.right() + sep_w, r.bottom())), rad, crate::kit::raised_fill(&pal), &pal);
+            } else {
+                crate::kit::wash(ui.painter(), r, rad, seg_t, resp.is_pointer_button_down_on(), &pal);
             }
             let (dy, a) = if fresh { (6.0 * (1.0 - rise), rise) } else { (0.0, 1.0) };
-            let tc = if last || dropped { crate::kit::on_lift(&pal) } else if resp.hovered() { pal.text } else { pal.text_dim };
+            let tc = if last || dropped { crate::kit::on_lift(&pal) } else { pal.text_dim.lerp_to_gamma(pal.text, seg_t) };
             ui.painter().galley(pos2(r.left() + 8.0, r.center().y - g.size().y / 2.0 + dy), g, tc.gamma_multiply(a));
             if last {
                 here = Some(r);
@@ -1514,7 +1539,7 @@ impl App {
                 let sresp = ui.interact(sr, Id::new(("crumb_sep", id, i)), Sense::click());
                 note_control(ui, sr, "crumb chevron");
                 if sresp.hovered() && !dropped {
-                    ui.painter().rect_filled(sr.shrink2(vec2(0.0, 2.0)), CornerRadius::same(4), crate::kit::touch(&pal));
+                    crate::kit::wash(ui.painter(), sr.shrink2(vec2(0.0, 2.0)), crate::theme::corner(crate::theme::R_XS), 1.0, sresp.is_pointer_button_down_on(), &pal);
                 }
                 // After the last segment the chevron only shows on hover.
                 if dropped {
@@ -1543,8 +1568,16 @@ impl App {
             let r = ui.ctx().animate_value_with_time(Id::new(("crumb lift r", id)), u.right(), t);
             let pill = Rect::from_min_max(pos2(l.min(r - 8.0).max(rect.left()), u.top()), pos2(r.min(rect.right()), u.bottom()));
             if pill.is_finite() && pill.width() > 4.0 {
-                ui.painter().set(pill_slot, egui::Shape::rect_filled(pill, rad, crate::kit::lift(&pal)));
-                ui.painter().rect_stroke(pill, rad, Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+                // A chip raised out of the path's well: under the names (in the slot kept
+                // for it), its rim and lit top over them would cover nothing they need.
+                let [_, contact] = pal.shadows(crate::theme::Elevation::Card);
+                let mut shapes: Vec<egui::Shape> = vec![];
+                if contact.color.a() > 0 {
+                    shapes.push(egui::epaint::Shadow { offset: [0, 1], blur: 3, spread: 0, color: contact.color.gamma_multiply(0.8) }.as_shape(pill, rad).into());
+                }
+                shapes.push(egui::Shape::rect_filled(pill, rad, crate::kit::raised_fill(&pal)));
+                ui.painter().set(pill_slot, egui::Shape::Vec(shapes));
+                crate::kit::card_edge(ui.painter(), pill, rad, 0.0, &pal);
             }
         }
     }
@@ -1555,6 +1588,7 @@ impl App {
         let pal = self.pal;
         let Some(p) = self.panels.get_mut(&id) else { return };
         let focus_req = std::mem::take(&mut p.focus_filter);
+        let had_focus = p.filter_has_focus;
         let t = p.tab_mut();
         let types_on = !t.settings.only_types.is_empty();
         let (vf, vfi) = (t.counts.0, t.counts.2);
@@ -1562,10 +1596,18 @@ impl App {
         // A capsule like the path's beside it; only a filter in force draws its edge in
         // the accent (the field has the keyboard whenever typing filters, so that says
         // nothing).
-        let round = self.cfg.round_corners;
-        crate::kit::capsule(ui.painter(), frame_rect, round, &pal);
-        if p_filter_active(t) {
-            ui.painter().rect_stroke(frame_rect, crate::kit::radius(frame_rect.height(), round), Stroke::new(1.0, pal.accent.gamma_multiply(0.7)), StrokeKind::Inside);
+        // A well like the path's beside it. While it has the keyboard it wears the focus
+        // ring and the accent's halo, easing in; a filter in force keeps an accent rim.
+        let rad = crate::theme::corner(crate::theme::R_MD);
+        let focus_t = crate::kit::ease_to(ui, Id::new(("filter focus", id)), had_focus);
+        if focus_t > 0.01 {
+            crate::kit::glow(ui.painter(), frame_rect, rad, focus_t, &pal);
+        }
+        crate::kit::well(ui.painter(), frame_rect, rad, &pal);
+        if had_focus {
+            crate::kit::focus_ring(ui.painter(), frame_rect, rad, &pal);
+        } else if p_filter_active(t) {
+            ui.painter().rect_stroke(frame_rect, rad, Stroke::new(1.0, pal.accent.gamma_multiply(0.7)), StrokeKind::Inside);
         }
         // Searching inside files shows as the field's own icon, in the accent; a click on it
         // goes back to names.
@@ -1632,7 +1674,7 @@ impl App {
             let cr = Rect::from_center_size(pos2(bx, frame_rect.center().y), Vec2::splat(18.0));
             let cresp = ui.interact(cr, Id::new(("fclr", id)), Sense::click()).on_hover_text("Clear filter (Esc)");
             if cresp.hovered() {
-                ui.painter().rect_filled(cr, crate::kit::radius(cr.height(), round), crate::kit::touch(&pal));
+                ui.painter().rect_filled(cr, crate::theme::corner(crate::theme::R_SM), crate::kit::touch(&pal));
             }
             paint_glyph(ui.painter(), cr.shrink(4.0), Glyph::Close, pal.text_dim);
             if cresp.clicked() {
@@ -1644,7 +1686,7 @@ impl App {
         if types_on {
             let cr = Rect::from_center_size(pos2(bx, frame_rect.center().y), Vec2::splat(18.0));
             let cresp = ui.interact(cr, Id::new(("tclr", id)), Sense::click()).on_hover_text("Showing only some file types · click to show all");
-            ui.painter().rect_filled(cr, crate::kit::radius(cr.height(), round), if cresp.hovered() { crate::kit::touch(&pal) } else { pal.accent.gamma_multiply(0.25) });
+            ui.painter().rect_filled(cr, crate::theme::corner(crate::theme::R_SM), if cresp.hovered() { crate::kit::touch(&pal) } else { pal.accent.gamma_multiply(0.25) });
             funnel(ui.painter(), cr.center(), pal.accent);
             ui.painter().line_segment([cr.left_bottom() + vec2(4.0, -4.0), cr.right_top() + vec2(-4.0, 4.0)], Stroke::new(1.3, pal.accent));
             if cresp.clicked() {
