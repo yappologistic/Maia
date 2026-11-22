@@ -2016,7 +2016,7 @@ fn goto(app: &mut App, ctx: &egui::Context, st: &mut GoToState) -> bool {
                 if sel {
                     crate::kit::chosen(ui.painter(), r, 6, &pal);
                 } else if resp.hovered() {
-                    ui.painter().rect_filled(r, CornerRadius::same(6), crate::kit::touch(&pal));
+                    ui.painter().rect_filled(r, theme::corner(theme::R_SM), crate::kit::touch(&pal));
                 }
                 {
                     let ui = &*ui;
@@ -4941,7 +4941,7 @@ fn meaning(app: &mut App, ctx: &egui::Context, st: &mut MeaningState) -> bool {
                 if i == st.sel {
                     crate::kit::chosen(ui.painter(), r, 6, &pal);
                 } else if resp.hovered() {
-                    ui.painter().rect_filled(r, CornerRadius::same(6), crate::kit::touch(&pal));
+                    ui.painter().rect_filled(r, theme::corner(theme::R_SM), crate::kit::touch(&pal));
                 }
                 let fmt = |size: f32, color: Color32| egui::TextFormat { font_id: FontId::proportional(size), color, ..Default::default() };
                 // A picture shows itself, small; anything else its icon.

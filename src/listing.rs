@@ -1287,13 +1287,18 @@ pub(crate) fn paint_cursor(p: &egui::Painter, r: Rect, rad: CornerRadius, select
     crate::kit::cursor_ring(p, r, rad.nw, pal);
 }
 
+/// The pointer's row's fill: a wash of the text's colour as strong as the sidebar's and
+/// the toolbar's (`kit::wash`), so a lit row reads at a glance, well clear of a stripe.
+pub(crate) fn hover_fill(pal: &Palette) -> Color32 {
+    if pal.strong { crate::kit::touch(pal) } else { pal.text.gamma_multiply(if pal.dark { 0.075 } else { 0.055 }) }
+}
+
 /// The pointer's row, `level` of the way in (0 to 1).
 pub(crate) fn paint_hover(p: &egui::Painter, r: Rect, rad: CornerRadius, level: f32, pal: &Palette) {
     if level <= 0.0 {
         return;
     }
-    let c = if pal.strong { crate::kit::touch(pal) } else { pal.text.gamma_multiply(if pal.dark { 0.05 } else { 0.045 }) };
-    p.rect_filled(r, rad, c.gamma_multiply(level.min(1.0)));
+    p.rect_filled(r, rad, hover_fill(pal).gamma_multiply(level.min(1.0)));
 }
 
 /// The pointer's item fading in over 120 ms and the one it left fading out: one slot a
