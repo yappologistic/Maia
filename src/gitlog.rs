@@ -2065,6 +2065,10 @@ fn graph(ui: &mut Ui, body: Rect, h: &mut History, env: &mut Env) {
             let k = (b.y - a.y) * 0.6;
             p.add(CubicBezierShape::from_points_stroke([a, pos2(a.x, a.y + k), pos2(b.x, b.y - k), b], false, Color32::TRANSPARENT, s));
         };
+        // The pointer's row fades in and out as the list's rows do: one slot for the view.
+        let fade_id = ui.id().with("gitfade");
+        let fade = crate::listing::HoverFade::load(ui.ctx(), fade_id);
+        let mut hovered_now = None;
         for i in first..last {
             let rr = Rect::from_min_size(pos2(r.left(), r.top() + i as f32 * row_h), vec2(r.width(), row_h));
             if i < off {
@@ -2074,8 +2078,11 @@ fn graph(ui: &mut Ui, body: Rect, h: &mut History, env: &mut Env) {
                 // The list's own language: the picked row tinted and lined, the pointer's lit.
                 if on_changes && h.keyed {
                     crate::listing::paint_run(&p, rr.shrink2(vec2(crate::listing::ROW_INSET, 1.0)), crate::theme::R_SM, false, false, true, &pal);
-                } else if resp.hovered() {
-                    crate::listing::paint_hover(&p, rr.shrink2(vec2(crate::listing::ROW_INSET, 1.0)), crate::theme::corner(crate::theme::R_SM), 1.0, &pal);
+                } else {
+                    crate::listing::paint_hover(&p, rr.shrink2(vec2(crate::listing::ROW_INSET, 1.0)), crate::theme::corner(crate::theme::R_SM), fade.level(u32::MAX, resp.hovered()), &pal);
+                }
+                if resp.hovered() {
+                    hovered_now = Some(u32::MAX);
                 }
                 if resp.clicked() {
                     open_changes = true;
@@ -2112,12 +2119,14 @@ fn graph(ui: &mut Ui, body: Rect, h: &mut History, env: &mut Env) {
             let under = if i == l.sel && h.keyed && !on_changes {
                 crate::listing::paint_run(&p, rr.shrink2(vec2(crate::listing::ROW_INSET, 1.0)), crate::theme::R_SM, false, false, true, &pal);
                 crate::theme::over(crate::listing::sel_fill(&pal, true), pal.bg)
-            } else if resp.hovered() {
-                crate::listing::paint_hover(&p, rr.shrink2(vec2(crate::listing::ROW_INSET, 1.0)), crate::theme::corner(crate::theme::R_SM), 1.0, &pal);
-                crate::theme::over(if pal.strong { crate::kit::touch(&pal) } else { pal.text.gamma_multiply(if pal.dark { 0.05 } else { 0.045 }) }, pal.bg)
             } else {
-                pal.bg
+                let lit = fade.level(i as u32, resp.hovered());
+                crate::listing::paint_hover(&p, rr.shrink2(vec2(crate::listing::ROW_INSET, 1.0)), crate::theme::corner(crate::theme::R_SM), lit, &pal);
+                crate::theme::over((if pal.strong { crate::kit::touch(&pal) } else { pal.text.gamma_multiply(if pal.dark { 0.05 } else { 0.045 }) }).gamma_multiply(lit), pal.bg)
             };
+            if resp.hovered() {
+                hovered_now = Some(i as u32);
+            }
             if resp.clicked() {
                 open = Some(i);
             }
@@ -2220,6 +2229,7 @@ fn graph(ui: &mut Ui, body: Rect, h: &mut History, env: &mut Env) {
                 p.galley(pos2(nx, my + (mh - ag.size().y) / 2.0), ag, pal.text_dim);
             }
         }
+        fade.store(ui.ctx(), fade_id, hovered_now);
     });
     if let Some(i) = open {
         h.on_changes = false;

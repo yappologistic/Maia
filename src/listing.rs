@@ -1268,6 +1268,14 @@ pub(crate) fn paint_cursor(p: &egui::Painter, r: Rect, rad: CornerRadius, select
         // Inside the run, a ring of its own two points in: the run stays one shape.
         let k = |v: u8| v.saturating_sub(2);
         let inner = CornerRadius { nw: k(rad.nw), ne: k(rad.ne), sw: k(rad.sw), se: k(rad.se) };
+        // On a light theme a second ring that close to the run's own edge reads as a double
+        // border: there the keyboard's row is marked by a short bar of the accent at its
+        // start, clear of the row's words (the ring is drawn over them).
+        if !pal.dark {
+            let h = (r.height() - 12.0).clamp(8.0, 16.0);
+            p.rect_filled(Rect::from_center_size(pos2(r.left() + 4.0, r.center().y), vec2(3.0, h)), theme::corner(2), pal.accent);
+            return;
+        }
         p.rect_stroke(r.shrink(2.0), inner, Stroke::new(1.0, pal.accent.gamma_multiply(0.75)), StrokeKind::Inside);
         return;
     }
