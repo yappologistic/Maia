@@ -2024,7 +2024,10 @@ impl App {
                 ui.set_max_width(340.0f32.min(screen.width() - 40.0));
                 let mut remove = None;
                 for (k, j) in self.jobs.iter_mut().enumerate().filter(|_| !listed) {
-                    egui::Frame::popup(ui.style()).fill(pal.raised).corner_radius(CornerRadius::same(10)).inner_margin(10.0).show(ui, |ui| {
+                    // A floating card at the menus' height: its hairline, the light along its top,
+                    // both of its shadows.
+                    let card = crate::popups::popup_frame(&pal).fill(pal.raised).inner_margin(10.0);
+                    crate::popups::float(ui, card, crate::theme::R_LG, crate::theme::Elevation::Menu, &pal, |ui| {
                         ui.set_width(320.0);
                         let mut p = j.progress.lock().unwrap();
                         let done = p.finished;
@@ -2044,14 +2047,21 @@ impl App {
                         let h = (ui.text_style_height(&egui::TextStyle::Body) + 14.0).max(ui.spacing().interact_size.y + 8.0).round();
                         let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
                         let paused = j.pause.load(std::sync::atomic::Ordering::Relaxed);
-                        ui.painter().rect(row, CornerRadius::same(7), pal.card().lerp_to_gamma(pal.text, if pal.dark { 0.05 } else { 0.045 }), Stroke::new(1.0, pal.card_line()), egui::StrokeKind::Inside);
+                        let well = crate::theme::corner(crate::theme::R_SM);
+                        ui.painter().rect(row, well, pal.card().lerp_to_gamma(pal.text, if pal.dark { 0.05 } else { 0.045 }), Stroke::new(1.0, pal.card_line()), egui::StrokeKind::Inside);
                         let shown = crate::kit::slide(ui.ctx(), Id::new(("job fill", j.id)), if done && !cancelled { 1.0 } else { frac.clamp(0.0, 1.0) });
                         let tone = if !p.errors.is_empty() { pal.danger } else if paused || waiting.is_some() { pal.text_dim } else { pal.accent };
                         if shown > 0.002 {
                             let fx = row.left() + 1.0 + shown * (row.width() - 2.0);
-                            ui.painter().rect_filled(Rect::from_min_max(row.min, pos2(fx, row.bottom())).shrink(1.0), CornerRadius::same(6), tone.gamma_multiply(if pal.dark { 0.28 } else { 0.2 }));
+                            ui.painter().rect_filled(Rect::from_min_max(row.min, pos2(fx, row.bottom())).shrink(1.0), crate::theme::corner(crate::theme::R_SM - 1), tone.gamma_multiply(if pal.dark { 0.24 } else { 0.17 }));
                             if shown < 0.998 {
-                                ui.painter().line_segment([pos2(fx - 1.0, row.top() + 1.0), pos2(fx - 1.0, row.bottom() - 1.0)], Stroke::new(2.0, tone));
+                                // The head of the fill: a slim bar in the job's tone, a faint halo round it
+                                // while it runs.
+                                let head = Rect::from_center_size(pos2(fx - 1.5, row.center().y), vec2(3.0, row.height() - 8.0));
+                                if !pal.strong && tone == pal.accent {
+                                    ui.painter().add(egui::epaint::Shadow { offset: [0, 0], blur: 10, spread: 0, color: pal.glow.gamma_multiply(1.6) }.as_shape(head, CornerRadius::same(2)));
+                                }
+                                ui.painter().rect_filled(head, crate::theme::corner(2), tone);
                             }
                         }
                         let mut buttons = ui.new_child(egui::UiBuilder::new().max_rect(row.shrink2(vec2(6.0, 0.0))).layout(egui::Layout::right_to_left(egui::Align::Center)));
@@ -2089,8 +2099,23 @@ impl App {
                         // file's name in it can be any length.
                         let right = if buttons.min_rect().width() > 1.0 { buttons.min_rect().left() - 8.0 } else { row.right() - 10.0 };
                         let title = if done && cancelled { cancelled_label(&j.label) } else if failed { failed_label(&j.label) } else if done { finished_label(&j.label) } else { j.label.clone() };
-                        let g = crate::listing::elided(ui, &title, crate::theme::semibold(egui::TextStyle::Body.resolve(ui.style()).size), (right - row.left() - JOB_TEXT_X).max(20.0), pal.text);
-                        ui.painter().galley(pos2(row.left() + JOB_TEXT_X, (row.center().y - g.size().y / 2.0).round()), g, pal.text);
+                        // Finished, failed or stopped is told at a glance by a small mark before the
+                        // title: a check in the accent, a cross in the danger red, a dim dash.
+                        let mark = if !done { 0.0 } else { 16.0 };
+                        if done {
+                            let c = pos2(row.left() + JOB_TEXT_X + 5.0, row.center().y);
+                            if failed {
+                                let s = Stroke::new(1.6, pal.danger);
+                                ui.painter().line_segment([c + vec2(-3.5, -3.5), c + vec2(3.5, 3.5)], s);
+                                ui.painter().line_segment([c + vec2(-3.5, 3.5), c + vec2(3.5, -3.5)], s);
+                            } else if cancelled {
+                                ui.painter().line_segment([c + vec2(-4.0, 0.0), c + vec2(4.0, 0.0)], Stroke::new(1.6, pal.text_dim));
+                            } else {
+                                crate::kit::check_mark(ui.painter(), c, if p.errors.is_empty() { pal.accent } else { pal.warn });
+                            }
+                        }
+                        let g = crate::listing::elided(ui, &title, crate::theme::semibold(egui::TextStyle::Body.resolve(ui.style()).size), (right - row.left() - JOB_TEXT_X - mark).max(20.0), pal.text);
+                        ui.painter().galley(pos2(row.left() + JOB_TEXT_X + mark, (row.center().y - g.size().y / 2.0).round()), g, pal.text);
                         ui.add_space(2.0);
                         let el = p.since.unwrap_or(j.started).elapsed().saturating_sub(p.held).as_secs_f64().max(0.001);
                         let mut line = format!("{} / {} item{}", p.done_items, p.total_items, if p.total_items == 1 { "" } else { "s" });
@@ -2200,13 +2225,18 @@ impl App {
                         let a = if crate::kit::moving(ctx) { a * (el / 0.2).min(1.0) } else { a };
                         let tool = self.toast_tool;
                         // A pill as the bars' chips are, rounder still while it is one line.
-                        let r = egui::Frame::popup(ui.style()).fill(pal.raised.gamma_multiply(a)).stroke(Stroke::new(1.0, pal.card_line().gamma_multiply(a))).corner_radius(CornerRadius::same(if crate::kit::round() { 16 } else { 0 })).inner_margin(egui::Margin::symmetric(14, 8)).show(ui, |ui| {
+                        // A floating card as the menus are, fading as a whole (its shadows too), a
+                        // pill while it is one line.
+                        let frame = crate::popups::popup_frame(&pal).fill(pal.raised).corner_radius(crate::theme::corner(16)).inner_margin(egui::Margin::symmetric(14, 8));
+                        let r = ui.scope(|ui| {
+                            ui.multiply_opacity(a);
+                            crate::popups::float(ui, frame, 16, crate::theme::Elevation::Menu, &pal, |ui| {
                             // Only a toast with its action lays out in a row: a long one
                             // alone wraps within the card's width, as it always has.
                             match (tool, &undo) {
                                 (_, Some(key)) => {
                                     ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new(msg).color(pal.text.gamma_multiply(a)));
+                                        ui.label(egui::RichText::new(msg).color(pal.text));
                                         ui.add_space(8.0);
                                         // Undo is a button with its keys in it, not a word
                                         // beside a shortcut.
@@ -2217,7 +2247,7 @@ impl App {
                                 }
                                 (Some(t), None) => {
                                     ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new(msg).color(pal.text.gamma_multiply(a)));
+                                        ui.label(egui::RichText::new(msg).color(pal.text));
                                         ui.add_space(8.0);
                                         let b = crate::popups::quiet_button(ui, "How to install", &pal);
                                         note_control(ui, b.rect, "toast how to install");
@@ -2227,10 +2257,12 @@ impl App {
                                     });
                                 }
                                 (None, None) => {
-                                    ui.label(egui::RichText::new(msg).color(pal.text.gamma_multiply(a)));
+                                    ui.label(egui::RichText::new(msg).color(pal.text));
                                 }
                             }
-                        });
+                        })
+                        })
+                        .inner;
                         hold = (tool.is_some() || undo.is_some()) && r.response.contains_pointer();
                         // A toast that offers something says how long it stays: a line
                         // that runs down, full again while it is pointed at.

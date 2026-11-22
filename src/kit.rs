@@ -119,7 +119,9 @@ pub fn segmented_width(ui: &Ui, labels: &[&str], size: f32) -> f32 {
 #[allow(clippy::too_many_arguments)]
 fn segmented_in(ui: &mut Ui, id: Id, r: Rect, labels: &[&str], notes: &[&'static str], tips: &[&str], ws: &[f32], cur: usize, size: f32, pal: &Palette) -> Option<usize> {
     let p = ui.painter();
-    p.rect(r, CornerRadius::same(7), pal.card(), Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+    // A sunken well, its pill standing in it lit along its top.
+    let well = pal.card().lerp_to_gamma(pal.text, if pal.dark { 0.03 } else { 0.035 });
+    p.rect(r, crate::theme::corner(crate::theme::R_MD), well, Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
     let inner = r.shrink(2.0);
     let mut x = inner.left();
     let mut cells = Vec::with_capacity(labels.len());
@@ -133,7 +135,12 @@ fn segmented_in(ui: &mut Ui, id: Id, r: Rect, labels: &[&str], notes: &[&'static
         let l = slide(ui.ctx(), id.with("l"), c.left() - r.left()) + r.left();
         let w = slide(ui.ctx(), id.with("w"), c.width());
         let pill = Rect::from_min_size(pos2(l, inner.top()), vec2(w, inner.height()));
-        ui.painter().rect(pill, CornerRadius::same(5), lift(pal), Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+        let pr = crate::theme::corner(crate::theme::R_SM);
+        if !pal.strong {
+            ui.painter().add(egui::epaint::Shadow { offset: [0, 1], blur: 3, spread: 0, color: Color32::from_black_alpha(if pal.dark { 60 } else { 26 }) }.as_shape(pill, pr));
+        }
+        ui.painter().rect(pill, pr, lift(pal), Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+        lit_line(ui.painter(), pill, pr, pal);
     }
     for (k, (cell, label)) in cells.iter().zip(labels).enumerate() {
         let resp = ui.interact(*cell, id.with(k), Sense::click());
@@ -142,7 +149,7 @@ fn segmented_in(ui: &mut Ui, id: Id, r: Rect, labels: &[&str], notes: &[&'static
         }
         let on = k == cur;
         if !on && resp.hovered() {
-            ui.painter().rect_filled(cell.shrink(1.0), CornerRadius::same(5), touch(pal));
+            ui.painter().rect_filled(cell.shrink(1.0), crate::theme::corner(crate::theme::R_SM), touch(pal));
         }
         let c = if on { on_lift(pal) } else if resp.hovered() { pal.text } else { pal.text_dim };
         let c = if ui.is_enabled() { c } else { c.gamma_multiply(0.5) };
@@ -210,14 +217,17 @@ pub fn held(ctx: &egui::Context, cap: &str) -> bool {
 pub fn keycap(p: &egui::Painter, r: Rect, text: &str, font: FontId, down: bool, pal: &Palette) {
     let face = if pal.dark { pal.raised.lerp_to_gamma(pal.text, 0.08) } else { pal.raised.lerp_to_gamma(Color32::WHITE, 0.7) };
     let shade = if pal.dark { Color32::from_black_alpha(140) } else { pal.border.lerp_to_gamma(pal.text, 0.15) };
-    let rim = if pal.strong { pal.border } else if pal.dark { pal.text.gamma_multiply(0.14) } else { pal.border };
+    let rim = if pal.strong { pal.border } else if pal.dark { pal.text.gamma_multiply(0.12) } else { pal.border.gamma_multiply(0.85) };
+    let cr = crate::theme::corner(crate::theme::R_XS);
     let shine = if pal.dark { pal.text.gamma_multiply(0.12) } else { Color32::from_white_alpha(200) };
     let r = if down { r.translate(vec2(0.0, 1.0)) } else { r };
     if !down {
-        p.rect_filled(r.translate(vec2(0.0, 1.0)), CornerRadius::same(crate::theme::R_XS), shade);
+        p.rect_filled(r.translate(vec2(0.0, 1.0)), cr, shade);
     }
-    p.rect(r, CornerRadius::same(crate::theme::R_XS), if down { face.lerp_to_gamma(pal.text, 0.06) } else { face }, Stroke::new(1.0, rim), StrokeKind::Inside);
-    p.line_segment([pos2(r.left() + 3.0, r.top() + 1.5), pos2(r.right() - 3.0, r.top() + 1.5)], Stroke::new(1.0, shine));
+    p.rect(r, cr, if down { face.lerp_to_gamma(pal.text, 0.06) } else { face }, Stroke::new(1.0, rim), StrokeKind::Inside);
+    if !pal.strong {
+        lit_edge(p, r, cr, shine);
+    }
     let c = if down { pal.text } else { pal.text_dim };
     p.text(pos2(r.center().x, r.center().y - 0.5), Align2::CENTER_CENTER, text, font, c);
 }
@@ -311,13 +321,13 @@ pub fn fill_slider(ui: &mut Ui, id: Id, v: &mut f32, min: f32, max: f32, step: f
     let track = pal.card().lerp_to_gamma(pal.text, if pal.dark { 0.05 } else { 0.045 });
     // The fill is the accent's, as a switch that is on: faint enough to read the value on.
     let filled = track.lerp_to_gamma(pal.accent, if pal.dark { 0.34 } else { 0.26 } + if hot { 0.06 } else { 0.0 });
-    p.rect(r, CornerRadius::same(6), track, Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+    p.rect(r, crate::theme::corner(crate::theme::R_SM), track, Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
     let t = to_t(*v).clamp(0.0, 1.0);
     // The fill eases to a value set by a click or a key, and follows a drag at once.
     let shown = if resp.dragged() { slide(ui.ctx(), id, t); t } else { slide(ui.ctx(), id, t) };
     let x = r.left() + 4.0 + shown * (r.width() - 8.0);
     let fill = Rect::from_min_max(r.min, pos2(x.max(r.left() + 6.0), r.bottom())).shrink(1.0);
-    p.rect_filled(fill, CornerRadius::same(5), if enabled { filled } else { track });
+    p.rect_filled(fill, crate::theme::corner(crate::theme::R_SM - 1), if enabled { filled } else { track });
     if hot && !marks.is_empty() {
         for &m in marks.iter().filter(|&&m| m > min && m < max) {
             let hx = r.left() + 4.0 + to_t(m) * (r.width() - 8.0);
@@ -333,7 +343,14 @@ pub fn fill_slider(ui: &mut Ui, id: Id, v: &mut f32, min: f32, max: f32, step: f
     }
     let knob = if enabled { if hot { pal.text } else { pal.text.gamma_multiply(0.85) } } else { pal.text_dim.gamma_multiply(0.5) };
     let kx = x.clamp(r.left() + 5.0, r.right() - 5.0);
-    p.rect_filled(Rect::from_center_size(pos2(kx, r.center().y), vec2(3.0, (h - 10.0).max(8.0))), CornerRadius::same(2), knob);
+    // The handle: a slim upright bar standing on a soft shadow, the light catching its top,
+    // wider while it is held.
+    let kw = if resp.dragged() { 5.0 } else { 4.0 };
+    let handle = Rect::from_center_size(pos2(kx, r.center().y), vec2(kw, (h - 8.0).max(10.0)));
+    if enabled && !pal.strong {
+        p.add(egui::epaint::Shadow { offset: [0, 1], blur: 3, spread: 0, color: Color32::from_black_alpha(if pal.dark { 110 } else { 50 }) }.as_shape(handle, crate::theme::corner(2)));
+    }
+    p.rect_filled(handle, crate::theme::corner(2), knob);
     let vc = if !enabled { pal.text_dim.gamma_multiply(0.6) } else if hot { pal.text } else { pal.text_dim };
     let vg = crate::listing::tabular(ui, &fmt(*v), FontId::proportional(12.0), r.width() * 0.5, vc);
     // The value sits at the right end, and steps to the handle's left when the handle
@@ -451,8 +468,8 @@ pub fn small_button(ui: &mut Ui, label: &str, pal: &Palette) -> egui::Response {
     button_in(ui, label, h, false, pal)
 }
 
-/// `small_button` for the one main answer among them: filled in the text's own colour,
-/// as a dialog's main button is.
+/// `small_button` for the one main answer among them: filled in the accent, as a dialog's
+/// main button is.
 pub fn small_main_button(ui: &mut Ui, label: &str, pal: &Palette) -> egui::Response {
     let font = FontId::proportional(12.5);
     let g = ui.painter().layout_no_wrap(label.to_string(), font, pal.text);
@@ -460,8 +477,14 @@ pub fn small_main_button(ui: &mut Ui, label: &str, pal: &Palette) -> egui::Respo
     let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 20.0, h), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     let hot = resp.hovered() || resp.has_focus();
-    let (fill, ink) = if pal.strong { (pal.accent, pal.on_accent()) } else { (if hot { pal.text } else { pal.text.gamma_multiply(0.9) }, if pal.dark { pal.bg } else { pal.panel }) };
+    // The accent, lit along its top, as a dialog's main button.
+    let fill = if resp.is_pointer_button_down_on() { pal.accent.lerp_to_gamma(Color32::BLACK, 0.12) } else if hot && !pal.strong { pal.accent.lerp_to_gamma(Color32::WHITE, 0.08) } else { pal.accent };
+    let ink = pal.on_accent();
     ui.painter().rect_filled(r, radius(h, round()), fill);
+    sheen(ui.painter(), r, radius(h, round()), pal);
+    if resp.has_focus() {
+        focus_ring(ui.painter(), r, radius(h, round()), pal);
+    }
     ui.painter().galley_with_override_text_color(pos2(r.center().x - g.size().x / 2.0, (r.center().y - g.size().y / 2.0).round()), g, ink);
     resp
 }
@@ -972,4 +995,64 @@ pub fn gutter() -> f32 {
 
 pub fn set_gutter(g: f32) {
     GUTTER.store(g.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
+// ---------------------------------------------------------------- floating controls
+//
+// The parts the popups, menus and dialogs are built of, in the surfaces' terms: a well a
+// field sits in, a button's faces, a switch, a slider's thumb. Corners from the scale
+// (`theme::corner`), so they square off with Round corners off; a high-contrast theme
+// keeps them flat with solid edges and no light or halo.
+
+/// The line of light along the top of `r` alone, for a surface whose rim is drawn some
+/// other way (a popup's frame strokes its own): nothing on a high-contrast theme.
+pub fn lit_line(p: &egui::Painter, r: Rect, rad: CornerRadius, pal: &Palette) {
+    if !pal.strong {
+        lit_edge(p, r, rad, pal.lit);
+    }
+}
+
+/// A switch in `r` (about 32 by 18), `t` of the way on (eased by the caller): a sunken
+/// track that fills with the accent and takes its faint halo, and a round thumb standing
+/// on a soft shadow that slides across. A high-contrast theme's is solid: a bordered
+/// track, the accent when on, a thumb in the text's colour or on the accent's.
+pub fn switch_face(p: &egui::Painter, r: Rect, t: f32, hot: bool, enabled: bool, pal: &Palette) {
+    let t = t.clamp(0.0, 1.0);
+    let track_r = crate::theme::corner((r.height() / 2.0).round() as u8);
+    let off = pal.card().lerp_to_gamma(pal.text, if pal.dark { 0.13 + if hot { 0.04 } else { 0.0 } } else { 0.11 + if hot { 0.04 } else { 0.0 } });
+    let on = if hot && !pal.strong { pal.accent.lerp_to_gamma(Color32::WHITE, 0.08) } else { pal.accent };
+    let fade = |c: Color32| if enabled { c } else { c.gamma_multiply(0.45) };
+    if pal.strong {
+        p.rect(r, track_r, fade(pal.bg.lerp_to_gamma(pal.accent, t)), Stroke::new(1.0, if t > 0.5 { pal.accent } else { pal.border }), StrokeKind::Inside);
+    } else {
+        if t > 0.0 && enabled {
+            p.add(egui::epaint::Shadow { offset: [0, 0], blur: 10, spread: 0, color: pal.glow.gamma_multiply(t) }.as_shape(r, track_r));
+        }
+        p.rect_filled(r, track_r, fade(off.lerp_to_gamma(on, t)));
+        // Sunken while off: a hairline inside it, gone as the accent fills it.
+        p.rect_stroke(r, track_r, Stroke::new(1.0, pal.hairline.gamma_multiply(1.0 - t)), StrokeKind::Inside);
+    }
+    let d = r.height() - 4.0;
+    let x = egui::lerp(r.left() + 2.0 + d / 2.0..=r.right() - 2.0 - d / 2.0, t);
+    let thumb = Rect::from_center_size(pos2(x, r.center().y), vec2(d, d));
+    let thumb_r = crate::theme::corner((d / 2.0).round() as u8);
+    let face = if pal.strong {
+        if t > 0.5 { pal.on_accent() } else { pal.text }
+    } else {
+        let rest = if pal.dark { pal.text.gamma_multiply(0.78) } else { Color32::WHITE };
+        rest.lerp_to_gamma(Color32::WHITE, t)
+    };
+    if !pal.strong {
+        p.add(egui::epaint::Shadow { offset: [0, 1], blur: 4, spread: 0, color: Color32::from_black_alpha(if pal.dark { 90 } else { 50 }) }.as_shape(thumb, thumb_r));
+    }
+    p.rect_filled(thumb, thumb_r, fade(face));
+}
+
+/// The faint light along the top of a solid button (the accent, the danger red): it reads
+/// as standing up from the dialog rather than printed on it. Nothing on a high-contrast
+/// theme.
+pub fn sheen(p: &egui::Painter, r: Rect, rad: CornerRadius, pal: &Palette) {
+    if !pal.strong {
+        lit_edge(p, r, rad, Color32::from_white_alpha(if pal.dark { 34 } else { 52 }));
+    }
 }

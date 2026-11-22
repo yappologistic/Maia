@@ -10,7 +10,7 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use egui::{Color32, CornerRadius, Rect, Ui, pos2};
+use egui::{Color32, Rect, Ui, pos2};
 use egui_glow::glow::{self, HasContext as _};
 
 struct Gl {
@@ -96,8 +96,8 @@ fn blur(info: &egui::PaintCallbackInfo, painter: &egui_glow::Painter) {
 }
 
 /// First thing inside a popup's area: the window behind it, blurred, where the popup was
-/// last frame (an area keeps its size), with `radius` corners. Nothing on the very first
-/// frame, before the popup has a size.
+/// last frame (an area keeps its size), with `radius` corners (from the scale: square with
+/// Round corners off). Nothing on the very first frame, before the popup has a size.
 pub fn behind(ui: &Ui, radius: u8) {
     let Some(tex) = ready() else { return };
     let ctx = ui.ctx();
@@ -113,5 +113,5 @@ pub fn behind(ui: &Ui, radius: u8) {
     p.add(egui::Shape::Callback(cb));
     // The texture is the framebuffer's, bottom row first.
     let uv = Rect::from_min_max(pos2((rect.left() - screen.left()) * ppp / w, 1.0 - (rect.top() - screen.top()) * ppp / h), pos2((rect.right() - screen.left()) * ppp / w, 1.0 - (rect.bottom() - screen.top()) * ppp / h));
-    p.add(egui::epaint::RectShape::filled(rect, CornerRadius::same(radius), Color32::WHITE).with_texture(tex, uv));
+    p.add(egui::epaint::RectShape::filled(rect, crate::theme::corner(radius), Color32::WHITE).with_texture(tex, uv));
 }
