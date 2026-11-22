@@ -430,7 +430,9 @@ impl App {
             popup: Popup::None,
             sidebar: if session.sidebar_width > 0.0 { session.sidebar } else { true },
             side_focus: false,
-            sidebar_width: if session.sidebar_width > 0.0 { session.sidebar_width } else { 176.0 },
+            // The session keeps the width of the sidebar's own content, as it always has;
+            // the panel holding it also holds the canvas round its card.
+            sidebar_width: if session.sidebar_width > 0.0 { session.sidebar_width } else { 176.0 } + crate::ui::SIDEBAR_MARGINS,
             toast: None,
             toast_tool: None,
             toast_undo: None,
@@ -1313,7 +1315,7 @@ impl App {
             self.save_userdata();
         }
         if self.save_session {
-            let s = Session { layout: Some(self.layout_snap(ctx)), sidebar: self.sidebar, sidebar_width: self.sidebar_width, terminal_height: self.terminal.height };
+            let s = Session { layout: Some(self.layout_snap(ctx)), sidebar: self.sidebar, sidebar_width: self.sidebar_width - crate::ui::SIDEBAR_MARGINS, terminal_height: self.terminal.height };
             let _ = config::save_json(&config::session_path(), &s);
         }
         self.last_save = Instant::now();

@@ -901,7 +901,7 @@ pub fn chrome_item(ui: &mut Ui, what: &'static str, tip: &str, enabled: bool, on
         return ui.allocate_exact_size(egui::Vec2::ZERO, Sense::hover()).1;
     }
     let (r, _) = ui.allocate_exact_size(ITEM, Sense::hover());
-    chrome_item_at(ui, r, Id::new((what, r.min.x as i32, r.min.y as i32)), crate::theme::corner(crate::theme::R_SM), what, tip, enabled, on, pal, paint)
+    chrome_item_at(ui, r, Id::unique((what, r.min.x as i32, r.min.y as i32)), crate::theme::corner(crate::theme::R_SM), what, tip, enabled, on, pal, paint)
 }
 
 /// The items `add` lays out side by side (left to right), in one well painted under them
