@@ -883,6 +883,56 @@ pub(crate) fn veil(ui: &Ui, t: f32, pal: &Palette) {
     }
 }
 
+/// A sunken well for a field inside a popup: the card's colour a step towards the canvas,
+/// a faint shade along the inside of its top, a hairline round it. A high-contrast theme's
+/// is the background with its solid border. One shape, so a caller can put it in a slot it
+/// kept before laying the field out.
+pub(crate) fn popup_well(r: Rect, rad: CornerRadius, pal: &Palette) -> egui::Shape {
+    if pal.strong {
+        return egui::Shape::Rect(egui::epaint::RectShape::new(r, rad, pal.bg, Stroke::new(1.0, pal.border), StrokeKind::Inside));
+    }
+    let fill = pal.card().lerp_to_gamma(pal.canvas, if pal.dark { 0.45 } else { 0.3 });
+    let shade = Color32::from_black_alpha(if pal.dark { 46 } else { 14 });
+    let inset = rad.nw.max(2) as f32;
+    egui::Shape::Vec(vec![
+        egui::Shape::Rect(egui::epaint::RectShape::filled(r, rad, fill)),
+        egui::Shape::line_segment([pos2(r.left() + inset, r.top() + 1.5), pos2(r.right() - inset, r.top() + 1.5)], Stroke::new(1.0, shade)),
+        egui::Shape::Rect(egui::epaint::RectShape::stroke(r, rad, Stroke::new(1.0, pal.hairline), StrokeKind::Inside)),
+    ])
+}
+
+/// A group's or section's name in a popup: small, semibold, dim and a little letter-spaced,
+/// so it reads as a label over what follows rather than as one more row. Its words as
+/// written (a search for them finds them).
+pub(crate) fn section_label(p: &egui::Painter, pos: Pos2, align: Align2, text: &str, col: Color32) -> Rect {
+    let mut job = egui::text::LayoutJob::default();
+    job.append(text, 0.0, egui::TextFormat { font_id: theme::semibold(10.5), color: col, extra_letter_spacing: 0.6, ..Default::default() });
+    let g = p.layout_job(job);
+    let r = align.anchor_size(pos, g.size());
+    p.galley(r.min, g, col);
+    r
+}
+
+/// A row divider inside a popup's card: a hairline inset from both sides, barely there.
+fn row_rule(p: &egui::Painter, r: Rect, inset_left: f32, pal: &Palette) {
+    let y = r.top().round() + 0.5;
+    let c = if pal.strong { pal.border } else { pal.hairline.gamma_multiply(0.7) };
+    p.line_segment([pos2(r.left() + inset_left, y), pos2(r.right() - 14.0, y)], Stroke::new(1.0, c));
+}
+
+/// The foot of a popup below the hairline at `rule`: a band a shade off the popup's fill,
+/// to the frame's edge and round its lower corners (`frame` the popup's outer rect, `rad`
+/// its corner), so the description and keys read as apart from the list.
+fn footer_band(p: &egui::Painter, frame: Rect, rule: f32, rad: u8, pal: &Palette) {
+    let band = Rect::from_min_max(pos2(frame.left(), rule), frame.max).shrink2(vec2(1.0, 0.0));
+    let r = theme::corner(rad);
+    if !pal.strong {
+        let shade = if pal.dark { Color32::from_black_alpha(34) } else { Color32::from_black_alpha(9) };
+        p.rect_filled(band.with_max_y(band.bottom() - 1.0), CornerRadius { nw: 0, ne: 0, sw: r.sw.saturating_sub(1), se: r.se.saturating_sub(1) }, shade);
+    }
+    p.line_segment([pos2(frame.left() + 1.0, rule), pos2(frame.right() - 1.0, rule)], Stroke::new(1.0, pal.hairline));
+}
+
 /// A path with the home folder written as ~.
 pub(crate) fn home_short(p: &Path) -> String {
     match p.strip_prefix(fsx::home()) {
@@ -1240,9 +1290,16 @@ pub(crate) fn clicked_outside(ctx: &egui::Context, rect: Rect) -> bool {
 }
 
 pub(crate) fn search_field(ui: &mut Ui, text: &mut String, hint: &str, focus: &mut bool, pal: &Palette, glyph: Glyph) -> egui::Response {
-    // The filter's pill, as every search field has it: it stands apart from the list
-    // below it without a rule.
-    let resp = crate::ui::search_row_in(ui, text, hint, FontId::proportional(15.0), glyph, 14.0, false, true, pal).0;
+    // In a sunken well with a hairline, the focus ring round it while typing goes there:
+    // the field is the first thing a popup is for.
+    let slot = ui.painter().add(egui::Shape::Noop);
+    let fr = egui::Frame::NONE.inner_margin(egui::Margin { left: 6, right: 6, top: 2, bottom: 2 }).show(ui, |ui| crate::ui::search_row_in(ui, text, hint, FontId::proportional(15.0), glyph, 14.0, false, false, pal).0);
+    let (resp, wr) = (fr.inner, fr.response.rect);
+    let rad = theme::corner(theme::R_MD);
+    ui.painter().set(slot, popup_well(wr, rad, pal));
+    if resp.has_focus() {
+        crate::kit::focus_ring(ui.painter(), wr, rad, pal);
+    }
     if *focus {
         resp.request_focus();
         *focus = false;
@@ -2326,7 +2383,6 @@ fn palette(app: &mut App, ctx: &egui::Context, st: &mut PaletteState) -> bool {
     let compact = app.cfg.compact_lists;
     let row_h = if compact { 28.0 } else { 34.0 };
     let card_fill = mix(pal.raised, pal.bg, 0.45);
-    let card_line = pal.border.gamma_multiply(0.8);
     let mut close = false;
     let mut toggle_compact = false;
     let mut go_cat: Option<Option<Cat>> = None;
@@ -2375,15 +2431,15 @@ fn palette(app: &mut App, ctx: &egui::Context, st: &mut PaletteState) -> bool {
             } else {
                 &[("↑↓", "move"), ("Tab", "category"), ("Enter", "run"), ("Ctrl+D", "quick"), ("Ctrl+Enter", "add hotkey"), ("F2", "alias"), ("Esc", "close")]
             };
-            hint_row(ui, foot, keys, &pal);
             let about = Rect::from_min_max(pos2(inner.left(), foot.top() - 26.0), pos2(inner.right(), foot.top() - 4.0));
             let rule = about.top().round() - 0.5;
-            ui.painter().line_segment([pos2(inner.left(), rule), pos2(inner.right(), rule)], Stroke::new(1.0, pal.border));
+            footer_band(ui.painter(), inner.expand(8.0), rule, theme::R_LG, &pal);
+            hint_row(ui, foot, keys, &pal);
             let body = Rect::from_min_max(pos2(inner.left(), head.min_rect().bottom().round() + 2.0), pos2(inner.right(), rule - 6.0));
             // A narrow window keeps only the categories' glyphs.
             let side = Rect::from_min_max(body.min, pos2(body.left() + if narrow { 36.0 } else { 168.0 }, body.bottom()));
             let lx = side.right().round() + 6.5;
-            ui.painter().line_segment([pos2(lx, body.top()), pos2(lx, body.bottom())], Stroke::new(1.0, pal.border));
+            ui.painter().line_segment([pos2(lx, body.top()), pos2(lx, body.bottom())], Stroke::new(1.0, pal.hairline));
             let main = Rect::from_min_max(pos2(lx + 7.5, body.top()), body.max);
             let mut sui = ui.new_child(egui::UiBuilder::new().max_rect(side).layout(top_down));
             egui::ScrollArea::vertical().id_salt("palette categories").max_height(side.height()).auto_shrink([false, false]).show(&mut sui, |ui| {
@@ -2445,8 +2501,8 @@ fn palette(app: &mut App, ctx: &egui::Context, st: &mut PaletteState) -> bool {
                         ui.add_space(12.0);
                     }
                     if !heading.is_empty() {
-                        let (hr, _) = ui.allocate_exact_size(vec2(cw, 20.0), Sense::hover());
-                        ui.painter().text(pos2(hr.left() + 4.0, hr.center().y - 1.0), Align2::LEFT_CENTER, *heading, FontId::proportional(11.5), pal.text_dim);
+                        let (hr, _) = ui.allocate_exact_size(vec2(cw, 22.0), Sense::hover());
+                        section_label(ui.painter(), pos2(hr.left() + 6.0, hr.center().y - 1.0), Align2::LEFT_CENTER, heading, pal.text_dim);
                         if std::mem::take(&mut top) {
                             ui.scroll_to_rect(hr, Some(egui::Align::TOP));
                             st.scroll = false;
@@ -2457,7 +2513,7 @@ fn palette(app: &mut App, ctx: &egui::Context, st: &mut PaletteState) -> bool {
                         ui.scroll_to_rect(card, Some(egui::Align::TOP));
                         st.scroll = false;
                     }
-                    ui.painter().rect(card, CornerRadius::same(8), card_fill, Stroke::new(1.0, card_line), StrokeKind::Inside);
+                    crate::kit::card_surface(ui.painter(), card, theme::corner(theme::R_MD), card_fill, theme::Elevation::Flat, &pal);
                     for (j, &c) in cmds.iter().enumerate() {
                         let r = Rect::from_min_size(card.min + vec2(0.0, j as f32 * row_h), vec2(cw, row_h));
                         let sel = vi == st.sel;
@@ -2481,6 +2537,7 @@ fn palette(app: &mut App, ctx: &egui::Context, st: &mut PaletteState) -> bool {
                         }
                         vi += 1;
                     }
+                    crate::kit::card_edge(ui.painter(), card, theme::corner(theme::R_MD), 0.0, &pal);
                 }
                 if flat.is_empty() {
                     ui.add_space(28.0);
@@ -2581,19 +2638,18 @@ fn palette_row(ui: &mut Ui, app: &App, c: Cmd, r: Rect, i: usize, look: &CmdLook
     let enabled = applicable(app, c);
     let starred = app.ud.quick.iter().any(|q| q == info.id);
     let overridden = app.cfg.hotkeys.contains_key(info.id);
-    if !look.first {
-        let y = r.top().round() + 0.5;
-        ui.painter().line_segment([pos2(r.left() + 12.0, y), pos2(r.right() - 12.0, y)], Stroke::new(1.0, pal.border.gamma_multiply(0.7)));
-    }
     let resp = ui.interact(r, Id::new(("palette row", i)), Sense::click());
     let hovered = resp.hovered() || ui.rect_contains_pointer(r);
-    let inside = r.shrink(2.0);
-    // Chosen quietly, a lighter step with the accent's mark at its edge: a saturated
-    // block in each column fought for the eye, and drowned the matched letters.
+    if !look.first && !look.sel && !hovered {
+        row_rule(ui.painter(), r, 12.0, pal);
+    }
+    let inside = r.shrink2(vec2(4.0, 2.0));
+    // Chosen quietly, a tinted pill with the accent's mark at its edge: a saturated block
+    // in each column fought for the eye, and drowned the matched letters.
     if look.sel {
-        crate::kit::chosen(ui.painter(), inside, 6, pal);
+        crate::kit::chosen(ui.painter(), inside, theme::R_SM, pal);
     } else if hovered {
-        ui.painter().rect_filled(inside, CornerRadius::same(6), crate::kit::touch(pal));
+        ui.painter().rect_filled(inside, theme::corner(theme::R_SM), crate::kit::touch(pal));
     }
     // A high-contrast theme keeps its saturated selection, where the dim grey and the
     // accent would sink.
@@ -2625,7 +2681,7 @@ fn palette_row(ui: &mut Ui, app: &App, c: Cmd, r: Rect, i: usize, look: &CmdLook
         let pr = Rect::from_center_size(pos2(x - 10.0, cy), Vec2::splat(20.0));
         let presp = ui.interact(pr, Id::new(("addkey", i)), Sense::click()).on_hover_text("Add a hotkey (Ctrl+Enter)");
         if presp.hovered() {
-            ui.painter().rect_filled(pr, CornerRadius::same(4), pal.raised);
+            ui.painter().rect_filled(pr, theme::corner(theme::R_XS), crate::kit::touch(pal));
         }
         paint_glyph(ui.painter(), pr.shrink(4.0), Glyph::Plus, dim);
         if presp.clicked() {
@@ -2637,7 +2693,7 @@ fn palette_row(ui: &mut Ui, app: &App, c: Cmd, r: Rect, i: usize, look: &CmdLook
         crate::ui::note_control(ui, ar, "alias button");
         let aresp = ui.interact(ar, Id::new(("alias", i)), Sense::click()).on_hover_text("Set the alias that finds this command (F2)");
         if aresp.hovered() {
-            ui.painter().rect_filled(ar, CornerRadius::same(4), pal.raised);
+            ui.painter().rect_filled(ar, theme::corner(theme::R_XS), crate::kit::touch(pal));
         }
         ui.painter().galley(pos2(ar.left() + 4.0, cy - ag.size().y / 2.0), ag, dim);
         if aresp.clicked() {
@@ -2653,11 +2709,13 @@ fn palette_row(ui: &mut Ui, app: &App, c: Cmd, r: Rect, i: usize, look: &CmdLook
         }
         x -= 22.0;
     } else if starred {
-        crate::ui::star(ui.painter(), pos2(x - 10.0, cy), 5.0, pal.accent.gamma_multiply(0.7), true);
+        // At rest a starred row's star is a quiet mark; it lights up with its row.
+        crate::ui::star(ui.painter(), pos2(x - 10.0, cy), 5.0, pal.accent.gamma_multiply(0.4), true);
         x -= 22.0;
     }
-    // The title takes what is left, cut short before the buttons.
-    let tx = r.left() + 12.0;
+    // The title takes what is left, cut short before the buttons, clear of the chosen
+    // pill's accent mark.
+    let tx = r.left() + 16.0;
     let room = (x - 8.0 - tx).max(24.0);
     let font = FontId::proportional(if look.compact { 13.0 } else { 13.5 });
     let mut job = highlight_job(info.title, q, font, tcol, acc);
@@ -3325,9 +3383,10 @@ fn option_control_inner(ui: &mut Ui, app: &mut App, o: Opt, pal: &Palette, layou
                 open = b.clicked();
                 ui.label(egui::RichText::new(t.label()).size(12.5));
                 let (r, _) = ui.allocate_exact_size(vec2(22.0, 16.0), Sense::hover());
-                ui.painter().rect_filled(r, CornerRadius::same(5), p.panel);
-                ui.painter().rect_stroke(r, CornerRadius::same(5), Stroke::new(1.0, p.border), StrokeKind::Inside);
-                ui.painter().rect_filled(Rect::from_center_size(pos2(r.center().x, r.bottom() - 5.0), vec2(r.width() - 10.0, 3.0)), CornerRadius::same(2), p.accent);
+                let sr = theme::corner(theme::R_XS);
+                ui.painter().rect_filled(r, sr, p.panel);
+                ui.painter().rect_stroke(r, sr, Stroke::new(1.0, if pal.strong { pal.border } else { pal.hairline_active() }), StrokeKind::Inside);
+                ui.painter().rect_filled(Rect::from_center_size(pos2(r.center().x, r.bottom() - 5.0), vec2(r.width() - 10.0, 3.0)), theme::corner(2), p.accent);
             });
             if open {
                 app.popup = Popup::Themes;
@@ -3470,13 +3529,12 @@ fn option_row(ui: &mut Ui, app: &mut App, oi: usize, r: Rect, look: &RowLook, q:
     let inert = !parent_on(&app.cfg, o);
     let mut changed = false;
     if !look.first {
-        let y = r.top().round() + 0.5;
-        ui.painter().line_segment([pos2(r.left() + 12.0 + indent, y), pos2(r.right() - 12.0, y)], Stroke::new(1.0, pal.border.gamma_multiply(0.7)));
+        row_rule(ui.painter(), r, 14.0 + indent, &pal);
     }
     let resp = ui.interact(r, Id::new(("optrow", oi)), Sense::click());
-    let inside = r.shrink(2.0);
+    let inside = r.shrink2(vec2(4.0, 2.0));
     if ui.rect_contains_pointer(r) {
-        ui.painter().rect_filled(inside, CornerRadius::same(6), pal.hover);
+        ui.painter().rect_filled(inside, theme::corner(theme::R_SM), crate::kit::touch(&pal));
     }
     if look.selected {
         ui.painter().rect_stroke(inside, CornerRadius::same(6), Stroke::new(1.0, pal.accent.gamma_multiply(0.8)), StrokeKind::Inside);
@@ -3702,7 +3760,6 @@ fn options(app: &mut App, ctx: &egui::Context, st: &mut OptState) -> bool {
     let compact = app.cfg.compact_lists;
     let row_h = if compact { 32.0 } else { 44.0 };
     let card_fill = mix(pal.raised, pal.bg, 0.45);
-    let card_line = pal.border.gamma_multiply(0.8);
     let mut close = false;
     let mut toggle_compact = false;
     let mut go_section = None;
@@ -3819,7 +3876,7 @@ fn options(app: &mut App, ctx: &egui::Context, st: &mut OptState) -> bool {
                         let c = if hot { pal.text } else { pal.text_dim };
                         // Folded, it says how many it holds.
                         let label = if shut { format!("{group} · {n}") } else { group.to_string() };
-                        ui.painter().text(pos2(hr.left() + 4.0, hr.center().y - 1.0), Align2::LEFT_CENTER, label, FontId::proportional(11.5), c);
+                        section_label(ui.painter(), pos2(hr.left() + 6.0, hr.center().y - 1.0), Align2::LEFT_CENTER, &label, c);
                         // The chevron shows while pointed at, and stays on a folded group.
                         let turn = crate::kit::slide(ui.ctx(), Id::new(("options fold turn", group)), if shut { 0.0 } else { 1.0 });
                         if hot || shut || turn < 0.99 {
@@ -3834,7 +3891,10 @@ fn options(app: &mut App, ctx: &egui::Context, st: &mut OptState) -> bool {
                     let h = (n as f32 * row_h * open).round();
                     if h >= 1.0 {
                         let (card, _) = ui.allocate_exact_size(vec2(cw, h), Sense::hover());
-                        ui.painter().rect(card, CornerRadius::same(8), card_fill, Stroke::new(1.0, card_line), StrokeKind::Inside);
+                        // A card of its own: its fill under the rows, its hairline and lit top
+                        // edge over them.
+                        let card_rad = theme::corner(theme::R_MD);
+                        crate::kit::card_surface(ui.painter(), card, card_rad, card_fill, theme::Elevation::Flat, &pal);
                         let clip = ui.clip_rect().intersect(card);
                         ui.scope(|ui| {
                             ui.set_clip_rect(clip);
@@ -3852,6 +3912,7 @@ fn options(app: &mut App, ctx: &egui::Context, st: &mut OptState) -> bool {
                                 }
                             }
                         });
+                        crate::kit::card_edge(ui.painter(), card, card_rad, 0.0, &pal);
                     }
                     if !shut {
                         vi += n;
@@ -5226,9 +5287,16 @@ fn themes(app: &mut App, ctx: &egui::Context) -> bool {
                                     ui.scroll_to_rect(r.expand(gap / 2.0), None);
                                 }
                                 let p = theme::palette(t);
-                                ui.painter().rect(r, CornerRadius::same(12), if hov { pal.hover } else { pal.card() }, Stroke::new(1.0, if hov { pal.text_dim.gamma_multiply(0.5) } else { pal.card_line() }), StrokeKind::Inside);
+                                // A small card: the hairline and lit top edge of every card, lifted
+                                // under the pointer; the one in use stands in the accent's glow.
+                                let cr = theme::corner(theme::R_MD);
+                                if chosen {
+                                    crate::kit::glow(ui.painter(), r, cr, 1.0, &pal);
+                                }
+                                ui.painter().rect_filled(r, cr, if hov { crate::kit::touch(&pal) } else { pal.card() });
+                                crate::kit::card_edge(ui.painter(), r, cr, if hov { 0.6 } else { 0.0 }, &pal);
                                 let preview = Rect::from_min_size(r.min + vec2(pad, pad), vec2(cw - 2.0 * pad, preview_h));
-                                theme_card(ui.painter(), preview, p, 6);
+                                theme_card(ui.painter(), preview, p, if crate::kit::round() { theme::R_SM } else { 0 });
                                 // Its colours: the accent, then the five code colours.
                                 let s = p.syntax;
                                 let sw = [p.accent, s.keyword, s.kind, s.string, s.number, s.comment];
@@ -5246,13 +5314,13 @@ fn themes(app: &mut App, ctx: &egui::Context) -> bool {
                                 // Chosen: an accent ring and a check badge; focused from the
                                 // keyboard: a ring in the text colour.
                                 if chosen {
-                                    ui.painter().rect_stroke(r, CornerRadius::same(12), Stroke::new(2.0, pal.accent), StrokeKind::Inside);
+                                    ui.painter().rect_stroke(r, cr, Stroke::new(if pal.strong { 2.0 } else { 1.5 }, pal.accent), StrokeKind::Inside);
                                     let c = pos2(preview.right() - 8.0, ty + name_h / 2.0);
                                     ui.painter().circle_filled(c, 8.0, pal.accent);
                                     ui.painter().add(egui::Shape::line(vec![c + vec2(-3.5, 0.2), c + vec2(-1.0, 2.7), c + vec2(3.7, -2.3)], Stroke::new(1.6, Color32::WHITE)));
                                 }
                                 if focus {
-                                    ui.painter().rect_stroke(r.expand(3.0), CornerRadius::same(15), Stroke::new(1.5, pal.text.gamma_multiply(0.8)), StrokeKind::Inside);
+                                    ui.painter().rect_stroke(r.expand(3.0), theme::corner(theme::R_MD + 3), Stroke::new(1.5, pal.text.gamma_multiply(0.8)), StrokeKind::Inside);
                                 }
                                 if hov {
                                     hovered = Some(t);

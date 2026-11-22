@@ -91,13 +91,19 @@ pub fn on_lift(pal: &Palette) -> Color32 {
     if pal.strong { pal.on_sel() } else { pal.text }
 }
 
-/// The chosen row's highlight: `lift`, and a short accent bar at its left edge.
+/// The chosen row's highlight: a pill of `lift` tinted with the accent's glow, a rim of
+/// the accent faint enough to read as light, and a short accent bar at its left edge.
+/// Corners from the scale (`radius`), square with Round corners off.
 pub fn chosen(p: &egui::Painter, r: Rect, radius: u8, pal: &Palette) {
-    p.rect_filled(r, CornerRadius::same(radius), lift(pal));
-    if !pal.strong {
-        let h = (r.height() - 16.0).clamp(8.0, 18.0);
-        p.rect_filled(Rect::from_center_size(pos2(r.left() + 3.5, r.center().y), vec2(3.0, h)), CornerRadius::same(2), pal.accent);
+    let rad = crate::theme::corner(radius);
+    if pal.strong {
+        p.rect_filled(r, rad, lift(pal));
+        return;
     }
+    p.rect_filled(r, rad, crate::theme::over(pal.glow, lift(pal)));
+    p.rect_stroke(r, rad, Stroke::new(1.0, pal.accent.gamma_multiply(if pal.dark { 0.16 } else { 0.2 })), StrokeKind::Inside);
+    let h = (r.height() - 16.0).clamp(8.0, 18.0);
+    p.rect_filled(Rect::from_center_size(pos2(r.left() + 4.5, r.center().y), vec2(3.0, h)), crate::theme::corner(2), pal.accent);
 }
 
 /// A choice of a few, side by side, with a pill that slides to the one picked. Labels
@@ -295,6 +301,9 @@ pub fn dashed_rule(p: &egui::Painter, a: Pos2, b: Pos2, pal: &Palette) {
 pub fn fill_slider(ui: &mut Ui, id: Id, v: &mut f32, min: f32, max: f32, step: f32, log: bool, w: f32, h: f32, keys: bool, label: &str, marks: &[f32], fmt: impl Fn(f32) -> String, pal: &Palette) -> bool {
     let (r, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click_and_drag());
     crate::ui::note_control(ui, r, "slider");
+    if label.is_empty() {
+        return track_slider(ui, &resp, r, id, v, (min, max, step, log), keys, marks, fmt, pal);
+    }
     let enabled = ui.is_enabled();
     let to_t = |x: f32| if log { (x.max(min).ln() - min.ln()) / (max.ln() - min.ln()) } else { (x - min) / (max - min) };
     let from_t = |t: f32| if log { (min.ln() + t * (max.ln() - min.ln())).exp() } else { min + t * (max - min) };
@@ -1055,4 +1064,79 @@ pub fn sheen(p: &egui::Painter, r: Rect, rad: CornerRadius, pal: &Palette) {
     if !pal.strong {
         lit_edge(p, r, rad, Color32::from_white_alpha(if pal.dark { 34 } else { 52 }));
     }
+}
+
+/// `fill_slider` without a label: a slim rounded track whose filled part is the accent, a
+/// round thumb standing on a soft shadow (larger while held), and the value beside it in
+/// tabular figures, at the right of `r`. The track leaves the value room for the widest
+/// it can be, so the figures never move the track.
+#[allow(clippy::too_many_arguments)]
+fn track_slider(ui: &mut Ui, resp: &egui::Response, r: Rect, id: Id, v: &mut f32, (min, max, step, log): (f32, f32, f32, bool), keys: bool, marks: &[f32], fmt: impl Fn(f32) -> String, pal: &Palette) -> bool {
+    let enabled = ui.is_enabled();
+    let to_t = |x: f32| if log { (x.max(min).ln() - min.ln()) / (max.ln() - min.ln()) } else { (x - min) / (max - min) };
+    let from_t = |t: f32| if log { (min.ln() + t * (max.ln() - min.ln())).exp() } else { min + t * (max - min) };
+    let snap = |x: f32| ((x / step).round() * step).clamp(min, max);
+    let vfont = FontId::proportional(12.0);
+    let widest = [fmt(min), fmt(max)].iter().map(|s| crate::listing::tabular(ui, s, vfont.clone(), r.width(), pal.text).size().x).fold(0.0f32, f32::max);
+    let d = 14.0;
+    let (tl, tr) = (r.left() + d / 2.0, (r.right() - widest - 12.0 - d / 2.0).max(r.left() + d));
+    let before = *v;
+    if enabled && (resp.dragged() || resp.clicked()) {
+        if let Some(p) = resp.interact_pointer_pos() {
+            *v = snap(from_t(((p.x - tl) / (tr - tl)).clamp(0.0, 1.0)));
+        }
+    }
+    if enabled && keys {
+        let (l, rt) = ui.input_mut(|i| (i.consume_key(egui::Modifiers::NONE, Key::ArrowLeft), i.consume_key(egui::Modifiers::NONE, Key::ArrowRight)));
+        let by = |t: f32, d: f32| if log { snap(from_t((to_t(t) + d * 0.1).clamp(0.0, 1.0))) } else { snap(t + d * step) };
+        if l {
+            *v = by(*v, -1.0);
+        }
+        if rt {
+            *v = by(*v, 1.0);
+        }
+    }
+    let hot = enabled && (resp.hovered() || resp.dragged());
+    let t = to_t(*v).clamp(0.0, 1.0);
+    let shown = if resp.dragged() { slide(ui.ctx(), id, t); t } else { slide(ui.ctx(), id, t) };
+    let p = ui.painter();
+    let cy = r.center().y.round();
+    let track = Rect::from_min_max(pos2(tl - 3.0, cy - 3.0), pos2(tr + 3.0, cy + 3.0));
+    let tr_rad = crate::theme::corner(3);
+    let groove = pal.card().lerp_to_gamma(pal.text, if pal.dark { 0.12 } else { 0.1 });
+    let kx = tl + shown * (tr - tl);
+    if pal.strong {
+        p.rect(track, tr_rad, pal.bg, Stroke::new(1.0, pal.border), StrokeKind::Inside);
+    } else {
+        p.rect_filled(track, tr_rad, groove);
+    }
+    let fill_c = if !enabled { pal.text_dim.gamma_multiply(0.4) } else if hot && !pal.strong { pal.accent.lerp_to_gamma(Color32::WHITE, 0.08) } else { pal.accent };
+    p.rect_filled(Rect::from_min_max(track.min, pos2(kx.max(track.left() + 6.0), track.bottom())), tr_rad, fill_c);
+    if hot {
+        let n = if marks.is_empty() && !log { ((max - min) / step).round() as usize } else { 0 };
+        let every = n.div_ceil(24).max(1);
+        let ticks: Vec<f32> = if !marks.is_empty() { marks.iter().filter(|&&m| m > min && m < max).map(|&m| to_t(m)).collect() } else { (every..n).step_by(every).map(|k| k as f32 / n as f32).collect() };
+        for tt in ticks {
+            let hx = (tl + tt * (tr - tl)).round() + 0.5;
+            p.line_segment([pos2(hx, cy - 7.0), pos2(hx, cy - 5.0)], Stroke::new(1.0, pal.text.gamma_multiply(0.25)));
+        }
+    }
+    let size = if resp.dragged() { d + 2.0 } else { d };
+    let thumb = Rect::from_center_size(pos2(kx, cy), vec2(size, size));
+    let th_rad = crate::theme::corner((size / 2.0).round() as u8);
+    let face = if !enabled { pal.text_dim.gamma_multiply(0.5) } else if pal.strong { pal.text } else if pal.dark { pal.text.lerp_to_gamma(Color32::WHITE, 0.3) } else { Color32::WHITE };
+    if enabled && !pal.strong {
+        if hot {
+            p.add(egui::epaint::Shadow { offset: [0, 0], blur: 10, spread: 1, color: pal.glow }.as_shape(thumb, th_rad));
+        }
+        p.add(egui::epaint::Shadow { offset: [0, 1], blur: 4, spread: 0, color: Color32::from_black_alpha(if pal.dark { 110 } else { 55 }) }.as_shape(thumb, th_rad));
+    }
+    p.rect(thumb, th_rad, face, Stroke::new(1.0, if pal.dark && !pal.strong { Color32::TRANSPARENT } else { pal.border }), StrokeKind::Inside);
+    let vc = if !enabled { pal.text_dim.gamma_multiply(0.6) } else if hot { pal.text } else { pal.text_dim };
+    let vg = crate::listing::tabular(ui, &fmt(*v), vfont, widest + 4.0, vc);
+    ui.painter().galley(pos2(r.right() - vg.size().x, (cy - vg.size().y / 2.0).round()), vg, vc);
+    if hot {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    *v != before
 }
