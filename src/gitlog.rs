@@ -1733,19 +1733,24 @@ fn pill(ui: &Ui, p: &egui::Painter, at: Pos2, text: &str, remote: Option<&str>, 
     job.wrap = TextWrapping { max_width: (max - 12.0 - cloud).max(8.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
     let g = ui.fonts_mut(|f| f.layout_job(job));
     let r = Rect::from_min_size(pos2(at.x, at.y - g.size().y / 2.0 - 1.0), g.size() + vec2(12.0 + cloud, 2.0));
-    let rad = CornerRadius::same((r.height() / 2.0) as u8);
+    // A chip from the corner scale, its own colour's hairline round it.
+    let rad = crate::theme::corner(crate::theme::R_XS);
+    let rim = |c: Color32| if pal.strong { Stroke::new(1.0, c) } else { Stroke::new(1.0, c.gamma_multiply(0.5)) };
     match kind {
         RefKind::Tag => {
             p.rect_stroke(r, rad, Stroke::new(1.0, col.gamma_multiply(0.55)), egui::StrokeKind::Inside);
         }
         RefKind::Head => {
-            p.rect_filled(r, rad, col.gamma_multiply(0.42));
+            p.rect_filled(r, rad, col.gamma_multiply(0.36));
+            p.rect_stroke(r, rad, rim(col), egui::StrokeKind::Inside);
         }
         RefKind::Branch => {
-            p.rect_filled(r, rad, col.gamma_multiply(0.22));
+            p.rect_filled(r, rad, col.gamma_multiply(0.18));
+            p.rect_stroke(r, rad, rim(col.gamma_multiply(0.7)), egui::StrokeKind::Inside);
         }
         RefKind::Remote => {
-            p.rect_filled(r, rad, pal.text_dim.gamma_multiply(0.14));
+            p.rect_filled(r, rad, pal.text_dim.gamma_multiply(0.12));
+            p.rect_stroke(r, rad, Stroke::new(1.0, pal.hairline), egui::StrokeKind::Inside);
             crate::theme::paint_glyph(p, Rect::from_center_size(pos2(r.left() + 5.0 + cloud / 2.0, r.center().y), Vec2::splat(font.size + 1.0)), Glyph::Cloud, pal.text_dim);
         }
     }
@@ -2066,9 +2071,11 @@ fn graph(ui: &mut Ui, body: Rect, h: &mut History, env: &mut Env) {
                 // A hollow ring in the first lane, then what is changed.
                 let resp = ui.interact(rr, ui.id().with("gitchanges"), Sense::click());
                 crate::ui::note_control(ui, rr, "changes row");
-                let under = if on_changes && h.keyed { pal.row_hover } else if resp.hovered() { pal.hover } else { pal.bg };
-                if under != pal.bg {
-                    p.rect_filled(rr.shrink2(vec2(2.0, 1.0)), CornerRadius::same(5), under);
+                // The list's own language: the picked row tinted and lined, the pointer's lit.
+                if on_changes && h.keyed {
+                    crate::listing::paint_run(&p, rr.shrink2(vec2(crate::listing::ROW_INSET, 1.0)), crate::theme::R_SM, false, false, true, &pal);
+                } else if resp.hovered() {
+                    crate::listing::paint_hover(&p, rr.shrink2(vec2(crate::listing::ROW_INSET, 1.0)), crate::theme::corner(crate::theme::R_SM), 1.0, &pal);
                 }
                 if resp.clicked() {
                     open_changes = true;
@@ -2100,10 +2107,17 @@ fn graph(ui: &mut Ui, body: Rect, h: &mut History, env: &mut Env) {
                 continue;
             }
             let resp = ui.interact(rr, ui.id().with(("gitrow", i)), Sense::click());
-            let under = if i == l.sel && h.keyed && !on_changes { pal.row_hover } else if resp.hovered() { pal.hover } else { pal.bg };
-            if under != pal.bg {
-                p.rect_filled(rr.shrink2(vec2(2.0, 1.0)), CornerRadius::same(5), under);
-            }
+            // The list's own language: the picked row tinted and lined, the pointer's lit.
+            // `under` is what that comes to over the pane, for the ring round the dot.
+            let under = if i == l.sel && h.keyed && !on_changes {
+                crate::listing::paint_run(&p, rr.shrink2(vec2(crate::listing::ROW_INSET, 1.0)), crate::theme::R_SM, false, false, true, &pal);
+                crate::theme::over(crate::listing::sel_fill(&pal, true), pal.bg)
+            } else if resp.hovered() {
+                crate::listing::paint_hover(&p, rr.shrink2(vec2(crate::listing::ROW_INSET, 1.0)), crate::theme::corner(crate::theme::R_SM), 1.0, &pal);
+                crate::theme::over(if pal.strong { crate::kit::touch(&pal) } else { pal.text.gamma_multiply(if pal.dark { 0.05 } else { 0.045 }) }, pal.bg)
+            } else {
+                pal.bg
+            };
             if resp.clicked() {
                 open = Some(i);
             }
