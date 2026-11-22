@@ -779,6 +779,169 @@ pub fn focus_ring(p: &egui::Painter, r: Rect, rad: CornerRadius, pal: &Palette) 
     p.rect_stroke(r, rad, Stroke::new(1.0, pal.accent.gamma_multiply(0.75)), StrokeKind::Outside);
 }
 
+// ---------------------------------------------------------------- chrome
+//
+// The window's own furniture: the tab strips, the toolbars, the sidebar, the status line,
+// the shelf and the picker's bar. Two materials, one either side of the card they sit on:
+// a well, a step sunk into the card (the toolbar's groups, the path, the filter), and a
+// raised face, a step stood up from whatever is under it (the active tab, the folder
+// shown in the path, an item that is on). Hover and press are washes of the text's colour
+// at a low alpha, so they read on any fill they land on, and they ease in over a tenth
+// of a second (at once with Animations off). A high-contrast theme gets solid fills and
+// borders and no washes of light.
+
+/// How far a hover (or any other state) has come in: 0 to 1, easing over 120 ms, and at
+/// once with Animations off.
+pub fn ease_to(ui: &Ui, id: Id, on: bool) -> f32 {
+    if moving(ui.ctx()) { ui.ctx().animate_bool_with_time(id, on, 0.12) } else if on { 1.0 } else { 0.0 }
+}
+
+/// A well's fill: the card it is cut into, a step towards the canvas under the card.
+pub fn well_fill(pal: &Palette) -> Color32 {
+    if pal.strong {
+        return pal.bg;
+    }
+    pal.panel.lerp_to_gamma(pal.canvas, if pal.dark { 0.42 } else { 0.5 })
+}
+
+/// The shapes of a well in `r`: its fill, a faint shade along the inside of its top (what
+/// makes it read as cut in rather than laid on) and the card's hairline round it.
+fn well_shapes(r: Rect, rad: CornerRadius, pal: &Palette) -> Shape {
+    if pal.strong {
+        return Shape::Rect(egui::epaint::RectShape::new(r, rad, pal.bg, Stroke::new(1.0, pal.border), StrokeKind::Inside));
+    }
+    let inset = (rad.nw.max(rad.ne) as f32 * 0.7).max(1.0);
+    let shade = Color32::from_black_alpha(if pal.dark { 50 } else { 16 });
+    Shape::Vec(vec![
+        Shape::rect_filled(r, rad, well_fill(pal)),
+        Shape::line_segment([pos2(r.left() + inset, r.top() + 1.5), pos2(r.right() - inset, r.top() + 1.5)], Stroke::new(1.0, shade)),
+        Shape::Rect(egui::epaint::RectShape::stroke(r, rad, Stroke::new(1.0, pal.hairline), StrokeKind::Inside)),
+    ])
+}
+
+/// A well in `r` (see `well_shapes`), painted now.
+pub fn well(p: &egui::Painter, r: Rect, rad: CornerRadius, pal: &Palette) {
+    p.add(well_shapes(r, rad, pal));
+}
+
+/// A well painted into a slot reserved earlier (`Painter::add(Shape::Noop)`), so it lies
+/// under what was drawn since.
+pub fn well_under(p: &egui::Painter, slot: egui::layers::ShapeIdx, r: Rect, rad: CornerRadius, pal: &Palette) {
+    p.set(slot, well_shapes(r, rad, pal));
+}
+
+/// A raised face's fill: the card, a step brighter on a dark theme; on a light one the
+/// card a little whiter, where standing out of a greyer well is what lifts it.
+pub fn raised_fill(pal: &Palette) -> Color32 {
+    if pal.strong {
+        return pal.selected;
+    }
+    if pal.dark { pal.panel.lerp_to_gamma(pal.text, 0.085) } else { pal.panel.lerp_to_gamma(Color32::WHITE, 0.6) }
+}
+
+/// A raised face in `r`: a tight contact shadow under it, `fill`, then the card's rim and
+/// lit top edge. The active tab, the folder shown, an item that is on.
+pub fn raised(p: &egui::Painter, r: Rect, rad: CornerRadius, fill: Color32, pal: &Palette) {
+    if pal.strong {
+        p.rect(r, rad, fill, Stroke::new(1.0, pal.border), StrokeKind::Inside);
+        return;
+    }
+    let [_, contact] = pal.shadows(crate::theme::Elevation::Card);
+    if contact.color.a() > 0 {
+        p.add(egui::epaint::Shadow { offset: [0, 1], blur: 3, spread: 0, color: contact.color.gamma_multiply(0.8) }.as_shape(r, rad));
+    }
+    p.rect_filled(r, rad, fill);
+    card_edge(p, r, rad, 0.0, pal);
+}
+
+/// A wash of the text's colour over `r`, `t` of the way in (0 to 1), a step deeper while
+/// `pressed`: a control's hover, on whatever it stands on. Nothing at rest.
+pub fn wash(p: &egui::Painter, r: Rect, rad: CornerRadius, t: f32, pressed: bool, pal: &Palette) {
+    if t <= 0.01 {
+        return;
+    }
+    if pal.strong {
+        p.rect(r, rad, pal.hover, Stroke::new(1.0, pal.border), StrokeKind::Inside);
+        return;
+    }
+    let a = if pressed { if pal.dark { 0.13 } else { 0.10 } } else if pal.dark { 0.075 } else { 0.06 };
+    p.rect_filled(r, rad, pal.text.gamma_multiply(a * t.clamp(0.0, 1.0)));
+}
+
+/// One control of the chrome at `r`: a glyph `paint` draws in the colour given, a wash
+/// easing in under the pointer and deepening while pressed, raised while `on`. Disabled it
+/// is faint and takes no clicks. `what` names it for the simulated user, `tip` (if any)
+/// for the pointer.
+#[allow(clippy::too_many_arguments)]
+pub fn chrome_item_at(ui: &Ui, r: Rect, id: Id, rad: CornerRadius, what: &'static str, tip: &str, enabled: bool, on: bool, pal: &Palette, paint: impl FnOnce(&egui::Painter, Rect, Color32)) -> egui::Response {
+    let resp = ui.interact(r, id, if enabled { Sense::click() } else { Sense::hover() });
+    crate::ui::note_control(ui, r, what);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, on, if tip.is_empty() { what } else { tip }));
+    let hot = enabled && resp.hovered();
+    let t = ease_to(ui, id.with("hot"), hot);
+    if on {
+        raised(ui.painter(), r, rad, raised_fill(pal), pal);
+    }
+    wash(ui.painter(), r, rad, t, hot && resp.is_pointer_button_down_on(), pal);
+    let ink = if !enabled {
+        pal.text_dim.gamma_multiply(if pal.strong { 0.6 } else { 0.32 })
+    } else if on {
+        on_lift(pal)
+    } else {
+        pal.text_dim.lerp_to_gamma(pal.text, t)
+    };
+    paint(ui.painter(), Rect::from_center_size(r.center(), egui::Vec2::splat(GLYPH)), ink);
+    if tip.is_empty() { resp } else { resp.on_hover_text(tip) }
+}
+
+/// `chrome_item_at` laid out in a row, ITEM sized, in R_SM corners; left out (a response
+/// of no size) when the row has no room left for it.
+pub fn chrome_item(ui: &mut Ui, what: &'static str, tip: &str, enabled: bool, on: bool, pal: &Palette, paint: impl FnOnce(&egui::Painter, Rect, Color32)) -> egui::Response {
+    if crate::ui::no_room(ui, ITEM.x) {
+        return ui.allocate_exact_size(egui::Vec2::ZERO, Sense::hover()).1;
+    }
+    let (r, _) = ui.allocate_exact_size(ITEM, Sense::hover());
+    chrome_item_at(ui, r, Id::new((what, r.min.x as i32, r.min.y as i32)), crate::theme::corner(crate::theme::R_SM), what, tip, enabled, on, pal, paint)
+}
+
+/// The items `add` lays out side by side (left to right), in one well painted under them
+/// once their extent is known, CAP_H tall about the row's middle: `capsule_group`, cut
+/// into the card instead of laid on it. Its corners are R_MD, so the R_SM items two
+/// points inside follow their curve. A group none of whose items found room leaves no
+/// empty well behind.
+pub fn well_group<R>(ui: &mut Ui, pal: &Palette, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let bg = ui.painter().add(Shape::Noop);
+    let gap = ui.spacing().item_spacing.x;
+    ui.spacing_mut().item_spacing.x = 0.0;
+    let x0 = ui.cursor().min.x;
+    ui.add_space(INSET);
+    let out = add(ui);
+    ui.add_space(INSET);
+    let x1 = ui.cursor().min.x;
+    ui.spacing_mut().item_spacing.x = gap;
+    if x1 - x0 > 1.6 * CAP_H {
+        let cy = ui.max_rect().center().y;
+        well_under(ui.painter(), bg, Rect::from_min_max(pos2(x0, cy - CAP_H / 2.0), pos2(x1, cy + CAP_H / 2.0)), crate::theme::corner(crate::theme::R_MD), pal);
+    }
+    ui.add_space(gap);
+    out
+}
+
+/// A small count beside a label (a sidebar section's): its figure in a quiet badge, its
+/// right edge at `right`, centred on `cy`. Returns the badge's width.
+pub fn count_badge(p: &egui::Painter, right: f32, cy: f32, g: std::sync::Arc<egui::Galley>, pal: &Palette) -> f32 {
+    let h = (g.size().y + 2.0).round();
+    let w = (g.size().x + 10.0).max(h + 2.0).round();
+    let r = Rect::from_min_size(pos2(right - w, (cy - h / 2.0).round()), vec2(w, h));
+    if pal.strong {
+        p.rect_stroke(r, crate::theme::corner(crate::theme::R_XS), Stroke::new(1.0, pal.border), StrokeKind::Inside);
+    } else {
+        p.rect_filled(r, crate::theme::corner(crate::theme::R_XS), pal.text.gamma_multiply(if pal.dark { 0.06 } else { 0.05 }));
+    }
+    p.galley(pos2(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, pal.text_dim);
+    w
+}
+
 /// The veil over `r` behind a dialog (`Palette::scrim`).
 pub fn scrim(p: &egui::Painter, r: Rect, pal: &Palette) {
     p.rect_filled(r, CornerRadius::ZERO, pal.scrim());
