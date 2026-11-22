@@ -1274,8 +1274,9 @@ pub(crate) fn paint_cursor(p: &egui::Painter, r: Rect, rad: CornerRadius, select
     if pal.glow.a() > 0 {
         p.add(egui::epaint::Shadow { offset: [0, 0], blur: 8, spread: 0, color: pal.glow.gamma_multiply(0.8) }.as_shape(r, rad));
     }
-    let col = theme::over(pal.accent.gamma_multiply(0.25), pal.text.gamma_multiply(if pal.dark { 0.3 } else { 0.38 }));
-    p.rect_stroke(r, rad, Stroke::new(1.0, col), StrokeKind::Inside);
+    // The app's own cursor ring (its corners are all one: `rad.nw`, square with Round
+    // corners off).
+    crate::kit::cursor_ring(p, r, rad.nw, pal);
 }
 
 /// The pointer's row, `level` of the way in (0 to 1).
