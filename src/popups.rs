@@ -883,24 +883,6 @@ pub(crate) fn veil(ui: &Ui, t: f32, pal: &Palette) {
     }
 }
 
-/// A sunken well for a field inside a popup: the card's colour a step towards the canvas,
-/// a faint shade along the inside of its top, a hairline round it. A high-contrast theme's
-/// is the background with its solid border. One shape, so a caller can put it in a slot it
-/// kept before laying the field out.
-pub(crate) fn popup_well(r: Rect, rad: CornerRadius, pal: &Palette) -> egui::Shape {
-    if pal.strong {
-        return egui::Shape::Rect(egui::epaint::RectShape::new(r, rad, pal.bg, Stroke::new(1.0, pal.border), StrokeKind::Inside));
-    }
-    let fill = pal.card().lerp_to_gamma(pal.canvas, if pal.dark { 0.45 } else { 0.3 });
-    let shade = Color32::from_black_alpha(if pal.dark { 46 } else { 14 });
-    let inset = rad.nw.max(2) as f32;
-    egui::Shape::Vec(vec![
-        egui::Shape::Rect(egui::epaint::RectShape::filled(r, rad, fill)),
-        egui::Shape::line_segment([pos2(r.left() + inset, r.top() + 1.5), pos2(r.right() - inset, r.top() + 1.5)], Stroke::new(1.0, shade)),
-        egui::Shape::Rect(egui::epaint::RectShape::stroke(r, rad, Stroke::new(1.0, pal.hairline), StrokeKind::Inside)),
-    ])
-}
-
 /// A group's or section's name in a popup: small, semibold, dim and a little letter-spaced,
 /// so it reads as a label over what follows rather than as one more row. Its words as
 /// written (a search for them finds them).
@@ -1290,15 +1272,17 @@ pub(crate) fn clicked_outside(ctx: &egui::Context, rect: Rect) -> bool {
 }
 
 pub(crate) fn search_field(ui: &mut Ui, text: &mut String, hint: &str, focus: &mut bool, pal: &Palette, glyph: Glyph) -> egui::Response {
-    // In a sunken well with a hairline, the focus ring round it while typing goes there:
-    // the field is the first thing a popup is for.
+    // In a sunken well with a hairline, its rim the accent's while typing goes there: the
+    // toolbar's filter field's recipe (`kit::field_focus`), the field being the first
+    // thing a popup is for.
     let slot = ui.painter().add(egui::Shape::Noop);
     let fr = egui::Frame::NONE.inner_margin(egui::Margin { left: 6, right: 6, top: 2, bottom: 2 }).show(ui, |ui| crate::ui::search_row_in(ui, text, hint, FontId::proportional(15.0), glyph, 14.0, false, false, pal).0);
     let (resp, wr) = (fr.inner, fr.response.rect);
     let rad = theme::corner(theme::R_MD);
-    ui.painter().set(slot, popup_well(wr, rad, pal));
-    if resp.has_focus() {
-        crate::kit::focus_ring(ui.painter(), wr, rad, pal);
+    let focused = resp.has_focus();
+    ui.painter().set(slot, egui::Shape::Vec(vec![crate::kit::glow_shape(wr, rad, if focused { 0.45 } else { 0.0 }, pal), crate::kit::well_shape(wr, rad, pal.card(), pal)]));
+    if focused {
+        crate::kit::field_focus(ui.painter(), wr, rad, pal);
     }
     if *focus {
         resp.request_focus();
@@ -1356,7 +1340,7 @@ pub(crate) fn row(ui: &mut Ui, h: f32, selected: bool, pal: &Palette, paint: imp
     if selected {
         crate::kit::chosen(ui.painter(), r, 6, pal);
     } else if resp.hovered() {
-        ui.painter().rect_filled(r, CornerRadius::same(6), crate::kit::touch(pal));
+        ui.painter().rect_filled(r, crate::theme::corner(crate::theme::R_SM), crate::kit::touch(pal));
     }
     paint(ui, r);
     resp
@@ -1375,7 +1359,7 @@ pub(crate) const MENU_TEXT_X: f32 = 34.0;
 fn rail_row(ui: &mut Ui, on: bool, pal: &Palette, paint: impl FnOnce(&Ui, Rect)) -> egui::Response {
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
     if !on && resp.hovered() {
-        ui.painter().rect_filled(r, CornerRadius::same(6), crate::kit::touch(pal));
+        ui.painter().rect_filled(r, crate::theme::corner(crate::theme::R_SM), crate::kit::touch(pal));
     }
     paint(ui, r);
     resp
@@ -2643,7 +2627,9 @@ fn palette_row(ui: &mut Ui, app: &App, c: Cmd, r: Rect, i: usize, look: &CmdLook
     if !look.first && !look.sel && !hovered {
         row_rule(ui.painter(), r, 12.0, pal);
     }
-    let inside = r.shrink2(vec2(4.0, 2.0));
+    // The first row's pill stands clear of its card's top edge: there the two lines ran
+    // together.
+    let inside = Rect::from_min_max(pos2(r.left() + 4.0, r.top() + if look.first { 4.0 } else { 2.0 }), pos2(r.right() - 4.0, r.bottom() - 2.0));
     // Chosen quietly, a tinted pill with the accent's mark at its edge: a saturated block
     // in each column fought for the eye, and drowned the matched letters.
     if look.sel {

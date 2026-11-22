@@ -434,7 +434,7 @@ pub fn toggle(ui: &mut Ui, label: &str, on: bool, mono: bool, note: &'static str
     let t = slide(ui.ctx(), Id::new(("toggle", note)), if on { 1.0 } else { 0.0 });
     // Off, it keeps a field's faint edge: a control, not a stray word.
     let rest = if resp.hovered() { touch(pal) } else { Color32::TRANSPARENT };
-    ui.painter().rect(r, CornerRadius::same(5), rest.lerp_to_gamma(lift(pal), t), Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
+    ui.painter().rect(r, crate::theme::corner(5), rest.lerp_to_gamma(lift(pal), t), Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
     let c = if on { on_lift(pal) } else if resp.hovered() { pal.text } else { pal.text_dim };
     ui.painter().text(r.center(), Align2::CENTER_CENTER, label, font, c);
     resp.on_hover_text(tip).clicked()
@@ -554,21 +554,24 @@ pub const ROW_GLYPH: f32 = 14.0;
 /// A chip in the status bar (the branch, the transfers): a capsule of its own.
 pub const CHIP_H: f32 = ROW_CAP_H;
 
-/// A status bar chip's face: a capsule at rest, `touch` under the pointer, lifted while
-/// what it opens is open; `fill` (0..1) fills it from the left in the accent's tint, as a
-/// job's progress.
+/// A status bar chip's face, in the toolbar's materials: a well at rest, washed under the
+/// pointer, a raised face while what it opens is open; `fill` (0..1) fills it from the
+/// left in the accent's tint, as a job's progress.
 pub fn chip_face(p: &egui::Painter, r: Rect, hot: bool, open: bool, fill: Option<f32>, round: bool, pal: &Palette) {
-    let rad = radius(r.height(), round);
-    let face = if open { lift(pal) } else if hot { pal.card().lerp_to_gamma(pal.text, if pal.dark { 0.07 } else { 0.05 }) } else { pal.card() };
-    p.rect_filled(r, rad, face);
+    let rad = if round { crate::theme::corner(crate::theme::R_MD) } else { CornerRadius::ZERO };
+    if open {
+        raised(p, r, rad, raised_fill(pal), pal);
+    } else {
+        well(p, r, rad, pal);
+        wash(p, r, rad, if hot { 1.0 } else { 0.0 }, false, pal);
+    }
     if let Some(f) = fill {
         let f = f.clamp(0.0, 1.0);
         if f > 0.0 {
             let w = (r.width() * f).max(r.height().min(r.width()));
-            p.rect_filled(Rect::from_min_size(r.min, vec2(w, r.height())), rad, pal.accent.gamma_multiply(if pal.dark { 0.22 } else { 0.16 }));
+            p.rect_filled(Rect::from_min_size(r.min, vec2(w, r.height())).shrink(1.0), rad, pal.accent.gamma_multiply(if pal.dark { 0.22 } else { 0.16 }));
         }
     }
-    p.rect_stroke(r, rad, Stroke::new(1.0, pal.card_line()), StrokeKind::Inside);
 }
 
 /// The corners of something `h` tall: a capsule's round ends with Round corners on,
@@ -699,7 +702,7 @@ pub fn glyph_choice(ui: &mut Ui, id: Id, items: &[(crate::theme::Glyph, &str, &'
 /// is lifted alone). `more` lifts it a step further: the keyboard's own row among several.
 pub fn picked(p: &egui::Painter, r: Rect, radius: u8, mark: bool, more: bool, pal: &Palette) {
     let fill = if more && !pal.strong { lift(pal).lerp_to_gamma(pal.text, if pal.dark { 0.05 } else { 0.04 }) } else { lift(pal) };
-    p.rect_filled(r, CornerRadius::same(radius), fill);
+    p.rect_filled(r, crate::theme::corner(radius), fill);
     if mark && !pal.strong {
         let h = (r.height() - 14.0).clamp(8.0, 18.0);
         let bar = if r.width() >= r.height() * 1.6 {
@@ -708,14 +711,14 @@ pub fn picked(p: &egui::Painter, r: Rect, radius: u8, mark: bool, more: bool, pa
             // A tile: the bar lies along its foot.
             Rect::from_center_size(pos2(r.center().x, r.bottom() - 4.0), vec2(h, 3.0))
         };
-        p.rect_filled(bar, CornerRadius::same(2), pal.accent);
+        p.rect_filled(bar, crate::theme::corner(2), pal.accent);
     }
 }
 
 /// The keyboard's row when nothing is picked: a hairline round it, in the text's colour,
 /// faint (the accent is kept for what is picked).
 pub fn cursor_ring(p: &egui::Painter, r: Rect, radius: u8, pal: &Palette) {
-    p.rect_stroke(r.shrink(0.5), CornerRadius::same(radius), Stroke::new(1.0, pal.text.gamma_multiply(if pal.dark { 0.32 } else { 0.4 })), StrokeKind::Inside);
+    p.rect_stroke(r.shrink(0.5), crate::theme::corner(radius), Stroke::new(1.0, pal.text.gamma_multiply(if pal.dark { 0.32 } else { 0.4 })), StrokeKind::Inside);
 }
 
 /// The quieter colour of the words among figures ("KB", "files", "free", "Today"): a step
@@ -797,7 +800,30 @@ pub fn glow(p: &egui::Painter, r: Rect, rad: CornerRadius, t: f32, pal: &Palette
     if pal.glow.a() == 0 || t <= 0.0 {
         return;
     }
-    p.add(egui::epaint::Shadow { offset: [0, 0], blur: 18, spread: 1, color: pal.glow.gamma_multiply(t) }.as_shape(r, rad));
+    p.add(glow_shape(r, rad, t, pal));
+}
+
+/// `glow`'s halo as a shape, for a slot reserved under what is drawn later (a field's
+/// well and its words): nothing on a theme without a glow.
+pub fn glow_shape(r: Rect, rad: CornerRadius, t: f32, pal: &Palette) -> Shape {
+    let t = t.clamp(0.0, 1.0);
+    if pal.glow.a() == 0 || t <= 0.0 {
+        return Shape::Noop;
+    }
+    egui::epaint::Shadow { offset: [0, 0], blur: 18, spread: 1, color: pal.glow.gamma_multiply(t) }.as_shape(r, rad).into()
+}
+
+/// A text field that has the keyboard: its well's rim turns to a thin line of the accent
+/// (paint a faint `glow` under the well for its halo). Quieter than `focus_ring`, whose
+/// halo would tint the words: a search field has the keyboard nearly all the time it is
+/// shown, the toolbar's filter and every popup's alike. A high-contrast theme's rim is
+/// the accent two points wide.
+pub fn field_focus(p: &egui::Painter, r: Rect, rad: CornerRadius, pal: &Palette) {
+    if pal.strong {
+        p.rect_stroke(r, rad, Stroke::new(2.0, pal.accent), StrokeKind::Inside);
+        return;
+    }
+    p.rect_stroke(r, rad, Stroke::new(1.0, pal.accent.gamma_multiply(if pal.dark { 0.62 } else { 0.55 })), StrokeKind::Inside);
 }
 
 /// A focused control's ring, drawn just outside `r`: a one-point line in the accent and,
@@ -830,36 +856,42 @@ pub fn ease_to(ui: &Ui, id: Id, on: bool) -> f32 {
 
 /// A well's fill: the card it is cut into, a step towards the canvas under the card.
 pub fn well_fill(pal: &Palette) -> Color32 {
+    well_fill_on(pal.panel, pal)
+}
+
+/// A well's fill cut into `base` (a panel's card, a popup's): the same step towards the
+/// canvas wherever it is, so a field in a dialog is sunk as far as the toolbar's.
+pub fn well_fill_on(base: Color32, pal: &Palette) -> Color32 {
     if pal.strong {
         return pal.bg;
     }
-    pal.panel.lerp_to_gamma(pal.canvas, if pal.dark { 0.42 } else { 0.5 })
+    base.lerp_to_gamma(pal.canvas, if pal.dark { 0.42 } else { 0.5 })
 }
 
-/// The shapes of a well in `r`: its fill, a faint shade along the inside of its top (what
+/// The shapes of a well in `r` cut into `base`: its fill, a faint shade along the inside of its top (what
 /// makes it read as cut in rather than laid on) and the card's hairline round it.
-fn well_shapes(r: Rect, rad: CornerRadius, pal: &Palette) -> Shape {
+pub fn well_shape(r: Rect, rad: CornerRadius, base: Color32, pal: &Palette) -> Shape {
     if pal.strong {
         return Shape::Rect(egui::epaint::RectShape::new(r, rad, pal.bg, Stroke::new(1.0, pal.border), StrokeKind::Inside));
     }
     let inset = (rad.nw.max(rad.ne) as f32 * 0.7).max(1.0);
     let shade = Color32::from_black_alpha(if pal.dark { 50 } else { 16 });
     Shape::Vec(vec![
-        Shape::rect_filled(r, rad, well_fill(pal)),
+        Shape::rect_filled(r, rad, well_fill_on(base, pal)),
         Shape::line_segment([pos2(r.left() + inset, r.top() + 1.5), pos2(r.right() - inset, r.top() + 1.5)], Stroke::new(1.0, shade)),
         Shape::Rect(egui::epaint::RectShape::stroke(r, rad, Stroke::new(1.0, pal.hairline), StrokeKind::Inside)),
     ])
 }
 
-/// A well in `r` (see `well_shapes`), painted now.
+/// A well in `r` (see `well_shape`), painted now.
 pub fn well(p: &egui::Painter, r: Rect, rad: CornerRadius, pal: &Palette) {
-    p.add(well_shapes(r, rad, pal));
+    p.add(well_shape(r, rad, pal.panel, pal));
 }
 
 /// A well painted into a slot reserved earlier (`Painter::add(Shape::Noop)`), so it lies
 /// under what was drawn since.
 pub fn well_under(p: &egui::Painter, slot: egui::layers::ShapeIdx, r: Rect, rad: CornerRadius, pal: &Palette) {
-    p.set(slot, well_shapes(r, rad, pal));
+    p.set(slot, well_shape(r, rad, pal.panel, pal));
 }
 
 /// A raised face's fill: the card, a step brighter on a dark theme; on a light one the

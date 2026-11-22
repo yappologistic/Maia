@@ -815,7 +815,21 @@ impl App {
             if grow < 1.0 {
                 ui.ctx().request_repaint();
             }
-            let w = if t.pinned { PIN_TAB_W } else if i == p.active { active_w } else { rest } * (0.3 + 0.7 * grow);
+            // A tab is as wide as its name needs (the icon, the name, a shared name's place
+            // and room for the close button), up to its share of the strip: short names
+            // leave no wide empty slots between them.
+            let slot = if t.pinned { PIN_TAB_W } else if i == p.active { active_w } else { rest };
+            let slot = if t.pinned {
+                slot
+            } else {
+                let font = FontId::proportional(self.cfg.font_size - 0.5);
+                let mut need = ui.painter().layout_no_wrap(t.title(), font.clone(), pal.text).size().x;
+                if let Some(h) = hints.get(&t.id) {
+                    need += ui.painter().layout_no_wrap(format!(" · {h}"), font, pal.text).size().x;
+                }
+                slot.min((27.0 + need + 6.0 + 18.0 + 4.0).ceil().max(72.0))
+            };
+            let w = slot * (0.3 + 0.7 * grow);
             widths.push(w);
             let (r, resp) = ui.allocate_exact_size(vec2(w, TAB_H - 4.0), Sense::click_and_drag());
             let is_active = i == p.active;
@@ -1601,16 +1615,17 @@ impl App {
         // A capsule like the path's beside it; only a filter in force draws its edge in
         // the accent (the field has the keyboard whenever typing filters, so that says
         // nothing).
-        // A well like the path's beside it. While it has the keyboard it wears the focus
-        // ring and the accent's halo, easing in; a filter in force keeps an accent rim.
+        // A well like the path's beside it. While it has the keyboard its rim is the
+        // accent's over a faint halo, easing in (`kit::field_focus`, as every popup's
+        // search field); a filter in force keeps an accent rim.
         let rad = crate::theme::corner(crate::theme::R_MD);
         let focus_t = crate::kit::ease_to(ui, Id::unique(("filter focus", id)), had_focus);
         if focus_t > 0.01 {
-            crate::kit::glow(ui.painter(), frame_rect, rad, focus_t, &pal);
+            crate::kit::glow(ui.painter(), frame_rect, rad, focus_t * 0.45, &pal);
         }
         crate::kit::well(ui.painter(), frame_rect, rad, &pal);
         if had_focus {
-            crate::kit::focus_ring(ui.painter(), frame_rect, rad, &pal);
+            crate::kit::field_focus(ui.painter(), frame_rect, rad, &pal);
         } else if p_filter_active(t) {
             ui.painter().rect_stroke(frame_rect, rad, Stroke::new(1.0, pal.accent.gamma_multiply(0.7)), StrokeKind::Inside);
         }
